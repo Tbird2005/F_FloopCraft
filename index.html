@@ -1,0 +1,1747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Capitalism Chess AI</title>
+<style>
+  :root{
+    --bg:#101319;
+    --panel:#171b24;
+    --panel2:#202634;
+    --line:#343c4f;
+    --text:#f2f5f9;
+    --muted:#b4bdcc;
+    --good:#42d87b;
+    --bad:#ff5d73;
+    --gold:#f3c969;
+    --goldSide:#ffd33f;
+    --diamond:#78e6ff;
+    --blue:#62a8ff;
+    --orange:#f28d35;
+    --player:#78d7ff;
+    --ai:#ff7b7b;
+    --landPlayer:rgba(67,184,255,.35);
+    --landAi:rgba(255,88,88,.34);
+    --gen:#55e58b;
+    --custom:#4eff4e;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    min-height:100vh;
+    font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;
+    background:radial-gradient(circle at top,#1e2635 0,#101319 55%,#080a0f 100%);
+    color:var(--text);
+  }
+  header{
+    padding:18px 22px 10px;
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  h1{margin:0;font-size:28px;letter-spacing:.3px}
+  .subtitle{color:var(--muted);margin-top:4px;font-size:14px;max-width:760px;line-height:1.35}
+  .pillrow{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .pill{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:8px 12px;color:var(--muted);font-weight:700;font-size:13px}
+  .pill strong{color:var(--text)}
+  main{
+    display:grid;
+    grid-template-columns:minmax(440px,720px) minmax(320px,460px);
+    gap:18px;
+    padding:12px 22px 22px;
+    align-items:start;
+  }
+  @media(max-width:1040px){main{grid-template-columns:1fr}.side{order:2}.boardWrap{order:1}.board{max-width:92vw}}
+  .boardWrap{
+    background:rgba(23,27,36,.9);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:14px;
+    box-shadow:0 20px 60px rgba(0,0,0,.35);
+  }
+  .boardTop{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap}
+  .turnBanner{font-weight:900;font-size:18px}
+  .hint{color:var(--muted);font-size:13px;line-height:1.35}
+  .board{
+    width:min(72vw,680px);
+    aspect-ratio:1;
+    display:grid;
+    grid-template-columns:repeat(8,1fr);
+    grid-template-rows:repeat(8,1fr);
+    border:3px solid #090b10;
+    border-radius:12px;
+    overflow:hidden;
+    position:relative;
+    user-select:none;
+    margin:auto;
+  }
+  .sq{
+    position:relative;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:clamp(32px,6.2vw,58px);
+    cursor:pointer;
+    transition:.12s transform,.12s filter,.12s outline;
+  }
+  .sq.light{background:#d6d1c3;color:#151515}
+  .sq.dark{background:#6d756a;color:#151515}
+  .sq:hover{filter:brightness(1.09)}
+  .sq.selected{outline:4px solid var(--gold);outline-offset:-4px;z-index:5}
+  .sq.legal::after{
+    content:"";
+    width:28%;height:28%;border-radius:50%;
+    background:rgba(13,19,24,.55);
+    border:2px solid rgba(255,255,255,.65);
+    position:absolute;z-index:6;
+  }
+  .sq.capture::after{width:74%;height:74%;background:transparent;border:4px solid rgba(255,80,80,.82)}
+  .sq.placeSlot{outline:4px solid var(--gold);outline-offset:-4px;filter:brightness(1.15)}
+  .sq.placeSlot::after{content:"+";position:absolute;z-index:8;width:42%;height:42%;border-radius:12px;background:rgba(0,0,0,.62);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:1000;border:2px solid rgba(255,255,255,.7)}
+  .coord{position:absolute;bottom:3px;right:5px;font-size:10px;font-weight:900;opacity:.42;color:#111;z-index:9}
+  .piece{position:relative;z-index:7;text-shadow:0 2px 5px rgba(0,0,0,.42);line-height:1;transform:translateY(-2px)}
+  .piece.gold{color:#fff4a8;text-shadow:0 0 10px rgba(255,210,55,.95),0 3px 6px rgba(0,0,0,.65)}
+  .piece.diamond{color:#e9fbff;text-shadow:0 0 10px rgba(90,225,255,.95),0 3px 6px rgba(0,0,0,.65)}
+  .chip{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;background-size:cover;background-position:center;box-shadow:0 2px 8px rgba(0,0,0,.45), inset 0 0 10px rgba(255,255,255,.24)}
+  .ownershipChip{width:88%;height:88%;z-index:1;border:2px solid rgba(255,255,255,.82)}
+  .ownershipChip.gold{background:radial-gradient(circle at 35% 25%,#fff7a6 0,#ffd342 38%,#ac7808 100%)}
+  .ownershipChip.diamond{background:radial-gradient(circle at 35% 25%,#eaffff 0,#75e7ff 38%,#2470aa 100%)}
+  .landDisc{width:76%;height:76%;z-index:2;border:2px solid rgba(255,255,255,.72)}
+  .landDisc.gold{background-image:url('https://steamusercontent-a.akamaihd.net/ugc/2057617493356796930/F26CD7AB480941E9698AA3671B85DED7A306FBE4/')}
+  .landDisc.diamond{background-image:url('https://steamusercontent-a.akamaihd.net/ugc/2057617493357306356/C6D553667DD84ED9EC2E81458DEB838C32F33917/')}
+  .baseGenChip{width:64%;height:64%;z-index:3;border:2px solid rgba(255,255,255,.76);background-image:url('https://file.garden/ZtDesvPK_QLwMx9K/HTML/txt/coin.png')}
+  .xxGenChip{width:56%;height:56%;z-index:4;border:2px solid rgba(225,255,225,.9);background-image:linear-gradient(rgba(0,255,35,.48),rgba(0,210,30,.48)),url('https://file.garden/ZtDesvPK_QLwMx9K/HTML/txt/coin.png');background-blend-mode:color,normal;box-shadow:0 0 14px rgba(35,255,55,.9), inset 0 0 12px rgba(0,90,0,.45)}
+  .paidBadge{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:8;background:rgba(0,0,0,.7);color:var(--gold);font-size:11px;font-weight:900;border-radius:999px;padding:3px 6px;border:1px solid rgba(255,255,255,.35);pointer-events:none}
+  .side{display:flex;flex-direction:column;gap:14px}
+  .panel{background:rgba(23,27,36,.92);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 18px 50px rgba(0,0,0,.28)}
+  .scoreGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .scoreCard{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px}
+  .scoreName{display:flex;align-items:center;gap:8px;font-weight:900;margin-bottom:8px}
+  .dot{width:12px;height:12px;border-radius:50%;display:inline-block}.dot.gold{background:var(--goldSide)}.dot.diamond{background:var(--diamond)}.dot.player{background:var(--player)}.dot.ai{background:var(--ai)}
+  .gold{font-size:26px;color:var(--gold);font-weight:1000}.smallStats{font-size:12px;color:var(--muted);line-height:1.55;margin-top:6px}
+  .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .onlineGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .onlineGrid button{min-height:38px;padding:8px}
+  .onlineInput{width:100%;border:1px solid var(--line);background:#0d1017;color:var(--text);border-radius:12px;padding:10px;font-weight:800;outline:none}
+  .onlineInput:focus{border-color:#6fcfff;box-shadow:0 0 0 2px rgba(111,207,255,.15)}
+  .roomCodeBox{font-family:ui-monospace,Consolas,monospace;background:#0d1017;border:1px solid var(--line);border-radius:12px;padding:9px;margin-top:8px;color:#d9e2f2;word-break:break-all}
+  .netStatus{font-size:12px;color:var(--muted);line-height:1.35;margin-top:8px}
+  button{
+    border:1px solid var(--line);
+    background:linear-gradient(180deg,#283146,#1d2331);
+    color:var(--text);
+    border-radius:12px;
+    padding:10px 10px;
+    font-weight:850;
+    cursor:pointer;
+    min-height:42px;
+  }
+  button:hover:not(:disabled){filter:brightness(1.12);transform:translateY(-1px)}
+  button:disabled{opacity:.42;cursor:not-allowed;filter:grayscale(.5)}
+  button.primary{background:linear-gradient(180deg,#315b3f,#1f3f2c);border-color:#3a6c4b}
+  button.warn{background:linear-gradient(180deg,#694526,#3d291a);border-color:#7d5a30}
+  button.danger{background:linear-gradient(180deg,#703144,#41212b);border-color:#83364f}
+  button.full{grid-column:1/-1}
+  .log{height:220px;overflow:auto;background:#0d1017;border:1px solid var(--line);border-radius:12px;padding:9px;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.45;color:#d9e2f2}
+  .log div{margin-bottom:5px;border-bottom:1px solid rgba(255,255,255,.05);padding-bottom:4px}.log b{color:var(--gold)}
+  .rules{font-size:13px;color:var(--muted);line-height:1.45}.rules strong{color:var(--text)}
+  .banner{border:1px solid var(--line);background:#111723;border-radius:14px;padding:12px;line-height:1.35;color:var(--muted)}
+  .banner.win{border-color:#4c9462;background:rgba(55,110,67,.2);color:#d9ffe0}.banner.lose{border-color:#9c4b5c;background:rgba(110,55,70,.23);color:#ffe2e7}
+  .promoBox{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .promoPanel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;max-width:430px;width:100%;box-shadow:0 20px 80px rgba(0,0,0,.55)}
+  .promoPanel h2{margin:0 0 8px}.promoChoices{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}.promoChoices button{font-size:28px;min-height:58px}
+
+  .cardReveal{position:fixed;inset:0;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;z-index:60;padding:18px;pointer-events:none}
+  .cardRevealPanel{background:rgba(16,19,28,.96);border:1px solid var(--line);border-radius:20px;padding:16px;box-shadow:0 24px 90px rgba(0,0,0,.72);text-align:center;min-width:min(92vw,330px)}
+  .cardRevealPanel h2{margin:0 0 10px;font-size:20px}
+  .cardRevealPanel img{width:min(64vw,260px);max-height:380px;object-fit:contain;border-radius:12px;box-shadow:0 14px 38px rgba(0,0,0,.55)}
+  .cardCaption{margin-top:10px;color:var(--muted);font-size:13px;font-weight:800}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Capitalism Chess AI</h1>
+    <div class="subtitle">A playable single file version of the rulebook. Gold and Diamond sides are randomized on reset. Gold always moves first.</div>
+  </div>
+  <div class="pillrow">
+    <div class="pill">Goal: <strong>Gold Bar or Bankruptcy</strong></div>
+    <div class="pill">Sides: <strong>Gold vs Diamond</strong></div>
+    <div class="pill">History: <strong>Unlimited</strong></div>
+  </div>
+</header>
+<main>
+  <section class="boardWrap">
+    <div class="boardTop">
+      <div>
+        <div class="turnBanner" id="turnBanner">Player turn</div>
+        <div class="hint" id="hintText">Click one of your pieces. Legal moves will highlight. Buy land before or after moving.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="warn" id="autoPlayerBtn">Player AI: OFF</button>
+        <button class="danger" id="resetBtn">Reset Game</button>
+      </div>
+    </div>
+    <div class="board" id="board"></div>
+  </section>
+
+  <aside class="side">
+    <section class="panel">
+      <div class="rules"><strong>Online Friend Game:</strong> Host makes a room. Friend joins with the room code. Host browser is authoritative so both boards stay synced.</div>
+      <div class="onlineGrid">
+        <button id="hostGameBtn" class="primary">Host Friend Game</button>
+        <button id="disconnectNetBtn" class="danger">Disconnect</button>
+        <input id="joinCodeInput" class="onlineInput" placeholder="Room code" />
+        <button id="joinGameBtn" class="warn">Join Friend Game</button>
+        <button id="copyLinkBtn" class="full">Copy Invite Link</button>
+      </div>
+      <div class="roomCodeBox" id="roomCodeBox">Room code: none</div>
+      <div class="netStatus" id="netStatus">Offline local mode. Use this as normal single player or AI vs AI.</div>
+    </section>
+
+    <section class="panel scoreGrid">
+      <div class="scoreCard" id="playerScore"></div>
+      <div class="scoreCard" id="aiScore"></div>
+    </section>
+
+    <section class="panel">
+      <div class="banner" id="statusBanner">Select a piece or use an action.</div>
+    </section>
+
+    <section class="panel">
+      <div class="controls">
+        <button id="buyLandBtn" class="primary">Buy Land</button>
+        <button id="buyGenBtn" class="primary">Buy Gen Chip</button>
+        <button id="customGenBtn" class="warn">Build XX Gen</button>
+        <button id="doubleMoveBtn" class="warn">Buy Double Move</button>
+        <button id="drawCardBtn">Draw Piece Card</button>
+        <button id="goldDiceBtn">Gold Dice</button>
+        <button id="castleBtn">Buy Castling Rights</button>
+        <button id="teleportBtn">King Teleport</button>
+        <button id="resurrectBtn">Resurrect</button>
+        <button id="goldBarBtn" class="primary">Buy Gold Bar</button>
+        <button id="endTurnBtn" class="full">End Turn / Pass</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="rules">
+        <strong>Quick map:</strong> Gold and Diamond are randomized each reset. Gold always moves first. Chips stack from biggest to smallest: generator ownership, land tile, original generator coin, then green XX generator. Hover a tile to see every chip on it. Draw Piece Card costs 5 gold and places a random piece on an open back-rank slot.
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="log" id="log"></div>
+    </section>
+  </aside>
+</main>
+
+<div class="promoBox hidden" id="promoBox">
+  <div class="promoPanel">
+    <h2>Pawn Promotion</h2>
+    <div class="rules">Choose a piece for 3 gold, or take a free random promotion.</div>
+    <div class="promoChoices" id="promoChoices"></div>
+    <button class="full" id="freePromoBtn" style="margin-top:10px;width:100%">Free Random Promotion</button>
+  </div>
+</div>
+
+
+<div class="cardReveal hidden" id="cardReveal">
+  <div class="cardRevealPanel">
+    <h2 id="cardRevealTitle">Card Drawn</h2>
+    <img id="cardRevealImg" alt="Card reveal" />
+    <div class="cardCaption" id="cardRevealCaption"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+
+(() => {
+  const SIZE = 8;
+  const PLAYER = 'player';
+  const AI = 'ai';
+  const BANK = 'bank';
+  const pieceValues = {P:1,N:3,B:3,R:5,Q:9,K:12};
+  const symbols = {
+    player:{K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙'},
+    ai:{K:'♚',Q:'♛',R:'♜',B:'♝',N:'♞',P:'♟'}
+  };
+  const files = ['a','b','c','d','e','f','g','h'];
+
+  const CARD_BACK = 'https://steamusercontent-a.akamaihd.net/ugc/2057617493352657144/EB19779C122B04B5E04B0A6F7BD039F5ACD9FF07/';
+  const CASTLE_CARD = 'https://steamusercontent-a.akamaihd.net/ugc/2057617493352666266/33AB9A985828E63017F5BB2EEF5BB1A351DAC1E4/';
+  const PIECE_CARD_IMAGES = {
+    B:'https://steamusercontent-a.akamaihd.net/ugc/2057617493352662735/E9FB0E92BA5D11B42869E043127A4A6E3F0A2FC1/',
+    K:'https://steamusercontent-a.akamaihd.net/ugc/2057617493352668509/0CD915787FA53AF3A490FC70D8B313A8CB46F679/',
+    P:'https://steamusercontent-a.akamaihd.net/ugc/2057617493352672179/D64C0F59708982383F36A9B0BA56789B9AB1F53C/',
+    Q:'https://steamusercontent-a.akamaihd.net/ugc/2057617493352673675/26E60177C451B63DF85B812E1AFBDCB8B73DAD87/',
+    N:'https://steamusercontent-a.akamaihd.net/ugc/2057617493352670044/41277D1B6461B5CF8EB0FB9FEC196C5CE829EDD8/',
+    R:'https://steamusercontent-a.akamaihd.net/ugc/2057617493352675283/469DC8E26DBAF407571294762342AF2ED3587503/'
+  };
+  const defaultGenerators = new Set(['3,3','3,4','4,3','4,4']);
+  let state;
+  let nextPieceId = 1;
+  let playerAutoEnabled = false;
+  let autoTimer = null;
+  let cardTimers = [];
+  const net = {
+    mode:'local',
+    role:'local',
+    peer:null,
+    conn:null,
+    roomCode:'',
+    connected:false,
+    localOwner:PLAYER,
+    remoteOwner:AI,
+    status:'Offline local mode. Use this as normal single player or AI vs AI.'
+  };
+
+  const el = id => document.getElementById(id);
+  const other = owner => owner === PLAYER ? AI : PLAYER;
+  const inBounds = (r,c) => r >= 0 && r < SIZE && c >= 0 && c < SIZE;
+  const key = (r,c) => `${r},${c}`;
+  const isDefaultGen = (r,c) => defaultGenerators.has(key(r,c));
+  const coord = (r,c) => files[c] + (8-r);
+  const matrix = fill => Array.from({length:SIZE},()=>Array.from({length:SIZE},()=> typeof fill === 'function' ? fill() : fill));
+  const deepClone = obj => JSON.parse(JSON.stringify(obj));
+
+  function createInitialState(){
+    nextPieceId = 1;
+    const playerIsGold = Math.random() < 0.5;
+    const sideByOwner = {
+      player: playerIsGold ? 'gold' : 'diamond',
+      ai: playerIsGold ? 'diamond' : 'gold'
+    };
+    const firstTurn = sideByOwner.player === 'gold' ? PLAYER : AI;
+    const s = {
+      board: matrix(null),
+      pieces: {},
+      players: {
+        player: newPlayerState(),
+        ai: newPlayerState()
+      },
+      sideByOwner,
+      land: matrix(null),
+      genChip: matrix(null),
+      customGen: matrix(null),
+      turn: firstTurn,
+      turnNumber: 1,
+      selected: null,
+      legalMoves: [],
+      mode: null,
+      modeOwner: null,
+      pendingPromotion: null,
+      pendingCardPlacement: null,
+      autoPlayer: playerAutoEnabled,
+      lastCapture: null,
+      gameOver: false,
+      winner: null,
+      status: 'Select a piece or use an action.',
+      log: []
+    };
+    setupPieces(s);
+    return s;
+  }
+
+  function newPlayerState(){
+    return {
+      gold:20,
+      landPurchases:0,
+      usedTurnAction:false,
+      doubleMovesRemaining:0,
+      castlingRightsTurn:null,
+      castlingUsed:false,
+      freeDouble:false
+    };
+  }
+
+  function addPiece(s, owner, type, r, c){
+    const id = 'p' + nextPieceId++;
+    s.pieces[id] = {id,owner,type,r,c,moved:false,captured:false,knightFeePaid:type !== 'N'};
+    s.board[r][c] = id;
+    return id;
+  }
+
+  function setupPieces(s){
+    const back = ['R','N','B','Q','K','B','N','R'];
+    for(let c=0;c<8;c++){
+      addPiece(s, AI, back[c], 0, c);
+      addPiece(s, AI, 'P', 1, c);
+      addPiece(s, PLAYER, 'P', 6, c);
+      addPiece(s, PLAYER, back[c], 7, c);
+    }
+  }
+
+  function log(msg){
+    state.log.unshift(msg);
+  }
+
+  function hasKing(owner){
+    return Object.values(state.pieces).some(p => !p.captured && p.owner === owner && p.type === 'K');
+  }
+
+  function countKings(owner){
+    return Object.values(state.pieces).filter(p => !p.captured && p.owner === owner && p.type === 'K').length;
+  }
+
+  function livingPieces(owner){
+    return Object.values(state.pieces).filter(p => !p.captured && p.owner === owner);
+  }
+
+  function voluntaryAffordable(owner, amount){
+    if(amount <= 0) return true;
+    return state.players[owner].gold > amount;
+  }
+
+  function transferGold(from, to, amount, reason=''){
+    if(amount <= 0 || state.gameOver) return true;
+    if(from !== BANK){
+      state.players[from].gold -= amount;
+      if(state.players[from].gold <= 0){
+        state.players[from].gold = Math.max(0, state.players[from].gold);
+        log(`<b>${label(from)}</b> paid ${amount} gold ${reason} and went bankrupt.`);
+        endGame(other(from), `${label(from)} went bankrupt.`);
+        return false;
+      }
+    }
+    if(to !== BANK){
+      state.players[to].gold += amount;
+    }
+    const fromText = from === BANK ? 'Bank' : label(from);
+    const toText = to === BANK ? 'Bank' : label(to);
+    log(`${fromText} → ${toText}: <b>${amount}</b> gold ${reason}`);
+    return true;
+  }
+
+  function gainGold(owner, amount, reason=''){
+    if(amount <= 0 || state.gameOver) return;
+    state.players[owner].gold += amount;
+    log(`${label(owner)} gained <b>${amount}</b> gold ${reason}`);
+  }
+
+  function sideOf(owner){return state?.sideByOwner?.[owner] || (owner === PLAYER ? 'diamond' : 'gold');}
+  function sideLabel(owner){return sideOf(owner) === 'gold' ? 'Gold' : 'Diamond';}
+  function ownerBySide(side){return state.sideByOwner.player === side ? PLAYER : AI;}
+  function ownerName(owner){
+    if(net.mode === 'online') return owner === PLAYER ? 'Host' : 'Friend';
+    return owner === PLAYER ? 'Player' : 'AI';
+  }
+  function label(owner){return `${ownerName(owner)} ${sideLabel(owner)}`;}
+
+  function endGame(winner, reason){
+    if(state.gameOver) return;
+    state.gameOver = true;
+    state.winner = winner;
+    state.status = `${label(winner)} wins. ${reason}`;
+    log(`<b>${label(winner)} wins!</b> ${reason}`);
+  }
+
+  function resetGame(){
+    if(autoTimer){ clearTimeout(autoTimer); autoTimer = null; }
+    state = createInitialState();
+    hideCardReveal();
+    log(`New game started. Player is ${sideLabel(PLAYER)}. AI is ${sideLabel(AI)}. ${label(ownerBySide('gold'))} moves first. Both sides start with 20 gold.`);
+    render();
+    scheduleAutoTurn(450);
+    sendStateToPeer();
+  }
+
+  function startTurn(owner){
+    const ps = state.players[owner];
+    ps.landPurchases = 0;
+    ps.usedTurnAction = false;
+    ps.doubleMovesRemaining = ps.freeDouble ? 2 : 0;
+    if(ps.freeDouble){
+      log(`${label(owner)} used a free double move card.`);
+      ps.freeDouble = false;
+    }
+    state.selected = null;
+    state.legalMoves = [];
+    state.mode = null;
+    state.modeOwner = null;
+    state.pendingCardPlacement = null;
+    state.status = shouldAutoAct(owner) ? `${label(owner)} AI is thinking.` : 'Your turn. Pay attention to land taxes and generators.';
+
+    applyStartTurnEconomy(owner);
+  }
+
+  function applyStartTurnEconomy(owner){
+    if(state.gameOver) return;
+    // Occupancy tax happens before new income.
+    for(const p of livingPieces(owner)){
+      const landOwner = state.land[p.r][p.c];
+      if(landOwner && landOwner !== owner){
+        const tax = hasKing(landOwner) ? 1 : 6;
+        if(!transferGold(owner, landOwner, tax, `start-turn land tax on ${coord(p.r,p.c)}`)) return;
+      }
+    }
+    const kings = countKings(owner);
+    if(kings === 0){
+      if(!transferGold(owner, BANK, 5, 'kingless penalty')) return;
+    } else if(kings > 1){
+      gainGold(owner, 5 * (kings - 1), 'for additional kings');
+    }
+    // Unowned default generators and green XX generators pay pieces that are physically on them.
+    for(const p of livingPieces(owner)){
+      if(isDefaultGen(p.r,p.c) && !state.genChip[p.r][p.c]){
+        gainGold(owner, 1, `from unowned generator at ${coord(p.r,p.c)}`);
+      }
+      if(state.customGen[p.r][p.c]){
+        gainGold(owner, isDefaultGen(p.r,p.c) ? 6 : 5, `from green XX generator at ${coord(p.r,p.c)}`);
+      }
+    }
+    // Owned generator chips on the original 4 generators are passive income, but ineffective while kingless.
+    if(kings > 0){
+      for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
+        if(state.genChip[r][c] === owner) gainGold(owner, 1, `from generator ownership chip at ${coord(r,c)}`);
+      }
+    }
+  }
+
+  function endTurn(){
+    if(state.gameOver) return;
+    if(state.pendingPromotion || state.pendingCardPlacement) return;
+    const current = state.turn;
+    state.players[current].doubleMovesRemaining = 0;
+    state.players[current].usedTurnAction = true;
+    state.selected = null;
+    state.legalMoves = [];
+    state.mode = null;
+    state.turn = other(current);
+    state.turnNumber++;
+    startTurn(state.turn);
+    render();
+    scheduleAutoTurn(520);
+  }
+
+  function getPieceAt(r,c){
+    const id = state.board[r]?.[c];
+    return id ? state.pieces[id] : null;
+  }
+
+  function pathClear(r,c,tr,tc){
+    const dr = Math.sign(tr-r), dc = Math.sign(tc-c);
+    let cr = r+dr, cc = c+dc;
+    while(cr !== tr || cc !== tc){
+      if(state.board[cr][cc]) return false;
+      cr += dr; cc += dc;
+    }
+    return true;
+  }
+
+  function addMove(moves,p,r,c,opts={}){
+    if(!inBounds(r,c)) return;
+    const target = getPieceAt(r,c);
+    if(target && target.owner === p.owner) return;
+    const cost = opts.cost || 0;
+    if(cost && !voluntaryAffordable(p.owner, cost)) return;
+    moves.push({r,c,cost,special:opts.special||null,note:opts.note||'',capture:!!target});
+  }
+
+  function legalMovesForPiece(p){
+    if(!p || p.captured) return [];
+    const moves = [];
+    const r = p.r, c = p.c;
+    const enemy = other(p.owner);
+    if(p.type === 'P'){
+      const dir = p.owner === PLAYER ? -1 : 1;
+      const start = p.owner === PLAYER ? 6 : 1;
+      // normal one step
+      if(inBounds(r+dir,c) && !state.board[r+dir][c]) addMove(moves,p,r+dir,c,{note:'pawn'});
+      // normal first two
+      if(r === start && !p.moved && inBounds(r+2*dir,c) && !state.board[r+dir][c] && !state.board[r+2*dir][c]) addMove(moves,p,r+2*dir,c,{note:'first double'});
+      // paid first three
+      if(r === start && !p.moved && inBounds(r+3*dir,c) && !state.board[r+dir][c] && !state.board[r+2*dir][c] && !state.board[r+3*dir][c]) addMove(moves,p,r+3*dir,c,{cost:1,note:'paid 3-square pawn start'});
+      // paid enhanced two after leaving start
+      if(r !== start && inBounds(r+2*dir,c) && !state.board[r+dir][c] && !state.board[r+2*dir][c]) addMove(moves,p,r+2*dir,c,{cost:1,note:'paid 2-square pawn move'});
+      // side move, no capture
+      for(const dc of [-1,1]){
+        if(inBounds(r,c+dc) && !state.board[r][c+dc]) addMove(moves,p,r,c+dc,{cost:1,note:'paid sideways pawn move'});
+      }
+      // captures
+      for(const dc of [-1,1]){
+        const tr = r+dir, tc = c+dc;
+        if(inBounds(tr,tc)){
+          const t = getPieceAt(tr,tc);
+          if(t && t.owner === enemy) addMove(moves,p,tr,tc,{note:'pawn capture'});
+        }
+      }
+    }
+    if(p.type === 'N'){
+      const cost = p.knightFeePaid ? 0 : 2;
+      const opts = [[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]];
+      for(const [dr,dc] of opts) addMove(moves,p,r+dr,c+dc,{cost,note: cost ? 'knight first move fee' : 'knight'});
+    }
+    if(['B','R','Q'].includes(p.type)){
+      const dirs = [];
+      if(['B','Q'].includes(p.type)) dirs.push([1,1],[1,-1],[-1,1],[-1,-1]);
+      if(['R','Q'].includes(p.type)) dirs.push([1,0],[-1,0],[0,1],[0,-1]);
+      for(const [dr,dc] of dirs){
+        let tr=r+dr, tc=c+dc;
+        while(inBounds(tr,tc)){
+          const t = getPieceAt(tr,tc);
+          if(!t){ moves.push({r:tr,c:tc,cost:0,special:null,note:'slide',capture:false}); }
+          else {
+            if(t.owner !== p.owner) moves.push({r:tr,c:tc,cost:0,special:null,note:'capture',capture:true});
+            break;
+          }
+          tr+=dr; tc+=dc;
+        }
+      }
+    }
+    if(p.type === 'K'){
+      for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){
+        if(dr || dc) addMove(moves,p,r+dr,c+dc,{note:'king'});
+      }
+      addCastleMoves(moves,p);
+    }
+    return moves;
+  }
+
+  function addCastleMoves(moves, king){
+    const ps = state.players[king.owner];
+    if(ps.castlingUsed || ps.castlingRightsTurn == null || ps.castlingRightsTurn >= state.turnNumber || king.moved) return;
+    const row = king.r;
+    // Kingside
+    for(const side of ['king','queen']){
+      const rookCol = side === 'king' ? 7 : 0;
+      const rook = getPieceAt(row, rookCol);
+      if(!rook || rook.owner !== king.owner || rook.type !== 'R' || rook.moved) continue;
+      const pass = side === 'king' ? [5,6] : [1,2,3];
+      if(pass.every(c => !state.board[row][c])){
+        moves.push({r:row,c:side==='king'?6:2,cost:0,special:side==='king'?'castleKing':'castleQueen',note:'castle',capture:false});
+      }
+    }
+  }
+
+  function selectPiece(id, owner=effectiveLocalOwner()){
+    const p = state.pieces[id];
+    if(!p || p.owner !== state.turn || p.owner !== owner || p.captured) return;
+    const ps = state.players[owner];
+    if(ps.usedTurnAction && ps.doubleMovesRemaining <= 0) return;
+    state.selected = id;
+    state.legalMoves = legalMovesForPiece(p);
+    state.status = `${symbols[p.owner][p.type]} selected on ${coord(p.r,p.c)}. ${state.legalMoves.length} legal move(s).`;
+    render();
+  }
+
+  function onSquareClick(r,c){
+    const owner = effectiveLocalOwner();
+    if(isOnlineGuest()){
+      sendActionToHost('square', {r,c});
+      return;
+    }
+    handleSquareClickForOwner(owner, r, c, true);
+    sendStateToPeer();
+  }
+
+  function handleSquareClickForOwner(owner,r,c,isHuman=false){
+    if(state.gameOver || state.turn !== owner || state.pendingPromotion || shouldAutoAct(owner)) return;
+    if(state.pendingCardPlacement){
+      placePendingDrawnCard(owner,r,c);
+      return;
+    }
+    if(state.mode === 'teleport' && state.modeOwner === owner){
+      teleportOwnerTo(owner,r,c);
+      return;
+    }
+    const clicked = getPieceAt(r,c);
+    if(state.selected){
+      const selectedPiece = state.pieces[state.selected];
+      const mv = selectedPiece && selectedPiece.owner === owner ? state.legalMoves.find(m => m.r === r && m.c === c) : null;
+      if(mv){
+        executeMove(state.selected, mv, isHuman);
+        return;
+      }
+    }
+    if(clicked && clicked.owner === owner){
+      selectPiece(clicked.id, owner);
+    } else {
+      state.selected = null;
+      state.legalMoves = [];
+      state.status = 'Selection cleared.';
+      render();
+    }
+  }
+
+  function executeMove(pieceId, move, isHuman=false){
+    if(state.gameOver) return false;
+    const p = state.pieces[pieceId];
+    if(!p || p.captured) return false;
+    const owner = p.owner;
+    const ps = state.players[owner];
+    if(move.cost){
+      if(!voluntaryAffordable(owner, move.cost)) return false;
+      if(!transferGold(owner, BANK, move.cost, `for ${move.note}`)) return false;
+    }
+    if(p.type === 'N') p.knightFeePaid = true;
+    const fromR = p.r, fromC = p.c;
+    if(move.special === 'castleKing' || move.special === 'castleQueen'){
+      doCastle(p, move.special);
+      ps.castlingUsed = true;
+      p.moved = true;
+      afterActionMove(owner, isHuman, p.id);
+      return true;
+    }
+    const target = getPieceAt(move.r, move.c);
+    if(target && target.owner !== owner){
+      capturePiece(target, p, move.r, move.c, true);
+      if(state.gameOver) return false;
+    }
+    state.board[fromR][fromC] = null;
+    state.board[move.r][move.c] = p.id;
+    p.r = move.r; p.c = move.c; p.moved = true;
+    log(`${label(owner)} moved ${p.type} from ${coord(fromR,fromC)} to ${coord(move.r,move.c)}${target ? ' and captured ' + target.type : ''}.`);
+    resolveLanding(p);
+    maybePromote(p, isHuman);
+    if(state.pendingPromotion) { render(); return true; }
+    afterActionMove(owner, isHuman, p.id);
+    return true;
+  }
+
+  function doCastle(king, special){
+    const row = king.r;
+    const oldKingC = king.c;
+    const kingTo = special === 'castleKing' ? 6 : 2;
+    const rookFrom = special === 'castleKing' ? 7 : 0;
+    const rookTo = special === 'castleKing' ? 5 : 3;
+    const rook = getPieceAt(row,rookFrom);
+    state.board[row][oldKingC] = null;
+    state.board[row][kingTo] = king.id;
+    king.c = kingTo;
+    state.board[row][rookFrom] = null;
+    state.board[row][rookTo] = rook.id;
+    rook.c = rookTo; rook.moved = true;
+    log(`${label(king.owner)} castled.`);
+    resolveLanding(king);
+  }
+
+  function afterActionMove(owner, isHuman, movedPieceId=null){
+    const ps = state.players[owner];
+    if(ps.doubleMovesRemaining > 0){
+      ps.doubleMovesRemaining--;
+      if(ps.doubleMovesRemaining > 0){
+        state.selected = null;
+        state.legalMoves = [];
+        state.status = `${label(owner)} has ${ps.doubleMovesRemaining} double move action left.`;
+        render();
+        return;
+      }
+    }
+    ps.usedTurnAction = true;
+    state.selected = movedPieceId;
+    state.legalMoves = [];
+    state.status = owner === PLAYER ? 'Move complete. You may buy land under that piece, then end turn.' : 'AI move complete.';
+    if(isHuman) render();
+  }
+
+  function capturePiece(target, capturer, r, c, awardGold){
+    target.captured = true;
+    state.board[target.r][target.c] = null;
+    state.lastCapture = {
+      owner: target.owner,
+      captured: deepClone(target),
+      location:{r,c},
+      captorId: capturer.id,
+      turnNumber: state.turnNumber,
+      used:false
+    };
+    log(`${label(capturer.owner)} captured ${label(target.owner)} ${target.type} on ${coord(r,c)}.`);
+    if(awardGold){
+      transferGold(target.owner, capturer.owner, 1, 'capture bounty');
+    }
+  }
+
+  function resolveLanding(p){
+    if(state.gameOver) return;
+    const landOwner = state.land[p.r][p.c];
+    if(landOwner && landOwner !== p.owner){
+      const tax = hasKing(landOwner) ? 1 : 6;
+      transferGold(p.owner, landOwner, tax, `landing tax on ${coord(p.r,p.c)}`);
+      if(state.gameOver) return;
+    }
+    if(isDefaultGen(p.r,p.c)){
+      const chipOwner = state.genChip[p.r][p.c];
+      if(!chipOwner){
+        gainGold(p.owner, 1, `immediate generator landing at ${coord(p.r,p.c)}`);
+      } else if(chipOwner === p.owner && hasKing(p.owner)){
+        gainGold(p.owner, 1, `own generator landing at ${coord(p.r,p.c)}`);
+      }
+    }
+    if(state.customGen[p.r][p.c]){
+      gainGold(p.owner, isDefaultGen(p.r,p.c) ? 6 : 5, `green XX generator landing at ${coord(p.r,p.c)}`);
+    }
+  }
+
+  function maybePromote(p, isHuman){
+    if(p.type !== 'P' || p.captured) return;
+    const endRow = p.owner === PLAYER ? 0 : 7;
+    if(p.r !== endRow) return;
+    if(p.owner === PLAYER && isHuman){
+      state.pendingPromotion = {pieceId:p.id};
+      state.status = 'Your pawn reached the back rank. Promote it.';
+    } else {
+      const owner = p.owner;
+      if(voluntaryAffordable(owner,3)){
+        transferGold(owner, BANK, 3, 'chosen pawn promotion');
+        p.type = 'Q';
+        log(`${label(owner)} promoted a pawn to Queen.`);
+      } else {
+        const types = ['Q','R','B','N'];
+        p.type = types[Math.floor(Math.random()*types.length)];
+        log(`${label(owner)} received a random promotion: ${p.type}.`);
+      }
+    }
+  }
+
+  function finishPromotionForOwner(owner, type, paid){
+    const pp = state.pendingPromotion;
+    if(!pp) return;
+    const p = state.pieces[pp.pieceId];
+    if(!p || p.captured){ state.pendingPromotion = null; return; }
+    if(p.owner !== owner) return;
+    if(paid){
+      if(!voluntaryAffordable(owner,3)) return;
+      transferGold(owner, BANK, 3, 'chosen pawn promotion');
+      p.type = type;
+    } else {
+      const types = ['Q','R','B','N'];
+      p.type = types[Math.floor(Math.random()*types.length)];
+    }
+    log(`${label(owner)} promoted a pawn to ${p.type}.`);
+    state.pendingPromotion = null;
+    afterActionMove(owner, true, p.id);
+    render();
+  }
+
+  function buyLand(owner=PLAYER, pieceId=state.selected){
+    if(state.gameOver) return false;
+    const ps = state.players[owner];
+    const p = state.pieces[pieceId];
+    if(!p || p.captured || p.owner !== owner) return false;
+    if(ps.landPurchases >= 2) return false;
+    const current = state.land[p.r][p.c];
+    if(current === owner) return false;
+    const cost = !current ? 1 : (hasKing(current) ? 2 : 3);
+    if(ps.freeLand){
+      ps.freeLand = false;
+      state.land[p.r][p.c] = owner;
+      ps.landPurchases++;
+      log(`${label(owner)} used a free land deed on ${coord(p.r,p.c)}.`);
+      return true;
+    }
+    if(!voluntaryAffordable(owner, cost)) return false;
+    const paid = current ? transferGold(owner,current,cost,`to buy land ${coord(p.r,p.c)}`) : transferGold(owner,BANK,cost,`to buy unowned land ${coord(p.r,p.c)}`);
+    if(!paid) return false;
+    state.land[p.r][p.c] = owner;
+    ps.landPurchases++;
+    log(`${label(owner)} bought land on ${coord(p.r,p.c)}.`);
+    return true;
+  }
+
+  function buyGeneratorChip(owner=PLAYER, pieceId=state.selected){
+    const ps = state.players[owner];
+    const p = state.pieces[pieceId];
+    if(!p || p.owner !== owner || p.captured || ps.usedTurnAction || ps.doubleMovesRemaining) return false;
+    if(!isDefaultGen(p.r,p.c)) return false;
+    const current = state.genChip[p.r][p.c];
+    if(current === owner) return false;
+    if(ps.freeGenChip){
+      ps.freeGenChip = false;
+      state.genChip[p.r][p.c] = owner;
+      ps.usedTurnAction = true;
+      log(`${label(owner)} used a free generator chip on ${coord(p.r,p.c)}.`);
+      return true;
+    }
+    const cost = current ? 8 : 5;
+    if(!voluntaryAffordable(owner,cost)) return false;
+    if(current){ if(!transferGold(owner,current,cost,`to buy enemy generator chip at ${coord(p.r,p.c)}`)) return false; }
+    else { if(!transferGold(owner,BANK,cost,`to buy generator chip at ${coord(p.r,p.c)}`)) return false; }
+    state.genChip[p.r][p.c] = owner;
+    ps.usedTurnAction = true;
+    log(`${label(owner)} bought a generator chip at ${coord(p.r,p.c)}.`);
+    return true;
+  }
+
+  function buildCustomGenerator(owner=PLAYER, pieceId=state.selected){
+    const ps = state.players[owner];
+    const p = state.pieces[pieceId];
+    if(!p || p.owner !== owner || p.captured || ps.usedTurnAction || ps.doubleMovesRemaining) return false;
+    if(state.customGen[p.r][p.c]) return false;
+    if(!voluntaryAffordable(owner,30)) return false;
+    if(!transferGold(owner,BANK,30,`to build XX generator at ${coord(p.r,p.c)}`)) return false;
+    state.customGen[p.r][p.c] = owner;
+    ps.usedTurnAction = true;
+    log(`${label(owner)} built a custom XX generator at ${coord(p.r,p.c)}.`);
+    return true;
+  }
+
+  function buyDoubleMove(owner=PLAYER){
+    const ps = state.players[owner];
+    if(ps.usedTurnAction || ps.doubleMovesRemaining || !voluntaryAffordable(owner,6)) return false;
+    if(!transferGold(owner,BANK,6,'for double move')) return false;
+    ps.doubleMovesRemaining = 2;
+    state.status = `${label(owner)} bought double move. Make two moves.`;
+    log(`${label(owner)} bought a double move.`);
+    return true;
+  }
+
+  function cardDeckPieces(){
+    return ['P','R','K','Q','N','B'];
+  }
+
+  function backRankRow(owner){
+    return owner === PLAYER ? 7 : 0;
+  }
+
+  function openBackRankSlots(owner){
+    const row = backRankRow(owner);
+    const slots = [];
+    for(let c=0;c<8;c++) if(!state.board[row][c]) slots.push({r:row,c});
+    return slots;
+  }
+
+  function canDrawPieceCard(owner){
+    const ps = state.players[owner];
+    return !ps.usedTurnAction && !ps.doubleMovesRemaining && voluntaryAffordable(owner,5) && openBackRankSlots(owner).length > 0;
+  }
+
+  function drawCard(owner=PLAYER){
+    const ps = state.players[owner];
+    if(!canDrawPieceCard(owner)) return false;
+    if(!transferGold(owner,BANK,5,'to draw a random piece card')) return false;
+    const deck = cardDeckPieces();
+    const pieceType = deck[Math.floor(Math.random()*deck.length)];
+    log(`${label(owner)} drew a random piece card: <b>${pieceType}</b>.`);
+    showCardReveal(`${label(owner)} drew ${pieceType}`, PIECE_CARD_IMAGES[pieceType], `${pieceType} card. Place it on an open back-rank slot.`);
+    if(!shouldAutoAct(owner)){
+      state.pendingCardPlacement = {owner, pieceType};
+      state.selected = null;
+      state.legalMoves = [];
+      state.mode = null;
+      state.status = `You drew ${pieceType}. Click an open back-rank slot to place it.`;
+      return true;
+    }
+    const slot = chooseCardPlacementSlot(owner, pieceType);
+    if(!slot){
+      log(`${label(owner)} had no open back-rank slot. The card could not be placed.`);
+      ps.usedTurnAction = true;
+      return true;
+    }
+    placeDrawnCard(owner, pieceType, slot.r, slot.c);
+    return true;
+  }
+
+  function chooseCardPlacementSlot(owner, pieceType){
+    const slots = openBackRankSlots(owner);
+    if(!slots.length) return null;
+    const enemy = other(owner);
+    slots.sort((a,b)=>scoreCardSlot(owner,pieceType,b.r,b.c,enemy)-scoreCardSlot(owner,pieceType,a.r,a.c,enemy));
+    return slots[0];
+  }
+
+  function scoreCardSlot(owner, pieceType, r, c, enemy){
+    let score = 0;
+    const centerDist = Math.abs(3.5-c);
+    score += (4-centerDist) * 1.4;
+    if(pieceType === 'R') score += (c === 0 || c === 7) ? 3 : 0;
+    if(pieceType === 'B') score += (c === 2 || c === 5) ? 3 : 0;
+    if(pieceType === 'N') score += (c === 1 || c === 6) ? 3 : 0;
+    if(pieceType === 'Q') score += (c === 3) ? 4 : 1;
+    if(pieceType === 'K') score += (c === 4) ? 4 : 1;
+    if(pieceType === 'P') score += (c >= 2 && c <= 5) ? 2 : 0;
+    if(state.land[r][c] === owner) score += 1;
+    if(state.land[r][c] === enemy) score -= hasKing(enemy) ? 2 : 6;
+    return score + Math.random()*.25;
+  }
+
+  function placePendingDrawnCard(owner,r,c){
+    const pending = state.pendingCardPlacement;
+    if(!pending || pending.owner !== owner) return;
+    if(r !== backRankRow(owner) || state.board[r][c]){
+      state.status = `Place the ${pending.pieceType} on an open back-rank slot only.`;
+      render();
+      return;
+    }
+    placeDrawnCard(owner, pending.pieceType, r, c);
+    state.pendingCardPlacement = null;
+    render();
+  }
+
+  function placeDrawnCard(owner, pieceType, r, c){
+    if(r !== backRankRow(owner) || state.board[r][c]) return false;
+    addPiece(state, owner, pieceType, r, c);
+    state.players[owner].usedTurnAction = true;
+    state.status = `${label(owner)} placed a drawn ${pieceType} on ${coord(r,c)}.`;
+    log(`${label(owner)} placed the drawn ${pieceType} on ${coord(r,c)}.`);
+    return true;
+  }
+
+  function autoPlacePendingCard(){
+    const pending = state.pendingCardPlacement;
+    if(!pending) return false;
+    const slot = chooseCardPlacementSlot(pending.owner, pending.pieceType);
+    state.pendingCardPlacement = null;
+    if(slot) return placeDrawnCard(pending.owner, pending.pieceType, slot.r, slot.c);
+    state.players[pending.owner].usedTurnAction = true;
+    return false;
+  }
+
+  function buyCastlingRights(owner=PLAYER){
+    const ps = state.players[owner];
+    if(ps.usedTurnAction || ps.doubleMovesRemaining || ps.castlingRightsTurn != null || !voluntaryAffordable(owner,3)) return false;
+    if(!transferGold(owner,BANK,3,'for castling rights')) return false;
+    ps.castlingRightsTurn = state.turnNumber;
+    ps.usedTurnAction = true;
+    showCardReveal(`${label(owner)} bought Castling Rights`, CASTLE_CARD, 'Castle certificate. It can be used starting next turn.');
+    log(`${label(owner)} bought castling rights. It can be used next turn.`);
+    return true;
+  }
+
+  function beginTeleport(owner=effectiveLocalOwner()){
+    const ps = state.players[owner];
+    if(ps.usedTurnAction || ps.doubleMovesRemaining || !hasKing(owner) || !voluntaryAffordable(owner,10)) return;
+    state.mode = 'teleport';
+    state.modeOwner = owner;
+    state.selected = null;
+    state.legalMoves = [];
+    state.status = 'Teleport mode: click any empty square. Cost is 10 gold and this uses your turn action.';
+    render();
+  }
+
+  function teleportOwnerTo(owner,r,c){
+    if(!inBounds(r,c) || state.board[r][c]){ state.status = 'Teleport needs an empty square.'; render(); return; }
+    const king = livingPieces(owner).find(p => p.type === 'K');
+    if(!king) return;
+    if(!teleportKing(owner, king.id, r, c)) return;
+    state.mode = null;
+    state.modeOwner = null;
+    state.selected = king.id;
+    render();
+  }
+
+  function teleportKing(owner, kingId, r, c){
+    const ps = state.players[owner];
+    const king = state.pieces[kingId];
+    if(!king || king.owner !== owner || king.type !== 'K' || king.captured || ps.usedTurnAction || ps.doubleMovesRemaining) return false;
+    if(state.board[r][c] || !voluntaryAffordable(owner,10)) return false;
+    if(!transferGold(owner,BANK,10,'for king teleport')) return false;
+    state.board[king.r][king.c] = null;
+    const old = coord(king.r,king.c);
+    king.r = r; king.c = c; king.moved = true;
+    state.board[r][c] = king.id;
+    log(`${label(owner)} teleported king from ${old} to ${coord(r,c)}.`);
+    resolveLanding(king);
+    ps.usedTurnAction = true;
+    state.status = `${label(owner)} teleported king.`;
+    return true;
+  }
+
+  function canResurrect(owner){
+    const lc = state.lastCapture;
+    if(!lc || lc.used || lc.owner !== owner) return false;
+    if(state.turnNumber - lc.turnNumber > 2) return false;
+    return voluntaryAffordable(owner,8);
+  }
+
+  function resurrect(owner=PLAYER){
+    if(!canResurrect(owner)) return false;
+    const ps = state.players[owner];
+    if(ps.usedTurnAction || ps.doubleMovesRemaining) return false;
+    if(!transferGold(owner,BANK,8,'for piece resurrection')) return false;
+    const lc = state.lastCapture;
+    const {r,c} = lc.location;
+    const occupant = getPieceAt(r,c);
+    if(occupant && occupant.owner !== owner){
+      occupant.captured = true;
+      state.board[r][c] = null;
+      log(`${label(owner)} resurrection captured ${label(occupant.owner)} ${occupant.type} with no gold bounty.`);
+    } else if(occupant && occupant.owner === owner){
+      log(`${label(owner)} resurrection failed because the square is occupied by a friendly piece.`);
+      lc.used = true;
+      ps.usedTurnAction = true;
+      return true;
+    }
+    const data = lc.captured;
+    const newId = 'p' + nextPieceId++;
+    state.pieces[newId] = {...data,id:newId,owner,captured:false,r,c,moved:true};
+    state.board[r][c] = newId;
+    lc.used = true;
+    ps.usedTurnAction = true;
+    log(`${label(owner)} resurrected ${data.type} on ${coord(r,c)}.`);
+    return true;
+  }
+
+  function goldDice(owner=PLAYER){
+    const ps = state.players[owner];
+    if(ps.usedTurnAction || ps.doubleMovesRemaining || !voluntaryAffordable(owner,15)) return false;
+    if(!transferGold(owner,BANK,15,'for Gold Dice roll')) return false;
+    const faces = ['P','N','B','R','Q','K','X'];
+    const roll = faces[Math.floor(Math.random()*faces.length)];
+    log(`${label(owner)} rolled Gold Dice: <b>${roll}</b>.`);
+    if(roll !== 'X'){
+      let count = 0;
+      for(const p of Object.values(state.pieces)){
+        if(!p.captured && p.owner === other(owner) && p.type === roll){
+          p.owner = owner;
+          count++;
+        }
+      }
+      log(`${label(owner)} gained ownership of ${count} enemy ${roll} piece(s).`);
+    }
+    ps.usedTurnAction = true;
+    return true;
+  }
+
+  function buyGoldBar(owner=PLAYER){
+    if(state.players[owner].gold < 100) return false;
+    state.players[owner].gold -= 100;
+    endGame(owner, `${label(owner)} purchased the 100 gold bar.`);
+    return true;
+  }
+
+  // AI SECTION
+  function shouldAutoAct(owner){
+    if(net.mode === 'online') return false;
+    return owner === AI || (owner === PLAYER && state?.autoPlayer);
+  }
+
+  function scheduleAutoTurn(delay=520){
+    if(autoTimer){ clearTimeout(autoTimer); autoTimer = null; }
+    if(!state || state.gameOver || state.pendingPromotion || state.pendingCardPlacement) return;
+    if(shouldAutoAct(state.turn)){
+      autoTimer = setTimeout(() => { autoTimer = null; aiTakeTurn(); }, delay);
+    }
+  }
+
+  function aiTakeTurn(){
+    const owner = state.turn;
+    if(state.gameOver || !shouldAutoAct(owner)) return;
+    try{
+      if(state.pendingCardPlacement){ autoPlacePendingCard(); }
+      aiBuyLandPass(owner);
+      if(state.gameOver) return;
+      if(state.players[owner].gold >= 100){ buyGoldBar(owner); render(); return; }
+
+      const action = chooseAiAction(owner);
+      if(action) action();
+      aiBuyLandPass(owner);
+      render();
+      if(!state.gameOver){ setTimeout(() => endTurn(), 650); }
+    } catch(err){
+      console.error(err);
+      log('AI error recovered by passing turn.');
+      render();
+      setTimeout(() => endTurn(), 400);
+    }
+  }
+
+  function chooseAiAction(owner){
+    const ps = state.players[owner];
+    if(canResurrect(owner)){
+      const cap = state.lastCapture?.captured;
+      if(cap && pieceValues[cap.type] >= 3 && state.players[owner].gold > 11) return () => resurrect(owner);
+    }
+    // Buy generator chip if standing on a default generator and it makes sense.
+    const genCandidate = livingPieces(owner).find(p => isDefaultGen(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (state.players[owner].gold > (state.genChip[p.r][p.c] ? 13 : 9)));
+    if(genCandidate && !ps.usedTurnAction) return () => buyGeneratorChip(owner, genCandidate.id);
+
+    const customCandidate = bestCustomGenSpot(owner);
+    if(customCandidate && state.players[owner].gold > 38) return () => buildCustomGenerator(owner, customCandidate.id);
+
+    if(shouldGoldDice(owner)) return () => goldDice(owner);
+
+    const best = bestMoveFor(owner);
+
+    const pieceDeficit = livingPieces(other(owner)).length - livingPieces(owner).length;
+    const missingKing = !hasKing(owner);
+    const drawLooksGood = canDrawPieceCard(owner) && state.players[owner].gold > 12 && (missingKing || pieceDeficit >= 2 || !best || best.score < 6 || (state.players[owner].gold > 32 && Math.random() < .35));
+    if(drawLooksGood) return () => drawCard(owner);
+
+    if(best && best.score > 10 && state.players[owner].gold > 10){
+      const secondPotential = secondMovePotential(owner, best);
+      if(secondPotential > 6 && voluntaryAffordable(owner,6)){
+        return () => {
+          buyDoubleMove(owner);
+          const first = bestMoveFor(owner);
+          if(first) executeMove(first.pieceId, first.move, false);
+          if(!state.gameOver){ const second = bestMoveFor(owner); if(second) executeMove(second.pieceId, second.move, false); }
+        };
+      }
+    }
+
+    if(best) return () => executeMove(best.pieceId, best.move, false);
+    if(canDrawPieceCard(owner) && state.players[owner].gold > 12) return () => drawCard(owner);
+    return () => { ps.usedTurnAction = true; log(`${label(owner)} AI passed.`); };
+  }
+
+  function secondMovePotential(owner, first){
+    // A quick conservative estimate. It does not simulate. It checks if the side already has another good move.
+    const all = allMoves(owner).filter(m => m.pieceId !== first.pieceId || Math.random() < .3);
+    if(!all.length) return 0;
+    all.sort((a,b)=>b.score-a.score);
+    return all[0].score;
+  }
+
+  function allMoves(owner){
+    const arr = [];
+    for(const p of livingPieces(owner)){
+      for(const mv of legalMovesForPiece(p)){
+        arr.push({pieceId:p.id, move:mv, score:scoreMove(p,mv)});
+      }
+    }
+    return arr;
+  }
+
+  function bestMoveFor(owner){
+    const moves = allMoves(owner);
+    if(!moves.length) return null;
+    moves.sort((a,b)=>b.score-a.score);
+    // Soft randomness among top choices so AI is not identical every reset.
+    const top = moves.slice(0, Math.min(4,moves.length));
+    const weighted = top.map((m,i)=>({m,w:Math.max(1, 8-i*2) + Math.max(0,m.score/4)}));
+    let total = weighted.reduce((s,x)=>s+x.w,0);
+    let roll = Math.random()*total;
+    for(const x of weighted){ roll -= x.w; if(roll <= 0) return x.m; }
+    return moves[0];
+  }
+
+  function scoreMove(p,mv){
+    let score = 0;
+    const target = getPieceAt(mv.r,mv.c);
+    if(target && target.owner !== p.owner){
+      score += pieceValues[target.type] * 7 + 3;
+      if(target.type === 'K') score += 28;
+    }
+    if(mv.cost) score -= mv.cost * 3.2;
+    const landOwner = state.land[mv.r][mv.c];
+    if(landOwner === p.owner) score += 1.1;
+    else if(landOwner === other(p.owner)) score -= hasKing(landOwner) ? 1.6 : 6.5;
+    else score += 1.3; // unowned land can be bought
+
+    if(isDefaultGen(mv.r,mv.c)){
+      const chipOwner = state.genChip[mv.r][mv.c];
+      if(!chipOwner) score += 7;
+      else if(chipOwner === p.owner) score += 2;
+      else score += 3; // can possibly buy it later
+    }
+    if(state.customGen[mv.r][mv.c]) score += 7;
+
+    const centerDist = Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c);
+    score += (7-centerDist) * .45;
+
+    if(p.type === 'P'){
+      const end = p.owner === PLAYER ? 0 : 7;
+      const progress = p.owner === PLAYER ? (6-mv.r) : (mv.r-1);
+      score += progress * .65;
+      if(mv.r === end) score += 18;
+    }
+    if(p.type === 'K'){
+      // Kings matter for economy, but no check rules. Keep it away from cheap captures.
+      score -= countEnemyAttacks(mv.r,mv.c,p.owner) * 4;
+    } else {
+      score -= countEnemyAttacks(mv.r,mv.c,p.owner) * Math.min(3.2, pieceValues[p.type] * .85);
+    }
+    return score + Math.random() * .4;
+  }
+
+  function countEnemyAttacks(r,c,owner){
+    const enemy = other(owner);
+    let count = 0;
+    for(const p of livingPieces(enemy)){
+      const moves = pseudoAttacks(p);
+      if(moves.some(m => m.r === r && m.c === c)) count++;
+    }
+    return count;
+  }
+
+  function pseudoAttacks(p){
+    const attacks = [];
+    const r=p.r,c=p.c;
+    if(p.type === 'P'){
+      const dir = p.owner === PLAYER ? -1 : 1;
+      for(const dc of [-1,1]) if(inBounds(r+dir,c+dc)) attacks.push({r:r+dir,c:c+dc});
+    } else if(p.type === 'N'){
+      for(const [dr,dc] of [[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]]) if(inBounds(r+dr,c+dc)) attacks.push({r:r+dr,c:c+dc});
+    } else if(p.type === 'K'){
+      for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++) if((dr||dc)&&inBounds(r+dr,c+dc)) attacks.push({r:r+dr,c:c+dc});
+    } else {
+      const dirs = [];
+      if(['B','Q'].includes(p.type)) dirs.push([1,1],[1,-1],[-1,1],[-1,-1]);
+      if(['R','Q'].includes(p.type)) dirs.push([1,0],[-1,0],[0,1],[0,-1]);
+      for(const [dr,dc] of dirs){
+        let tr=r+dr, tc=c+dc;
+        while(inBounds(tr,tc)){
+          attacks.push({r:tr,c:tc});
+          if(state.board[tr][tc]) break;
+          tr+=dr; tc+=dc;
+        }
+      }
+    }
+    return attacks;
+  }
+
+  function aiBuyLandPass(owner){
+    const pieces = livingPieces(owner).slice().sort((a,b)=>landBuyValue(b)-landBuyValue(a));
+    for(const p of pieces){
+      if(state.players[owner].landPurchases >= 2) break;
+      if(landBuyValue(p) > 0) buyLand(owner,p.id);
+    }
+  }
+
+  function landBuyValue(p){
+    const current = state.land[p.r][p.c];
+    if(current === p.owner) return -99;
+    let val = 2;
+    if(!current) val += isDefaultGen(p.r,p.c) ? 5 : 0;
+    if(current === other(p.owner)) val += hasKing(current) ? 5 : 8;
+    if(state.customGen[p.r][p.c]) val += 5;
+    const cost = !current ? 1 : (hasKing(current) ? 2 : 3);
+    if(!voluntaryAffordable(p.owner,cost)) return -99;
+    return val - cost;
+  }
+
+  function bestCustomGenSpot(owner){
+    let best = null, bestScore = -999;
+    for(const p of livingPieces(owner)){
+      if(state.customGen[p.r][p.c]) continue;
+      let score = isDefaultGen(p.r,p.c) ? 15 : 6;
+      if(state.land[p.r][p.c] === owner) score += 3;
+      score -= Math.abs(3.5-p.r)+Math.abs(3.5-p.c);
+      if(score > bestScore){ bestScore = score; best = p; }
+    }
+    return bestScore >= 8 ? best : null;
+  }
+
+  function shouldGoldDice(owner){
+    const ps = state.players[owner];
+    if(ps.usedTurnAction || ps.doubleMovesRemaining || !voluntaryAffordable(owner,15) || state.players[owner].gold < 28) return false;
+    const enemyPieces = livingPieces(other(owner));
+    const typeScore = {};
+    for(const p of enemyPieces) typeScore[p.type] = (typeScore[p.type]||0) + pieceValues[p.type];
+    const best = Math.max(0,...Object.values(typeScore));
+    // Expected gain is one random face out of seven. Use when enemy has big stacks or AI is rich.
+    return best >= 16 || (state.players[owner].gold > 45 && best >= 9);
+  }
+
+  // RENDER SECTION
+  function render(){
+    renderScores();
+    renderBoard();
+    renderControls();
+    renderLog();
+    renderPromo();
+    el('turnBanner').textContent = state.gameOver ? `${label(state.winner)} wins` : `${label(state.turn)}${shouldAutoAct(state.turn) ? ' AI' : ''} turn • Half-turn ${state.turnNumber}`;
+    el('hintText').textContent = state.pendingCardPlacement ? 'Card placement active. Click an open slot on your back rank.' : (state.mode === 'teleport' ? 'Teleport mode active. Click an empty square.' : (shouldAutoAct(state.turn) ? `${label(state.turn)} AI is thinking through economy and tactics.` : 'Click your piece. Buy land before passing. Other purchases use your turn action.'));
+    el('autoPlayerBtn').textContent = `Player AI: ${state.autoPlayer ? 'ON' : 'OFF'}`;
+    const banner = el('statusBanner');
+    banner.textContent = state.status;
+    banner.className = 'banner' + (state.gameOver ? (state.winner === PLAYER ? ' win' : ' lose') : '');
+  }
+
+  function renderScores(){
+    el('playerScore').innerHTML = scoreHTML(PLAYER);
+    el('aiScore').innerHTML = scoreHTML(AI);
+  }
+
+  function scoreHTML(owner){
+    const ps = state.players[owner];
+    const pieces = livingPieces(owner).length;
+    const lands = countGrid(state.land, owner);
+    const chips = countGrid(state.genChip, owner);
+    const customs = countGrid(state.customGen, owner);
+    const kings = countKings(owner);
+    return `<div class="scoreName"><span class="dot ${sideOf(owner)}"></span>${label(owner)}</div>
+      <div class="gold">${ps.gold}g</div>
+      <div class="smallStats">Pieces: ${pieces}<br>Kings: ${kings}<br>Land: ${lands} / Gen chips: ${chips}<br>XX gens: ${customs}<br>Land buys left: ${Math.max(0,2-ps.landPurchases)}</div>`;
+  }
+
+  function countGrid(grid, owner){
+    let n=0; for(let r=0;r<8;r++) for(let c=0;c<8;c++) if(grid[r][c] === owner) n++; return n;
+  }
+
+  function renderBoard(){
+    const board = el('board');
+    board.innerHTML = '';
+    const legalMap = new Map(state.legalMoves.map(m=>[key(m.r,m.c),m]));
+    for(let r=0;r<8;r++){
+      for(let c=0;c<8;c++){
+        const sq = document.createElement('div');
+        sq.className = `sq ${((r+c)%2===0)?'light':'dark'}`;
+        sq.dataset.r = r; sq.dataset.c = c;
+        if(state.selected){
+          const p = state.pieces[state.selected];
+          if(p && p.r === r && p.c === c) sq.classList.add('selected');
+        }
+        const lm = legalMap.get(key(r,c));
+        if(lm){ sq.classList.add('legal'); if(lm.capture) sq.classList.add('capture'); }
+        const localOwner = effectiveLocalOwner();
+        if(state.pendingCardPlacement && state.pendingCardPlacement.owner === localOwner && r === backRankRow(localOwner) && !state.board[r][c]){
+          sq.classList.add('placeSlot');
+        }
+        sq.title = tileHoverText(r,c);
+        if(state.genChip[r][c]){
+          const chip = document.createElement('div'); chip.className = `chip ownershipChip ${sideOf(state.genChip[r][c])}`; sq.appendChild(chip);
+        }
+        if(state.land[r][c]){
+          const chip = document.createElement('div'); chip.className = `chip landDisc ${sideOf(state.land[r][c])}`; sq.appendChild(chip);
+        }
+        if(isDefaultGen(r,c)){
+          const chip = document.createElement('div'); chip.className = 'chip baseGenChip'; sq.appendChild(chip);
+        }
+        if(state.customGen[r][c]){
+          const chip = document.createElement('div'); chip.className = 'chip xxGenChip'; sq.appendChild(chip);
+        }
+        const p = getPieceAt(r,c);
+        if(p){
+          const pc = document.createElement('div'); pc.className = `piece ${sideOf(p.owner)}`; pc.textContent = symbols[p.owner][p.type]; pc.title = tileHoverText(r,c); sq.appendChild(pc);
+        }
+        if(lm && lm.cost){
+          const badge = document.createElement('div'); badge.className='paidBadge'; badge.textContent = `${lm.cost}g`; sq.appendChild(badge);
+        }
+        const co = document.createElement('div'); co.className='coord'; co.textContent=coord(r,c); sq.appendChild(co);
+        sq.addEventListener('click',()=>onSquareClick(r,c));
+        board.appendChild(sq);
+      }
+    }
+  }
+
+
+  function tileHoverText(r,c){
+    const lines = [`${coord(r,c)}`];
+    const p = getPieceAt(r,c);
+    if(p) lines.push(`Piece: ${label(p.owner)} ${p.type}`);
+    if(state.genChip[r][c]) lines.push(`Generator ownership chip: ${label(state.genChip[r][c])} (largest bottom chip)`);
+    if(state.land[r][c]) lines.push(`Land tile: ${label(state.land[r][c])}`);
+    if(isDefaultGen(r,c)) lines.push('Original 4 gold generator coin: pays pieces on it when unowned');
+    if(state.customGen[r][c]) lines.push(`Green XX generator chip: built by ${label(state.customGen[r][c])}; pays any piece that lands or starts on it`);
+    if(lines.length === 1) lines.push('No chips on this tile');
+    return lines.join('\n');
+  }
+
+  function selectedOwnPiece(owner=effectiveLocalOwner()){
+    const p = state.selected ? state.pieces[state.selected] : null;
+    return p && !p.captured && p.owner === owner ? p : null;
+  }
+
+  function renderControls(){
+    const owner = effectiveLocalOwner();
+    const ps = state.players[owner];
+    const p = selectedOwnPiece(owner);
+    const localHumanTurn = state.turn === owner && !state.gameOver && !state.pendingPromotion && !state.pendingCardPlacement && !shouldAutoAct(owner);
+    const canAct = localHumanTurn && !ps.usedTurnAction && ps.doubleMovesRemaining <= 0;
+    const landCost = p ? landPurchaseCostAt(p.r,p.c,owner) : Infinity;
+    el('buyLandBtn').disabled = !(localHumanTurn && p && state.land[p.r][p.c] !== owner && ps.landPurchases < 2 && (ps.freeLand || voluntaryAffordable(owner,landCost)));
+    const genCost = p ? genChipCostAt(p.r,p.c,owner) : Infinity;
+    el('buyGenBtn').disabled = !(canAct && p && isDefaultGen(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (ps.freeGenChip || voluntaryAffordable(owner,genCost)));
+    el('customGenBtn').disabled = !(canAct && p && !state.customGen[p.r][p.c] && voluntaryAffordable(owner,30));
+    el('doubleMoveBtn').disabled = !(localHumanTurn && !ps.usedTurnAction && !ps.doubleMovesRemaining && voluntaryAffordable(owner,6));
+    el('drawCardBtn').disabled = !(canAct && canDrawPieceCard(owner));
+    el('goldDiceBtn').disabled = !(canAct && voluntaryAffordable(owner,15));
+    el('castleBtn').disabled = !(canAct && ps.castlingRightsTurn == null && voluntaryAffordable(owner,3));
+    el('teleportBtn').disabled = !(canAct && hasKing(owner) && voluntaryAffordable(owner,10));
+    el('resurrectBtn').disabled = !(canAct && canResurrect(owner));
+    el('goldBarBtn').disabled = !(localHumanTurn && state.players[owner].gold >= 100);
+    el('endTurnBtn').disabled = !localHumanTurn;
+    el('autoPlayerBtn').disabled = net.mode === 'online';
+    renderNetwork();
+  }
+
+  function landPurchaseCostAt(r,c,buyer){
+    const current = state.land[r][c];
+    if(current === buyer) return Infinity;
+    if(!current) return 1;
+    return hasKing(current) ? 2 : 3;
+  }
+
+  function genChipCostAt(r,c,buyer){
+    const current = state.genChip[r][c];
+    if(current === buyer || !isDefaultGen(r,c)) return Infinity;
+    return current ? 8 : 5;
+  }
+
+  function renderLog(){
+    el('log').innerHTML = state.log.map(x=>`<div>${x}</div>`).join('');
+  }
+
+  function renderPromo(){
+    const box = el('promoBox');
+    if(!state.pendingPromotion){ box.classList.add('hidden'); return; }
+    const p = state.pieces[state.pendingPromotion.pieceId];
+    const owner = effectiveLocalOwner();
+    if(!p || p.owner !== owner || shouldAutoAct(owner)){ box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const choices = el('promoChoices');
+    choices.innerHTML = '';
+    for(const t of ['Q','R','B','N']){
+      const b = document.createElement('button');
+      b.textContent = symbols[owner][t];
+      b.title = `Choose ${t} for 3 gold`;
+      b.disabled = !voluntaryAffordable(owner,3);
+      b.addEventListener('click',()=>localAction('promote', {type:t, paid:true}));
+      choices.appendChild(b);
+    }
+  }
+
+  function togglePlayerAI(){
+    if(net.mode === 'online') return;
+    playerAutoEnabled = !playerAutoEnabled;
+    state.autoPlayer = playerAutoEnabled;
+    if(state.pendingCardPlacement && state.pendingCardPlacement.owner === PLAYER && state.autoPlayer){
+      autoPlacePendingCard();
+    }
+    state.status = state.autoPlayer ? 'Player AI enabled. The computer will play your side.' : `Player AI disabled. You control the ${sideLabel(PLAYER)} side.`;
+    render();
+    scheduleAutoTurn(300);
+  }
+
+
+  function showCardReveal(title, faceUrl, caption=''){
+    if(isOnlineHost() && net.conn && net.conn.open){
+      net.conn.send({type:'reveal', title, faceUrl, caption});
+    }
+    hideCardReveal(true);
+    const box = el('cardReveal');
+    el('cardRevealTitle').textContent = title;
+    el('cardRevealCaption').textContent = 'Drawing...';
+    el('cardRevealImg').src = CARD_BACK;
+    box.classList.remove('hidden');
+    cardTimers.push(setTimeout(()=>{
+      el('cardRevealImg').src = faceUrl;
+      el('cardRevealCaption').textContent = caption;
+    }, 420));
+    cardTimers.push(setTimeout(()=>hideCardReveal(), 2400));
+  }
+
+  function hideCardReveal(clear=true){
+    if(clear){
+      for(const t of cardTimers) clearTimeout(t);
+      cardTimers = [];
+    }
+    const box = el('cardReveal');
+    if(box) box.classList.add('hidden');
+  }
+
+
+  function effectiveLocalOwner(){
+    return net.mode === 'online' ? net.localOwner : PLAYER;
+  }
+
+  function isOnlineHost(){ return net.mode === 'online' && net.role === 'host'; }
+  function isOnlineGuest(){ return net.mode === 'online' && net.role === 'guest'; }
+
+  function renderNetwork(){
+    const statusEl = el('netStatus');
+    if(!statusEl) return;
+    const codeText = net.roomCode ? net.roomCode : 'none';
+    el('roomCodeBox').textContent = `Room code: ${codeText}`;
+    statusEl.textContent = net.status;
+    el('copyLinkBtn').disabled = !net.roomCode;
+    el('disconnectNetBtn').disabled = net.mode !== 'online';
+    el('hostGameBtn').disabled = net.mode === 'online';
+    el('joinGameBtn').disabled = net.mode === 'online';
+    el('joinCodeInput').disabled = net.mode === 'online';
+  }
+
+  function setNetStatus(text){
+    net.status = text;
+    renderNetwork();
+  }
+
+  function cleanupNetwork(keepStatus=false){
+    try{ if(net.conn) net.conn.close(); }catch(e){}
+    try{ if(net.peer) net.peer.destroy(); }catch(e){}
+    net.mode = 'local';
+    net.role = 'local';
+    net.peer = null;
+    net.conn = null;
+    net.roomCode = '';
+    net.connected = false;
+    net.localOwner = PLAYER;
+    net.remoteOwner = AI;
+    if(!keepStatus) net.status = 'Offline local mode. Use this as normal single player or AI vs AI.';
+    render();
+  }
+
+  function hostFriendGame(){
+    if(!window.Peer){ setNetStatus('PeerJS did not load. Host this on GitHub Pages and make sure you have internet.'); return; }
+    cleanupNetwork(true);
+    net.mode = 'online';
+    net.role = 'host';
+    net.localOwner = PLAYER;
+    net.remoteOwner = AI;
+    net.status = 'Creating room...';
+    net.peer = new Peer();
+    net.peer.on('open', id => {
+      net.roomCode = id;
+      net.status = 'Room ready. Send this room code or invite link to your friend.';
+      resetGame();
+      renderNetwork();
+    });
+    net.peer.on('connection', conn => {
+      if(net.conn && net.conn.open){
+        conn.close();
+        return;
+      }
+      net.conn = conn;
+      setupPeerConnection(conn);
+    });
+    net.peer.on('error', err => setNetStatus('Network error: ' + (err?.message || err)));
+    render();
+  }
+
+  function joinFriendGame(){
+    if(!window.Peer){ setNetStatus('PeerJS did not load. Open the hosted site with internet access.'); return; }
+    const code = el('joinCodeInput').value.trim();
+    if(!code){ setNetStatus('Paste a room code first.'); return; }
+    cleanupNetwork(true);
+    net.mode = 'online';
+    net.role = 'guest';
+    net.localOwner = AI;
+    net.remoteOwner = PLAYER;
+    net.roomCode = code;
+    net.status = 'Joining room...';
+    net.peer = new Peer();
+    net.peer.on('open', () => {
+      const conn = net.peer.connect(code, {reliable:true});
+      net.conn = conn;
+      setupPeerConnection(conn);
+    });
+    net.peer.on('error', err => setNetStatus('Network error: ' + (err?.message || err)));
+    render();
+  }
+
+  function setupPeerConnection(conn){
+    conn.on('open', () => {
+      net.connected = true;
+      net.status = net.role === 'host' ? 'Friend connected. Host controls one side. Friend controls the other.' : 'Connected. Waiting for host board state.';
+      if(net.role === 'guest') conn.send({type:'hello', name:'friend'});
+      if(net.role === 'host') sendStateToPeer();
+      render();
+    });
+    conn.on('data', msg => handleNetMessage(msg));
+    conn.on('close', () => {
+      net.connected = false;
+      net.status = 'Connection closed. You are still looking at the last board state.';
+      renderNetwork();
+    });
+    conn.on('error', err => setNetStatus('Connection error: ' + (err?.message || err)));
+  }
+
+  function handleNetMessage(msg){
+    if(!msg || typeof msg !== 'object') return;
+    if(msg.type === 'hello'){
+      log('Friend joined the room.');
+      render();
+      sendStateToPeer();
+      return;
+    }
+    if(msg.type === 'reveal' && net.role === 'guest'){
+      showCardReveal(msg.title || 'Card Drawn', msg.faceUrl, msg.caption || '');
+      return;
+    }
+    if(msg.type === 'state' && net.role === 'guest'){
+      state = msg.state;
+      nextPieceId = msg.nextPieceId || nextPieceId;
+      playerAutoEnabled = !!msg.playerAutoEnabled;
+      render();
+      return;
+    }
+    if(msg.type === 'action' && net.role === 'host'){
+      runActionForOwner(msg.action, msg.payload || {}, AI);
+      render();
+      sendStateToPeer();
+    }
+  }
+
+  function sendActionToHost(action, payload={}){
+    if(!net.conn || !net.conn.open){ setNetStatus('Not connected to host.'); return; }
+    net.conn.send({type:'action', action, payload});
+  }
+
+  function sendStateToPeer(){
+    if(!isOnlineHost() || !net.conn || !net.conn.open) return;
+    net.conn.send({type:'state', state:deepClone(state), nextPieceId, playerAutoEnabled});
+  }
+
+  function localAction(action, payload={}){
+    if(isOnlineGuest()){
+      sendActionToHost(action, payload);
+      return;
+    }
+    runActionForOwner(action, payload, effectiveLocalOwner());
+    render();
+    sendStateToPeer();
+  }
+
+  function runActionForOwner(action, payload, owner){
+    if(action !== 'reset' && state.gameOver && action !== 'goldBar') return;
+    if(action === 'square'){ handleSquareClickForOwner(owner, payload.r, payload.c, true); return; }
+    if(action === 'buyLand'){ buyLand(owner,state.selected); return; }
+    if(action === 'buyGen'){ buyGeneratorChip(owner,state.selected); return; }
+    if(action === 'customGen'){ buildCustomGenerator(owner,state.selected); return; }
+    if(action === 'doubleMove'){ buyDoubleMove(owner); return; }
+    if(action === 'drawCard'){ drawCard(owner); return; }
+    if(action === 'goldDice'){ goldDice(owner); return; }
+    if(action === 'castle'){ buyCastlingRights(owner); return; }
+    if(action === 'teleportMode'){ beginTeleport(owner); return; }
+    if(action === 'resurrect'){ resurrect(owner); return; }
+    if(action === 'goldBar'){ buyGoldBar(owner); return; }
+    if(action === 'endTurn'){ endTurn(); return; }
+    if(action === 'promote'){ finishPromotionForOwner(owner, payload.type || null, !!payload.paid); return; }
+    if(action === 'reset'){ resetGame(); return; }
+  }
+
+  function copyInviteLink(){
+    if(!net.roomCode) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', net.roomCode);
+    const text = url.toString();
+    if(navigator.clipboard?.writeText){
+      navigator.clipboard.writeText(text).then(()=>setNetStatus('Invite link copied. Send it to your friend.')).catch(()=>setNetStatus('Copy failed. Room code is shown above.'));
+    } else {
+      setNetStatus('Clipboard not available. Copy the room code shown above.');
+    }
+  }
+
+  function loadRoomFromUrl(){
+    try{
+      const code = new URL(window.location.href).searchParams.get('room');
+      if(code) el('joinCodeInput').value = code;
+    }catch(e){}
+  }
+
+  function setupButtons(){
+    el('autoPlayerBtn').addEventListener('click',togglePlayerAI);
+    el('resetBtn').addEventListener('click',()=>localAction('reset'));
+    el('buyLandBtn').addEventListener('click',()=>localAction('buyLand'));
+    el('buyGenBtn').addEventListener('click',()=>localAction('buyGen'));
+    el('customGenBtn').addEventListener('click',()=>localAction('customGen'));
+    el('doubleMoveBtn').addEventListener('click',()=>localAction('doubleMove'));
+    el('drawCardBtn').addEventListener('click',()=>localAction('drawCard'));
+    el('goldDiceBtn').addEventListener('click',()=>localAction('goldDice'));
+    el('castleBtn').addEventListener('click',()=>localAction('castle'));
+    el('teleportBtn').addEventListener('click',()=>localAction('teleportMode'));
+    el('resurrectBtn').addEventListener('click',()=>localAction('resurrect'));
+    el('goldBarBtn').addEventListener('click',()=>localAction('goldBar'));
+    el('endTurnBtn').addEventListener('click',()=>localAction('endTurn'));
+    el('freePromoBtn').addEventListener('click',()=>localAction('promote', {type:null, paid:false}));
+    el('hostGameBtn').addEventListener('click',hostFriendGame);
+    el('joinGameBtn').addEventListener('click',joinFriendGame);
+    el('disconnectNetBtn').addEventListener('click',()=>cleanupNetwork(false));
+    el('copyLinkBtn').addEventListener('click',copyInviteLink);
+  }
+
+  setupButtons();
+  loadRoomFromUrl();
+  resetGame();
+})();
+
+</script>
+</body>
+</html>
