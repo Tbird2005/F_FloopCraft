@@ -124,6 +124,13 @@
     background:linear-gradient(180deg,#23455f,#172230);
   }
   .hint{color:var(--muted);font-size:12px;line-height:1.25}
+  .boardSideLabel{display:flex;justify-content:space-between;align-items:center;gap:8px;background:#0d1017;border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin:6px 0;font-weight:950;color:#d9e2f2}
+  .boardSideLabel .sideGold{font-size:18px;color:var(--gold);font-weight:1000}
+  .boardSideLabel .sideClock{font-family:ui-monospace,Consolas,monospace;font-size:18px;font-weight:1000}
+  .boardSideLabel.you{border-color:#70ff9a;box-shadow:0 0 0 2px rgba(112,255,154,.12)}
+  .boardSideLabel.dangerClock .sideClock{color:#ff7183;animation:endPulse 1s infinite}
+  .clock{font-family:ui-monospace,Consolas,monospace;font-size:17px;font-weight:1000;color:#d9e2f2;margin-top:4px}
+  .clock.low{color:#ff7183}
   .board{
     width:100%;
     aspect-ratio:1;
@@ -161,9 +168,9 @@
   .sq.placeSlot{outline:4px solid var(--gold);outline-offset:-4px;filter:brightness(1.15)}
   .sq.placeSlot::after{content:"+";position:absolute;z-index:8;width:42%;height:42%;border-radius:12px;background:rgba(0,0,0,.62);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:1000;border:2px solid rgba(255,255,255,.7)}
   .coord{position:absolute;bottom:3px;right:5px;font-size:10px;font-weight:900;opacity:.42;color:#111;z-index:9}
-  .piece{position:relative;z-index:7;text-shadow:0 2px 5px rgba(0,0,0,.42);line-height:1;transform:translateY(-2px)}
-  .piece.gold{color:#fff4a8;text-shadow:0 0 10px rgba(255,210,55,.95),0 3px 6px rgba(0,0,0,.65)}
-  .piece.diamond{color:#e9fbff;text-shadow:0 0 10px rgba(90,225,255,.95),0 3px 6px rgba(0,0,0,.65)}
+  .piece{position:relative;z-index:7;line-height:1;transform:translateY(-2px);text-shadow:0 2px 3px rgba(0,0,0,.82);-webkit-text-stroke:1px rgba(0,0,0,.68)}
+  .piece.gold{color:#ff9f24;text-shadow:0 2px 3px rgba(0,0,0,.86)}
+  .piece.diamond{color:#49cfe8;text-shadow:0 2px 3px rgba(0,0,0,.86)}
   .chip{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;background-size:cover;background-position:center;box-shadow:0 2px 8px rgba(0,0,0,.45), inset 0 0 10px rgba(255,255,255,.24)}
   .ownershipChip{width:88%;height:88%;z-index:1;border:2px solid rgba(255,255,255,.82)}
   .ownershipChip.gold{background:radial-gradient(circle at 35% 25%,#fff7a6 0,#ffd342 38%,#ac7808 100%)}
@@ -181,6 +188,8 @@
   .scoreName{display:flex;align-items:center;gap:8px;font-weight:900;margin-bottom:8px}
   .dot{width:12px;height:12px;border-radius:50%;display:inline-block}.dot.gold{background:var(--goldSide)}.dot.diamond{background:var(--diamond)}.dot.player{background:var(--player)}.dot.ai{background:var(--ai)}
   .gold{font-size:22px;color:var(--gold);font-weight:1000}.smallStats{font-size:11px;color:var(--muted);line-height:1.4;margin-top:5px}
+  /* Keep actual chess pieces identical size. The generic .gold stat class above used to shrink Gold pieces. */
+  .piece.gold,.piece.diamond{font-size:inherit;font-family:"Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",serif;font-weight:900}
   .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .onlineGrid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px}
   .onlineGrid button{min-height:38px;padding:8px}
@@ -204,6 +213,12 @@
   button.warn{background:linear-gradient(180deg,#694526,#3d291a);border-color:#7d5a30}
   button.danger{background:linear-gradient(180deg,#703144,#41212b);border-color:#83364f}
   button.full{grid-column:1/-1}
+  .bookLink{display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;border:1px solid #4c6790;background:linear-gradient(180deg,#263d5c,#18283f);color:#e7f3ff;border-radius:12px;padding:10px;font-weight:950;margin-top:8px}
+  .bookLink:hover{filter:brightness(1.12);transform:translateY(-1px)}
+  #endTurnBtn{font-size:18px;min-height:58px;border-width:3px;text-transform:uppercase;letter-spacing:.9px;background:linear-gradient(180deg,#3e693f,#1d4a27);border-color:#7af28a;box-shadow:0 0 0 2px rgba(122,242,138,.12),0 12px 30px rgba(0,0,0,.33)}
+  #endTurnBtn:not(:disabled){animation:endPulse 1.15s infinite}
+  #endTurnBtn:disabled{animation:none}
+  @keyframes endPulse{0%,100%{box-shadow:0 0 0 2px rgba(122,242,138,.16),0 12px 30px rgba(0,0,0,.33)}50%{box-shadow:0 0 0 5px rgba(122,242,138,.36),0 0 22px rgba(122,242,138,.48),0 12px 30px rgba(0,0,0,.33)}}
   .log{height:clamp(120px,22vh,190px);overflow:auto;background:#0d1017;border:1px solid var(--line);border-radius:12px;padding:9px;font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.35;color:#d9e2f2}
   .log div{margin-bottom:5px;border-bottom:1px solid rgba(255,255,255,.05);padding-bottom:4px}.log b{color:var(--gold)}
   .rules{font-size:12px;color:var(--muted);line-height:1.35}.rules strong{color:var(--text)}
@@ -231,17 +246,19 @@
     <div class="pill">Goal: <strong>Gold Bar or Bankruptcy</strong></div>
     <div class="pill">Sides: <strong>Gold vs Diamond</strong></div>
     <div class="pill">History: <strong>Unlimited</strong></div>
+    <a class="bookLink" style="margin-top:0;padding:6px 10px;font-size:12px" href="https://file.garden/ZtDesvPK_QLwMx9K/HTML/CapitalismChessRulesfixv3.pdf" target="_blank" rel="noopener">📖 Rulebook PDF</a>
   </div>
 </header>
 <main>
   <aside class="leftRail">
     <section class="panel">
-      <div class="rules"><strong>Online Friend Game:</strong> Host makes a room. Friend joins with the room code. Host browser is authoritative so both boards stay synced.</div>
+      <div class="rules"><strong>Online Game:</strong> Host makes a room. The other player joins with the room code. Host browser is authoritative so both boards stay synced.</div>
+      <a class="bookLink" href="https://file.garden/ZtDesvPK_QLwMx9K/HTML/CapitalismChessRulesfixv3.pdf" target="_blank" rel="noopener">📖 Open Rulebook PDF</a>
       <div class="onlineGrid">
-        <button id="hostGameBtn" class="primary">Host Friend Game</button>
+        <button id="hostGameBtn" class="primary">Host Online Game</button>
         <button id="disconnectNetBtn" class="danger">Disconnect</button>
         <input id="joinCodeInput" class="onlineInput" placeholder="Room code" />
-        <button id="joinGameBtn" class="warn">Join Friend Game</button>
+        <button id="joinGameBtn" class="warn">Join Online Game</button>
         <button id="copyLinkBtn" class="full">Copy Room Code</button>
       </div>
       <div class="roomCodeBox" id="roomCodeBox">Room code: none</div>
@@ -276,7 +293,9 @@
       </div>
     </div>
     <div class="turnNotice watchTurn" id="turnNotice">TURN STATUS</div>
+    <div class="boardSideLabel" id="topSideInfo">Opponent side</div>
     <div class="board" id="board"></div>
+    <div class="boardSideLabel you" id="bottomSideInfo">Your side</div>
   </section>
 
   <aside class="rightRail">
@@ -292,7 +311,7 @@
         <button id="teleportBtn">King Teleport</button>
         <button id="resurrectBtn">Resurrect</button>
         <button id="goldBarBtn" class="primary">Buy Gold Bar</button>
-        <button id="endTurnBtn" class="full">End Turn / Pass</button>
+        <button id="endTurnBtn" class="full">✅ END TURN / PASS</button>
       </div>
     </section>
 
@@ -338,6 +357,8 @@
     ai: filledChessSymbols
   };
   const files = ['a','b','c','d','e','f','g','h'];
+  const START_CLOCK_MS = 30 * 60 * 1000;
+  let clockInterval = null;
 
   const CARD_BACK = 'https://steamusercontent-a.akamaihd.net/ugc/2057617493352657144/EB19779C122B04B5E04B0A6F7BD039F5ACD9FF07/';
   const CASTLE_CARD = 'https://steamusercontent-a.akamaihd.net/ugc/2057617493352666266/33AB9A985828E63017F5BB2EEF5BB1A351DAC1E4/';
@@ -398,6 +419,7 @@
       customGen: matrix(null),
       turn: firstTurn,
       turnNumber: 1,
+      clockLastUpdate: Date.now(),
       selected: null,
       legalMoves: [],
       mode: null,
@@ -423,7 +445,8 @@
       doubleMovesRemaining:0,
       castlingRightsTurn:null,
       castlingUsed:false,
-      freeDouble:false
+      freeDouble:false,
+      timeMs:START_CLOCK_MS
     };
   }
 
@@ -495,10 +518,16 @@
   function sideLabel(owner){return sideOf(owner) === 'gold' ? 'Gold' : 'Diamond';}
   function ownerBySide(side){return state.sideByOwner.player === side ? PLAYER : AI;}
   function ownerName(owner){
-    if(net.mode === 'online') return owner === PLAYER ? 'Host' : 'Friend';
-    return owner === PLAYER ? 'Player' : 'AI';
+    if(net.mode === 'online') return owner === net.localOwner ? 'You' : 'Opponent';
+    return owner === PLAYER ? (state?.autoPlayer ? 'Player AI' : 'Player') : 'AI';
   }
-  function label(owner){return `${ownerName(owner)} ${sideLabel(owner)}`;}
+  // Logs use the neutral side name so synced online logs do not say Host or Friend on the wrong screen.
+  function label(owner){return sideLabel(owner);}
+  function displayOwnerLabel(owner){
+    const side = sideLabel(owner);
+    if(net.mode === 'online') return owner === net.localOwner ? `You (${side})` : `Opponent (${side})`;
+    return `${ownerName(owner)} (${side})`;
+  }
 
   function endGame(winner, reason){
     if(state.gameOver) return;
@@ -512,13 +541,14 @@
     if(autoTimer){ clearTimeout(autoTimer); autoTimer = null; }
     state = createInitialState();
     hideCardReveal();
-    log(`New game started. Player is ${sideLabel(PLAYER)}. AI is ${sideLabel(AI)}. ${label(ownerBySide('gold'))} moves first. Both sides start with 20 gold.`);
+    log(`New game started. ${sideLabel(PLAYER)} vs ${sideLabel(AI)}. ${label(ownerBySide('gold'))} moves first. Both sides start with 20 gold and 30 minutes.`);
     render();
     scheduleAutoTurn(450);
     sendStateToPeer();
   }
 
   function startTurn(owner){
+    state.clockLastUpdate = Date.now();
     const ps = state.players[owner];
     ps.landPurchases = 0;
     ps.usedTurnAction = false;
@@ -571,6 +601,8 @@
   }
 
   function endTurn(){
+    if(state.gameOver) return;
+    settleClock();
     if(state.gameOver) return;
     if(state.pendingPromotion || state.pendingCardPlacement) return;
     const current = state.turn;
@@ -1404,6 +1436,7 @@
     renderLog();
     renderPromo();
     renderTurnNotice();
+    renderBoardSideInfo();
     el('turnBanner').textContent = state.gameOver ? `${label(state.winner)} wins` : `${label(state.turn)}${shouldAutoAct(state.turn) ? ' AI' : ''} turn • Half-turn ${state.turnNumber}`;
     el('hintText').textContent = state.pendingCardPlacement ? 'Card placement active. Click an open slot on your back rank.' : (state.mode === 'teleport' ? 'Teleport mode active. Click an empty square.' : (shouldAutoAct(state.turn) ? `${label(state.turn)} AI is thinking through economy and tactics.` : 'Click your piece. Buy land before passing. Other purchases use your turn action.'));
     el('autoPlayerBtn').textContent = `Player AI: ${state.autoPlayer ? 'ON' : 'OFF'}`;
@@ -1418,7 +1451,7 @@
     const local = effectiveLocalOwner();
     const localSide = sideLabel(local);
     const turnSide = sideLabel(state.turn);
-    const viewText = net.mode === 'online' ? `You are ${label(local)}` : `You are ${label(local)}`;
+    const viewText = `You are ${sideLabel(local)}`;
     if(state.gameOver){
       const won = state.winner === local;
       n.className = 'turnNotice ' + (won ? 'yourTurn' : 'notYourTurn');
@@ -1440,8 +1473,9 @@
   }
 
   function renderScores(){
-    el('playerScore').innerHTML = scoreHTML(PLAYER);
-    el('aiScore').innerHTML = scoreHTML(AI);
+    const local = effectiveLocalOwner();
+    el('playerScore').innerHTML = scoreHTML(local);
+    el('aiScore').innerHTML = scoreHTML(other(local));
   }
 
   function scoreHTML(owner){
@@ -1451,9 +1485,91 @@
     const chips = countGrid(state.genChip, owner);
     const customs = countGrid(state.customGen, owner);
     const kings = countKings(owner);
-    return `<div class="scoreName"><span class="dot ${sideOf(owner)}"></span>${label(owner)}</div>
+    const timeLeft = getRemainingTime(owner);
+    return `<div class="scoreName"><span class="dot ${sideOf(owner)}"></span>${displayOwnerLabel(owner)}</div>
       <div class="gold">${ps.gold}g</div>
+      <div class="clock ${timeLeft <= 60000 ? 'low' : ''}">${formatTime(timeLeft)}</div>
       <div class="smallStats">Pieces: ${pieces}<br>Kings: ${kings}<br>Land: ${lands} / Gen chips: ${chips}<br>XX gens: ${customs}<br>Land buys left: ${Math.max(0,2-ps.landPurchases)}</div>`;
+  }
+
+  function formatTime(ms){
+    ms = Math.max(0, Math.ceil(ms / 1000) * 1000);
+    const total = Math.floor(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function getRemainingTime(owner){
+    if(!state?.players?.[owner]) return START_CLOCK_MS;
+    let ms = state.players[owner].timeMs ?? START_CLOCK_MS;
+    if(!state.gameOver && state.turn === owner && !shouldAutoAct(owner)){
+      ms -= Date.now() - (state.clockLastUpdate || Date.now());
+    }
+    return Math.max(0, ms);
+  }
+
+  function settleClock(){
+    if(!state || state.gameOver) return;
+    const owner = state.turn;
+    if(!state.players?.[owner]) return;
+    const now = Date.now();
+    const last = state.clockLastUpdate || now;
+    if(!shouldAutoAct(owner)){
+      state.players[owner].timeMs = Math.max(0, (state.players[owner].timeMs ?? START_CLOCK_MS) - (now - last));
+      if(state.players[owner].timeMs <= 0){
+        state.clockLastUpdate = now;
+        endGame(other(owner), `${label(owner)} lost on time.`);
+        return;
+      }
+    }
+    state.clockLastUpdate = now;
+  }
+
+  function tickClock(){
+    if(!state) return;
+    if(!state.gameOver && !isOnlineGuest()){
+      const owner = state.turn;
+      if(!shouldAutoAct(owner) && getRemainingTime(owner) <= 0){
+        settleClock();
+        render();
+        sendStateToPeer();
+        return;
+      }
+    }
+    updateClockDisplaysOnly();
+  }
+
+  function updateClockDisplaysOnly(){
+    const els = document.querySelectorAll('[data-clock-owner]');
+    els.forEach(node => {
+      const owner = node.getAttribute('data-clock-owner');
+      node.textContent = formatTime(getRemainingTime(owner));
+      node.classList.toggle('low', getRemainingTime(owner) <= 60000);
+    });
+    const top = el('topSideInfo'), bottom = el('bottomSideInfo');
+    if(top && top.dataset.owner) top.classList.toggle('dangerClock', getRemainingTime(top.dataset.owner) <= 60000);
+    if(bottom && bottom.dataset.owner) bottom.classList.toggle('dangerClock', getRemainingTime(bottom.dataset.owner) <= 60000);
+  }
+
+  function renderBoardSideInfo(){
+    const local = effectiveLocalOwner();
+    const bottomOwner = local;
+    const topOwner = other(local);
+    setBoardSideInfo(el('topSideInfo'), topOwner, false);
+    setBoardSideInfo(el('bottomSideInfo'), bottomOwner, true);
+  }
+
+  function setBoardSideInfo(node, owner, isBottom){
+    if(!node) return;
+    const ps = state.players[owner];
+    const relation = net.mode === 'online'
+      ? (owner === net.localOwner ? 'YOUR SIDE' : 'OPPONENT')
+      : (owner === PLAYER ? 'YOUR SIDE' : 'OPPONENT');
+    const timeLeft = getRemainingTime(owner);
+    node.dataset.owner = owner;
+    node.className = `boardSideLabel ${isBottom ? 'you' : ''} ${timeLeft <= 60000 ? 'dangerClock' : ''}`;
+    node.innerHTML = `<span><span class="dot ${sideOf(owner)}"></span> ${relation} • ${sideLabel(owner)}</span><span><span class="sideGold">${ps.gold}g</span> • <span class="sideClock" data-clock-owner="${owner}">${formatTime(timeLeft)}</span></span>`;
   }
 
   function countGrid(grid, owner){
@@ -1557,7 +1673,9 @@
     el('teleportBtn').disabled = !(canAct && hasKing(owner) && voluntaryAffordable(owner,10));
     el('resurrectBtn').disabled = !(canAct && canResurrect(owner));
     el('goldBarBtn').disabled = !(localHumanTurn && state.players[owner].gold >= 100);
-    el('endTurnBtn').disabled = !localHumanTurn;
+    const endBtn = el('endTurnBtn');
+    endBtn.disabled = !localHumanTurn;
+    endBtn.textContent = localHumanTurn ? '✅ END TURN / PASS' : 'END TURN / PASS';
     el('autoPlayerBtn').disabled = net.mode === 'online';
     const resetBtn = el('resetBtn');
     resetBtn.disabled = isOnlineGuest() || net.mode === 'joining';
@@ -1704,7 +1822,7 @@
     net.peer = new Peer();
     net.peer.on('open', id => {
       net.roomCode = id;
-      net.status = 'Room ready. Send this room code or invite link to your friend.';
+      net.status = 'Room ready. Send this room code to the other player.';
       resetGame();
       renderNetwork();
     });
@@ -1760,8 +1878,8 @@
       }
       if(net.role === 'guest') net.mode = 'online';
       net.connected = true;
-      net.status = net.role === 'host' ? 'Friend connected. Host controls one side. Friend controls the other.' : 'Connected. Waiting for host board state.';
-      if(net.role === 'guest') conn.send({type:'hello', name:'friend'});
+      net.status = net.role === 'host' ? 'Opponent connected. Each player controls one side.' : 'Connected. Waiting for host board state.';
+      if(net.role === 'guest') conn.send({type:'hello', name:'opponent'});
       if(net.role === 'host') sendStateToPeer();
       render();
     });
@@ -1786,7 +1904,7 @@
   function handleNetMessage(msg){
     if(!msg || typeof msg !== 'object') return;
     if(msg.type === 'hello'){
-      log('Friend joined the room.');
+      log('Opponent joined the room.');
       render();
       sendStateToPeer();
       return;
@@ -1797,6 +1915,7 @@
     }
     if(msg.type === 'state' && net.role === 'guest'){
       state = msg.state;
+      state.clockLastUpdate = Date.now();
       nextPieceId = msg.nextPieceId || nextPieceId;
       playerAutoEnabled = !!msg.playerAutoEnabled;
       render();
@@ -1816,7 +1935,12 @@
 
   function sendStateToPeer(){
     if(!isOnlineHost() || !net.conn || !net.conn.open) return;
-    net.conn.send({type:'state', state:deepClone(state), nextPieceId, playerAutoEnabled});
+    const outbound = deepClone(state);
+    if(!outbound.gameOver && outbound.players?.[outbound.turn]){
+      outbound.players[outbound.turn].timeMs = getRemainingTime(outbound.turn);
+      outbound.clockLastUpdate = Date.now();
+    }
+    net.conn.send({type:'state', state:outbound, nextPieceId, playerAutoEnabled});
   }
 
   function localAction(action, payload={}){
@@ -1834,7 +1958,8 @@
   }
 
   function runActionForOwner(action, payload, owner){
-    if(action !== 'reset' && state.gameOver && action !== 'goldBar') return;
+    if(action !== 'reset') settleClock();
+    if(state.gameOver && action !== 'goldBar') return;
     if(action === 'square'){ handleSquareClickForOwner(owner, payload.r, payload.c, true); return; }
     if(action === 'buyLand'){ buyLand(owner,state.selected); return; }
     if(action === 'buyGen'){ buyGeneratorChip(owner,state.selected); return; }
@@ -1891,6 +2016,8 @@
 
   setupButtons();
   loadRoomFromUrl();
+  if(clockInterval) clearInterval(clockInterval);
+  clockInterval = setInterval(tickClock, 1000);
   resetGame();
 })();
 
