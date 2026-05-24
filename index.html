@@ -51,16 +51,42 @@
   .pill strong{color:var(--text)}
   main{
     display:grid;
-    grid-template-columns:minmax(420px,720px) minmax(310px,370px);
+    grid-template-columns:minmax(520px,830px) minmax(310px,370px);
     gap:12px;
     padding:6px 14px 10px;
     align-items:start;
     justify-content:center;
     width:100%;
-    max-width:1360px;
+    max-width:1460px;
     height:calc(100vh - 50px);
     overflow:hidden;
     margin:0 auto;
+  }
+  .boardGameArea{
+    display:grid;
+    grid-template-columns:96px auto;
+    gap:10px;
+    align-items:center;
+    height:100%;
+    min-width:0;
+  }
+  .endTurnRail{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    height:100%;
+    min-height:420px;
+  }
+  .endTurnRail #endTurnBtn{
+    width:86px;
+    min-height:220px;
+    padding:12px 8px;
+    writing-mode:vertical-rl;
+    transform:rotate(180deg);
+    font-size:18px;
+    line-height:1.1;
+    position:sticky;
+    top:12px;
   }
   .rightRail{
     display:flex;
@@ -82,8 +108,10 @@
     box-shadow:0 20px 60px rgba(0,0,0,.35);
   }
   @media(max-width:1250px){
-    main{grid-template-columns:minmax(390px,1fr) minmax(270px,330px);gap:8px;padding:5px 8px 8px}
-    .boardWrap{width:min(55vw, calc(100vh - 250px), 640px);min-width:390px;padding:7px}
+    main{grid-template-columns:minmax(500px,1fr) minmax(270px,330px);gap:8px;padding:5px 8px 8px}
+    .boardGameArea{grid-template-columns:82px auto;gap:8px}
+    .endTurnRail #endTurnBtn{width:74px;min-height:190px;font-size:16px}
+    .boardWrap{width:min(50vw, calc(100vh - 250px), 640px);min-width:390px;padding:7px}
     .panel{padding:9px}
     button{font-size:12px;padding:7px 7px;min-height:34px}
     .subtitle{max-width:560px}
@@ -92,6 +120,9 @@
     body{height:auto;min-height:100vh;overflow:auto}
     header{padding:10px}
     main{display:flex;flex-direction:column;align-items:center;height:auto;overflow:visible;padding:8px;gap:10px}
+    .boardGameArea{display:flex;flex-direction:column;align-items:center;width:100%;gap:8px}
+    .endTurnRail{width:min(96vw,760px);height:auto;min-height:0;order:2}
+    .endTurnRail #endTurnBtn{width:100%;min-height:54px;writing-mode:horizontal-tb;transform:none;position:static;font-size:16px}
     .boardWrap,.rightRail{width:min(96vw,760px);min-width:0;max-height:none;overflow:visible}
     .board{max-width:92vw}
   }
@@ -293,7 +324,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v34</div>
+    <div class="versionBadge">Version v35</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -333,7 +364,12 @@
   </div>
 </header>
 <main>
-  <section class="boardWrap">
+  <div class="boardGameArea">
+    <aside class="endTurnRail">
+      <button id="endTurnBtn" class="full">✅ END TURN / PASS</button>
+    </aside>
+
+    <section class="boardWrap">
     <div class="boardTop">
       <div>
         <div class="turnBanner" id="turnBanner">Player turn</div>
@@ -345,7 +381,8 @@
     <div class="boardSideLabel" id="topSideInfo">Opponent side</div>
     <div class="board" id="board"></div>
     <div class="boardSideLabel you" id="bottomSideInfo">Your side</div>
-  </section>
+    </section>
+  </div>
 
   <aside class="rightRail">
     <section class="panel">
@@ -400,7 +437,6 @@
         <button id="teleportBtn">King Teleport (10g)</button>
         <button id="resurrectBtn">Resurrect (8g)</button>
         <button id="goldBarBtn" class="primary">Buy Gold Bar (100g)</button>
-        <button id="endTurnBtn" class="full">✅ END TURN / PASS</button>
       </div>
     </section>
 
@@ -476,7 +512,8 @@
     move:'https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/move-self.mp3',
     notify:'https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/notify.mp3',
     capture:'https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/capture.mp3',
-    purchase:'https://file.garden/ZtDesvPK_QLwMx9K/HTML/txt/cash-register-kaching-sound-effect-hd_Ci5WPtC.mp3'
+    purchase:'https://file.garden/ZtDesvPK_QLwMx9K/HTML/txt/cash-register-kaching-sound-effect-hd_Ci5WPtC.mp3',
+    error:'https://file.garden/ZtDesvPK_QLwMx9K/HTML/txt/computer-error-sound_JGfLFrG.mp3'
   };
   const defaultGenerators = new Set(['3,3','3,4','4,3','4,4']);
   let state;
@@ -516,7 +553,7 @@
     if(!url) return;
     try{
       const a = new Audio(url);
-      a.volume = kind === 'purchase' ? 0.48 : 0.58;
+      a.volume = kind === 'purchase' ? 0.48 : (kind === 'error' ? 0.62 : 0.58);
       a.play().catch(()=>{});
     }catch(e){}
     if(broadcast && isOnlineHost() && net.conn && net.conn.open){
@@ -698,6 +735,7 @@
     resultOverlayDismissed = false;
     state.status = `${label(winner)} wins. ${reason}`;
     log(`<b>${label(winner)} wins!</b> ${reason}`);
+    playSfx('error');
   }
 
   function resetGame(){
@@ -3126,7 +3164,7 @@
     el('goldBarBtn').disabled = !(localHumanTurn && state.players[owner].gold >= 100);
     const endBtn = el('endTurnBtn');
     endBtn.disabled = !localHumanTurn;
-    endBtn.textContent = waitingForOpponent ? 'WAITING FOR OPPONENT' : (localHumanTurn ? '✅ END TURN / PASS' : 'END TURN / PASS');
+    endBtn.textContent = waitingForOpponent ? 'WAITING' : (localHumanTurn ? '✅ END TURN' : 'END TURN');
     el('autoPlayerBtn').disabled = net.mode === 'online';
     const resetBtn = el('resetBtn');
     resetBtn.disabled = false;
@@ -3307,6 +3345,7 @@
   }
 
   function notifyPeerDisconnected(message){
+    playSfx('error', false);
     net.connected = false;
     net.status = message;
     stopNetHeartbeat();
