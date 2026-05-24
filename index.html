@@ -29,78 +29,80 @@
   *{box-sizing:border-box}
   body{
     margin:0;
-    min-height:100vh;
+    height:100vh;
+    overflow:hidden;
     font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;
     background:radial-gradient(circle at top,#1e2635 0,#101319 55%,#080a0f 100%);
     color:var(--text);
   }
   header{
-    padding:10px 14px 7px;
+    padding:6px 14px 5px;
     display:flex;
     justify-content:space-between;
     align-items:center;
-    gap:10px;
+    gap:8px;
     flex-wrap:wrap;
+    min-height:48px;
   }
-  h1{margin:0;font-size:22px;letter-spacing:.3px}
-  .subtitle{color:var(--muted);margin-top:2px;font-size:12px;max-width:680px;line-height:1.25}
+  h1{margin:0;font-size:20px;letter-spacing:.3px}
+  .subtitle{color:var(--muted);margin-top:1px;font-size:11px;max-width:680px;line-height:1.15}
   .pillrow{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
   .pill{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:6px 9px;color:var(--muted);font-weight:700;font-size:11px}
   .pill strong{color:var(--text)}
   main{
     display:grid;
-    grid-template-columns:minmax(250px,320px) auto minmax(250px,320px);
-    grid-template-areas:"left board right";
+    grid-template-columns:minmax(420px,720px) minmax(310px,370px);
     gap:12px;
-    padding:6px 14px 12px;
+    padding:6px 14px 10px;
     align-items:start;
     justify-content:center;
     width:100%;
+    max-width:1360px;
+    height:calc(100vh - 50px);
+    overflow:hidden;
+    margin:0 auto;
   }
-  .leftRail,.rightRail{
+  .rightRail{
     display:flex;
     flex-direction:column;
-    gap:10px;
-    max-height:calc(100vh - 72px);
+    gap:8px;
+    max-height:100%;
     overflow:auto;
     padding-right:2px;
   }
-  .leftRail{grid-area:left}
-  .rightRail{grid-area:right}
-  .leftRail::-webkit-scrollbar,.rightRail::-webkit-scrollbar,.log::-webkit-scrollbar{width:8px}
-  .leftRail::-webkit-scrollbar-thumb,.rightRail::-webkit-scrollbar-thumb,.log::-webkit-scrollbar-thumb{background:#333c50;border-radius:999px}
+  .rightRail::-webkit-scrollbar,.log::-webkit-scrollbar{width:8px}
+  .rightRail::-webkit-scrollbar-thumb,.log::-webkit-scrollbar-thumb{background:#333c50;border-radius:999px}
   .boardWrap{
-    grid-area:board;
-    width:min(56vw, calc(100vh - 220px), 720px);
-    min-width:520px;
-    background:rgba(23,27,36,.9);
+    width:min(57vw, calc(100vh - 245px), 700px);
+    min-width:420px;
+    background:rgba(23,27,36,.92);
     border:1px solid var(--line);
-    border-radius:18px;
-    padding:10px;
+    border-radius:16px;
+    padding:8px;
     box-shadow:0 20px 60px rgba(0,0,0,.35);
-    justify-self:center;
   }
   @media(max-width:1250px){
-    main{grid-template-columns:minmax(210px,250px) auto minmax(210px,250px);gap:8px;padding:5px 8px 10px}
-    .boardWrap{width:min(50vw, calc(100vh - 210px), 620px);min-width:400px;padding:8px}
-    .panel{padding:10px}
-    button{font-size:12px;padding:8px 7px;min-height:36px}
+    main{grid-template-columns:minmax(390px,1fr) minmax(270px,330px);gap:8px;padding:5px 8px 8px}
+    .boardWrap{width:min(55vw, calc(100vh - 250px), 640px);min-width:390px;padding:7px}
+    .panel{padding:9px}
+    button{font-size:12px;padding:7px 7px;min-height:34px}
     .subtitle{max-width:560px}
   }
-  @media(max-width:900px){
+  @media(max-width:960px){
+    body{height:auto;min-height:100vh;overflow:auto}
     header{padding:10px}
-    main{display:flex;flex-direction:column;align-items:center;padding:8px;gap:10px}
-    .boardWrap,.leftRail,.rightRail{width:min(96vw,720px);min-width:0;max-height:none;overflow:visible}
+    main{display:flex;flex-direction:column;align-items:center;height:auto;overflow:visible;padding:8px;gap:10px}
+    .boardWrap,.rightRail{width:min(96vw,760px);min-width:0;max-height:none;overflow:visible}
     .board{max-width:92vw}
   }
-  .boardTop{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap}
-  .turnBanner{font-weight:900;font-size:16px}
+  .boardTop{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:6px;flex-wrap:wrap}
+  .turnBanner{font-weight:900;font-size:14px}
   .turnNotice{
-    margin:6px 0 8px;
-    border-radius:14px;
-    padding:8px 10px;
+    margin:4px 0 5px;
+    border-radius:12px;
+    padding:5px 8px;
     text-align:center;
-    font-size:clamp(16px,2.4vw,24px);
+    font-size:clamp(14px,1.8vw,19px);
     font-weight:1000;
     letter-spacing:.8px;
     border:2px solid var(--line);
@@ -124,9 +126,9 @@
     background:linear-gradient(180deg,#23455f,#172230);
   }
   .hint{color:var(--muted);font-size:12px;line-height:1.25}
-  .boardSideLabel{display:flex;justify-content:space-between;align-items:center;gap:8px;background:#0d1017;border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin:6px 0;font-weight:950;color:#d9e2f2}
-  .boardSideLabel .sideGold{font-size:18px;color:var(--gold);font-weight:1000}
-  .boardSideLabel .sideClock{font-family:ui-monospace,Consolas,monospace;font-size:18px;font-weight:1000}
+  .boardSideLabel{display:flex;justify-content:space-between;align-items:center;gap:8px;background:#0d1017;border:1px solid var(--line);border-radius:10px;padding:5px 8px;margin:4px 0;font-weight:950;color:#d9e2f2;font-size:12px}
+  .boardSideLabel .sideGold{font-size:15px;color:var(--gold);font-weight:1000}
+  .boardSideLabel .sideClock{font-family:ui-monospace,Consolas,monospace;font-size:15px;font-weight:1000}
   .boardSideLabel.you{border-color:#70ff9a;box-shadow:0 0 0 2px rgba(112,255,154,.12)}
   .boardSideLabel.dangerClock .sideClock{color:#ff7183;animation:endPulse 1s infinite}
   .clock{font-family:ui-monospace,Consolas,monospace;font-size:17px;font-weight:1000;color:#d9e2f2;margin-top:4px}
@@ -194,6 +196,10 @@
   /* Keep actual chess pieces identical size. The generic .gold stat class above used to shrink Gold pieces. */
   .piece.gold,.piece.diamond{font-size:inherit;font-family:"Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",serif;font-weight:900}
   .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .panelTitle{font-size:12px;font-weight:1000;letter-spacing:.9px;text-transform:uppercase;color:#cfd8e8;margin-bottom:10px}
+  .sidebarMeta{font-size:12px;color:var(--muted);line-height:1.35}
+  .rightRail .scoreGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .rightRail .scoreCard{min-height:100%}
   .onlineGrid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px}
   .onlineGrid button{min-height:38px;padding:8px}
   .onlineInput{width:100%;border:1px solid var(--line);background:#0d1017;color:var(--text);border-radius:12px;padding:10px;font-weight:800;outline:none}
@@ -261,6 +267,7 @@
     text-align:center;
   }
   .menuTitle{font-size:clamp(34px,7vw,56px);font-weight:1000;margin:0;letter-spacing:.6px;color:#f4f7ff;text-shadow:0 4px 20px rgba(0,0,0,.55)}
+  .versionBadge{display:inline-flex;align-items:center;justify-content:center;margin:10px auto 0;padding:6px 12px;border-radius:999px;background:#0b1018;border:1px solid #4b5a78;color:#d9e7ff;font-size:12px;font-weight:1000;letter-spacing:.8px;text-transform:uppercase}
   .menuSub{color:var(--muted);font-weight:750;line-height:1.4;margin:10px auto 20px;max-width:460px}
   .menuActions{display:grid;grid-template-columns:1fr;gap:12px;margin-top:16px}
   .menuActions button{min-height:60px;font-size:20px;border-radius:16px;border-width:2px}
@@ -270,6 +277,13 @@
   .menuInput:focus{border-color:#75e8ff;box-shadow:0 0 0 3px rgba(117,232,255,.16)}
   .menuSmall{font-size:12px;color:var(--muted);line-height:1.35;margin-top:12px}
   .netToast{position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:140;max-width:min(94vw,640px);background:linear-gradient(180deg,#7a3041,#421b25);border:2px solid #ff7d8f;color:#fff;border-radius:16px;padding:14px 18px;font-weight:950;box-shadow:0 14px 45px rgba(0,0,0,.5);text-align:center}
+  .gameResultOverlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:22px;background:rgba(0,0,0,.56);z-index:145}
+  .gameResultCard{width:min(92vw,420px);background:rgba(18,22,31,.98);border:1px solid #47526b;border-radius:22px;padding:22px;box-shadow:0 28px 90px rgba(0,0,0,.6);text-align:center}
+  .gameResultBadge{display:inline-flex;align-items:center;justify-content:center;padding:7px 12px;border-radius:999px;background:#212b3c;border:1px solid #42506b;color:#d9e5ff;font-size:11px;font-weight:1000;letter-spacing:.7px;text-transform:uppercase}
+  .gameResultCard h2{margin:14px 0 8px;font-size:30px;line-height:1.05}
+  .gameResultText{color:var(--muted);font-size:14px;line-height:1.45;margin-bottom:16px}
+  .gameResultActions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+  .gameResultActions button{min-width:150px}
 
   .hidden{display:none!important}
 </style>
@@ -279,6 +293,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
+    <div class="versionBadge">Version v34</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -318,47 +333,13 @@
   </div>
 </header>
 <main>
-  <aside class="leftRail">
-    <section class="panel">
-      <div class="rules"><strong>Online Game:</strong> Host makes a room. The other player joins with the room code. Host browser is authoritative so both boards stay synced.</div>
-      <a class="bookLink" href="https://file.garden/ZtDesvPK_QLwMx9K/HTML/CapitalismChessRulesfixv3.pdf" target="_blank" rel="noopener">📖 Open Rulebook PDF</a>
-      <div class="onlineGrid">
-        <button id="hostGameBtn" class="primary">Host Online Game</button>
-        <button id="disconnectNetBtn" class="danger">Disconnect</button>
-        <input id="joinCodeInput" class="onlineInput" placeholder="4 character code" maxlength="4" autocomplete="off" spellcheck="false" />
-        <button id="joinGameBtn" class="warn">Join Online Game</button>
-        <button id="copyLinkBtn" class="full">Copy Room Code</button>
-      </div>
-      <div class="roomCodeBox" id="roomCodeBox">Room code: none</div>
-      <div class="netStatus" id="netStatus">Offline local mode. Use this as normal single player or AI vs AI.</div>
-    </section>
-
-    <section class="panel scoreGrid">
-      <div class="scoreCard" id="playerScore"></div>
-      <div class="scoreCard" id="aiScore"></div>
-    </section>
-
-    <section class="panel">
-      <div class="banner" id="statusBanner">Select a piece or use an action.</div>
-    </section>
-
-    <section class="panel">
-      <div class="rules">
-        <strong>Chips:</strong> biggest to smallest: generator ownership, land tile, original generator coin, then green XX generator. Hover a tile to see every chip on it.
-      </div>
-    </section>
-  </aside>
-
   <section class="boardWrap">
     <div class="boardTop">
       <div>
         <div class="turnBanner" id="turnBanner">Player turn</div>
         <div class="hint" id="hintText">Click one of your pieces. Legal moves highlight. Buy land before or after moving.</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="warn" id="autoPlayerBtn">Player AI: OFF</button>
-        <button class="danger" id="resetBtn">Reset Game</button>
-      </div>
+
     </div>
     <div class="turnNotice watchTurn" id="turnNotice">TURN STATUS</div>
     <div class="boardSideLabel" id="topSideInfo">Opponent side</div>
@@ -368,6 +349,44 @@
 
   <aside class="rightRail">
     <section class="panel">
+      <div class="panelTitle">Players</div>
+      <div class="scoreGrid">
+        <div class="scoreCard" id="playerScore"></div>
+        <div class="scoreCard" id="aiScore"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panelTitle">Game Controls</div>
+      <div class="controls">
+        <button class="warn" id="autoPlayerBtn">Player AI: OFF</button>
+        <button class="danger" id="resetBtn">Back to Main Menu</button>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="inGameOnlinePanel">
+      <div class="panelTitle">Multiplayer Room</div>
+      <div class="roomCodeBox" id="roomCodeBox">Room code: none</div>
+      <button id="copyLinkBtn" class="full" style="margin-top:8px">Copy Room Code</button>
+      <div class="netStatus" id="netStatus">Offline local mode. Use this as normal single player or AI vs AI.</div>
+      <div class="hidden">
+        <button id="hostGameBtn" class="primary">Host Online Game</button>
+        <button id="disconnectNetBtn" class="danger">Disconnect</button>
+        <input id="joinCodeInput" class="onlineInput" placeholder="4 character code" maxlength="4" autocomplete="off" spellcheck="false" />
+        <button id="joinGameBtn" class="warn">Join Online Game</button>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="gameStatusPanel">
+      <div class="panelTitle">Game Status</div>
+      <div class="banner" id="statusBanner">Select a piece or use an action.</div>
+      <div class="rules" style="margin-top:10px">
+        <strong>Chips:</strong> biggest to smallest: generator ownership, land tile, original generator coin, then green XX generator. Hover a tile to see every chip on it.
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panelTitle">Actions</div>
       <div class="controls">
         <button id="buyLandBtn" class="primary">Buy Land (1/2/3g)</button>
         <button id="buyGenBtn" class="primary">Buy Gen Chip (5/8g)</button>
@@ -386,10 +405,23 @@
     </section>
 
     <section class="panel">
+      <div class="panelTitle">Move & Event History</div>
       <div class="log" id="log"></div>
     </section>
   </aside>
 </main>
+
+<div class="gameResultOverlay hidden" id="gameResultOverlay">
+  <div class="gameResultCard">
+    <div class="gameResultBadge" id="gameResultBadge">Game Over</div>
+    <h2 id="gameResultTitle">Result</h2>
+    <div class="gameResultText" id="gameResultText">Someone won.</div>
+    <div class="gameResultActions">
+      <button id="resultReviewBtn">Keep Reviewing</button>
+      <button id="resultResetBtn" class="primary">Back to Main Menu</button>
+    </div>
+  </div>
+</div>
 
 <div class="promoBox hidden" id="promoBox">
   <div class="promoPanel">
@@ -452,6 +484,7 @@
   let playerAutoEnabled = false;
   let autoTimer = null;
   let cardTimers = [];
+  let resultOverlayDismissed = false;
   const net = {
     mode:'local',
     role:'local',
@@ -662,6 +695,7 @@
     if(state.gameOver) return;
     state.gameOver = true;
     state.winner = winner;
+    resultOverlayDismissed = false;
     state.status = `${label(winner)} wins. ${reason}`;
     log(`<b>${label(winner)} wins!</b> ${reason}`);
   }
@@ -669,6 +703,7 @@
   function resetGame(){
     if(autoTimer){ clearTimeout(autoTimer); autoTimer = null; }
     state = createInitialState();
+    resultOverlayDismissed = false;
     hideCardReveal();
     log(`New game started. ${sideLabel(PLAYER)} vs ${sideLabel(AI)}. ${label(ownerBySide('gold'))} moves first. Both sides start with 20 gold and 30 minutes.`);
     render();
@@ -2762,6 +2797,7 @@
     renderPromo();
     renderTurnNotice();
     renderBoardSideInfo();
+    renderGameResultOverlay();
     const waitingForOpponent = onlineWaitingForOpponent();
     el('turnBanner').textContent = waitingForOpponent
       ? 'Waiting for opponent • Game paused'
@@ -2811,6 +2847,28 @@
       n.className = 'turnNotice notYourTurn';
       n.textContent = `NOT YOUR TURN • ${turnSide} IS MOVING`;
     }
+  }
+
+  function renderGameResultOverlay(){
+    const box = el('gameResultOverlay');
+    if(!box) return;
+    if(!state || !state.gameOver || resultOverlayDismissed){
+      box.classList.add('hidden');
+      return;
+    }
+    const won = state.winner === effectiveLocalOwner();
+    const badge = el('gameResultBadge');
+    const title = el('gameResultTitle');
+    const text = el('gameResultText');
+    const resetBtn = el('resultResetBtn');
+    if(badge) badge.textContent = won ? 'Victory' : 'Game Over';
+    if(title) title.textContent = `${label(state.winner)} Wins`;
+    if(text) text.textContent = state.status || `${label(state.winner)} wins.`;
+    if(resetBtn){
+      resetBtn.disabled = false;
+      resetBtn.textContent = 'Back to Main Menu';
+    }
+    box.classList.remove('hidden');
   }
 
   function renderScores(){
@@ -3071,9 +3129,9 @@
     endBtn.textContent = waitingForOpponent ? 'WAITING FOR OPPONENT' : (localHumanTurn ? '✅ END TURN / PASS' : 'END TURN / PASS');
     el('autoPlayerBtn').disabled = net.mode === 'online';
     const resetBtn = el('resetBtn');
-    resetBtn.disabled = isOnlineGuest() || net.mode === 'joining';
-    resetBtn.textContent = isOnlineGuest() ? 'Reset: Host Only' : (net.mode === 'joining' ? 'Joining...' : 'Reset Game');
-    resetBtn.title = isOnlineGuest() ? 'Only the host can reset an online game.' : 'Reset the game.';
+    resetBtn.disabled = false;
+    resetBtn.textContent = 'Back to Main Menu';
+    resetBtn.title = 'Refresh the page and return to the main menu.';
     renderNetwork();
   }
 
@@ -3170,18 +3228,26 @@
 
   function renderNetwork(){
     const statusEl = el('netStatus');
-    if(!statusEl) return;
+    const roomBox = el('roomCodeBox');
+    const inGamePanel = el('inGameOnlinePanel');
+    const copyBtn = el('copyLinkBtn');
     const codeText = net.roomCode ? net.roomCode : 'none';
-    el('roomCodeBox').textContent = `Room code: ${codeText}${net.roomCode && net.role === 'host' ? '  • case-sensitive' : ''}`;
-    statusEl.textContent = net.status;
+    if(roomBox) roomBox.textContent = `Room code: ${codeText}${net.roomCode && net.role === 'host' ? '  • case-sensitive' : ''}`;
+    if(statusEl) statusEl.textContent = net.status;
+    if(inGamePanel) inGamePanel.classList.toggle('hidden', net.mode === 'local');
+    const gameStatusPanel = el('gameStatusPanel');
+    if(gameStatusPanel) gameStatusPanel.classList.add('hidden');
     const menuStatus = el('menuNetStatus');
     if(menuStatus) menuStatus.textContent = net.status || 'Use the room code shown after hosting.';
     const onlineish = net.mode !== 'local';
-    el('copyLinkBtn').disabled = !net.roomCode || net.role !== 'host';
-    el('disconnectNetBtn').disabled = !onlineish;
-    el('hostGameBtn').disabled = onlineish;
-    el('joinGameBtn').disabled = onlineish;
-    el('joinCodeInput').disabled = onlineish;
+    if(copyBtn){
+      copyBtn.disabled = !net.roomCode || net.mode === 'local';
+      copyBtn.textContent = net.role === 'host' ? 'Copy Room Code' : 'Copy Joined Room Code';
+    }
+    if(el('disconnectNetBtn')) el('disconnectNetBtn').disabled = !onlineish;
+    if(el('hostGameBtn')) el('hostGameBtn').disabled = onlineish;
+    if(el('joinGameBtn')) el('joinGameBtn').disabled = onlineish;
+    if(el('joinCodeInput')) el('joinCodeInput').disabled = onlineish;
     if(el('menuHostBtn')) el('menuHostBtn').disabled = onlineish;
     if(el('menuJoinBtn')) el('menuJoinBtn').disabled = onlineish;
     if(el('menuJoinCodeInput')) el('menuJoinCodeInput').disabled = onlineish;
@@ -3543,9 +3609,13 @@
     }catch(e){}
   }
 
+  function backToMainMenu(){
+    window.location.reload();
+  }
+
   function setupButtons(){
     el('autoPlayerBtn').addEventListener('click',togglePlayerAI);
-    el('resetBtn').addEventListener('click',()=>localAction('reset'));
+    el('resetBtn').addEventListener('click',backToMainMenu);
     el('buyLandBtn').addEventListener('click',()=>localAction('buyLand'));
     el('buyGenBtn').addEventListener('click',()=>localAction('buyGen'));
     el('customGenBtn').addEventListener('click',()=>localAction('customGen'));
@@ -3579,6 +3649,8 @@
     el('menuJoinCodeInput').addEventListener('keydown', e => {
       if(e.key === 'Enter') joinFromMenu();
     });
+    el('resultReviewBtn')?.addEventListener('click',()=>{ resultOverlayDismissed = true; renderGameResultOverlay(); });
+    el('resultResetBtn')?.addEventListener('click',backToMainMenu);
   }
 
   window.addEventListener('beforeunload', sendDisconnectNotice);
