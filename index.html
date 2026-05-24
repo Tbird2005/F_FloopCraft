@@ -551,7 +551,9 @@
       castlingRightsTurn:null,
       castlingUsed:false,
       freeDouble:false,
-      timeMs:START_CLOCK_MS
+      timeMs:START_CLOCK_MS,
+      kingGambitPlan:null,
+      kingGambitDraws:0
     };
   }
 
@@ -1471,13 +1473,38 @@
     if(state.gameOver || !shouldAutoAct(owner)) return;
     try{
       if(state.pendingCardPlacement){ autoPlacePendingCard(); }
-      aiBuyLandPass(owner);
       if(state.gameOver) return;
+
+      // Emergency king recovery comes before land buying. Spending gold on land
+      // while kingless can turn a recoverable position into a forced bankruptcy.
+      const emergencyKingAction = chooseAiEmergencyKingAction(owner);
+      if(emergencyKingAction){
+        emergencyKingAction();
+        if(hasKing(owner)) aiBuyLandPass(owner);
+        render();
+        if(!state.gameOver){ setTimeout(() => endTurn(), 650); }
+        return;
+      }
+
       if(state.players[owner].gold >= 100){ buyGoldBar(owner); render(); return; }
+
+      // Some AI personalities will try the early knight-out, random-card-in
+      // gambit for a 1-in-6 shot at an extra king and its +5 gold income.
+      const bookAction = chooseAiOpeningKingGambitAction(owner);
+      if(bookAction){
+        bookAction();
+        aiBuyLandPass(owner);
+        render();
+        if(!state.gameOver){ setTimeout(() => endTurn(), 650); }
+        return;
+      }
+
+      if(hasKing(owner)) aiBuyLandPass(owner);
+      if(state.gameOver) return;
 
       const action = chooseAiAction(owner);
       if(action) action();
-      aiBuyLandPass(owner);
+      if(hasKing(owner)) aiBuyLandPass(owner);
       render();
       if(!state.gameOver){ setTimeout(() => endTurn(), 650); }
     } catch(err){
@@ -1488,12 +1515,145 @@
     }
   }
 
+  function chooseAiEmergencyKingAction(owner){
+    const ps = state.players[owner];
+    if(!ps || ps.usedTurnAction || ps.doubleMovesRemaining) return null;
+
+    const lc = state.lastCapture;
+    const ownKingWasJustCaptured = canResurrect(owner) && lc?.owner === owner && lc?.captured?.type === 'K';
+
+    // If a king was just taken, the AI should usually buy it back. If it has no
+    // king at all, this is mandatory when affordable. If it still has extra kings,
+    // it still heavily favors resurrection because extra kings are income engines.
+    if(ownKingWasJustCaptured && (!hasKing(owner) || ps.gold > 10 || Math.random() < .92)){
+      return () => {
+        log(`${label(owner)} AI prioritizes king resurrection.`);
+        resurrect(owner);
+      };
+    }
+
+    if(hasKing(owner)) return null;
+
+    // Desperation line: if the king cannot be resurrected, a random piece card
+    // has an equal 1-in-6 chance to be a king. The AI will try this before
+    // wasting its action on normal development while kingless.
+    if(canDrawPieceCard(owner)){
+      return () => {
+        log(`${label(owner)} AI is kingless and draws a piece card hoping for a king.`);
+        drawCard(owner);
+      };
+    }
+
+    return null;
+  }
+
+  function aiShouldDrawPieceCard(owner, best){
+    if(!canDrawPieceCard(owner)) return false;
+    const ps = state.players[owner];
+    const gold = ps.gold;
+    const pieceDeficit = livingPieces(other(owner)).length - livingPieces(owner).length;
+    const kings = countKings(owner);
+
+    if(kings === 0) return true;
+
+    // If we have a back-rank slot and only one king, a card has real upside
+    // because kings are income engines in this ruleset. Do not overdo it when poor.
+    if(kings === 1 && gold > 16 && openBackRankSlots(owner).length > 0){
+      const early = state.turnNumber <= 14 && (ps.kingGambitPlan === true || Math.random() < .18);
+      if(early) return true;
+    }
+
+    if(gold <= 12) return false;
+    if(pieceDeficit >= 2) return true;
+    if(!best || best.score < 6) return true;
+    if(gold > 32 && Math.random() < .28) return true;
+    return false;
+  }
+
+  function ensureAiGambitPlan(owner){
+    const ps = state.players[owner];
+    if(ps.kingGambitPlan === null || typeof ps.kingGambitPlan === 'undefined'){
+      // Not every AI should play this. It is a risky book idea, not a forced opener.
+      ps.kingGambitPlan = Math.random() < .34;
+      ps.kingGambitDraws = 0;
+    }
+    return ps.kingGambitPlan;
+  }
+
+  function chooseAiOpeningKingGambitAction(owner){
+    const ps = state.players[owner];
+    if(!ps || ps.usedTurnAction || ps.doubleMovesRemaining) return null;
+    if(state.turnNumber > 14) return null;
+    if(!hasKing(owner) || countKings(owner) !== 1) return null;
+    if(!ensureAiGambitPlan(owner)) return null;
+
+    // Step two of the gambit: after a knight opens a back-rank slot, buy a
+    // random piece card and hope for the 1-in-6 king. Limit the number of
+    // opening attempts so it does not throw the economy every game.
+    if(canDrawPieceCard(owner) && ps.gold > 10 && (ps.kingGambitDraws || 0) < 2){
+      return () => {
+        ps.kingGambitDraws = (ps.kingGambitDraws || 0) + 1;
+        log(`${label(owner)} AI tries the early extra-king card gambit.`);
+        drawCard(owner);
+      };
+    }
+
+    // Step one: move a home-rank knight out to create an open back-rank card slot.
+    if(openBackRankSlots(owner).length === 0 && ps.gold > 13){
+      const dev = bestKnightDevelopmentForGambit(owner);
+      if(dev){
+        return () => {
+          log(`${label(owner)} AI develops a knight to open a back-rank card slot.`);
+          executeMove(dev.pieceId, dev.move, false);
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function bestKnightDevelopmentForGambit(owner){
+    let best = null;
+    let bestScore = -999;
+    const row = homeRank(owner);
+    for(const p of livingPieces(owner)){
+      if(p.type !== 'N' || p.r !== row) continue;
+      for(const mv of legalMovesForPiece(p)){
+        if(getPieceAt(mv.r,mv.c)) continue;
+        const money = estimateMoveMoneyResult(p, mv);
+        if(money.bankruptsSelf || money.afterGold <= 8) continue;
+        const centerDist = Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c);
+        let score = 10 - centerDist;
+        score -= (mv.cost || 0) * 1.7;
+        score -= countEnemyAttacks(mv.r,mv.c,owner) * 2.2;
+        if(isDefaultGen(mv.r,mv.c)) score += 3;
+        if(state.land[mv.r][mv.c] === other(owner)) score -= hasKing(other(owner)) ? 2 : 6;
+        if(score > bestScore){ bestScore = score; best = {pieceId:p.id, move:mv, score}; }
+      }
+    }
+    return bestScore >= 1.5 ? best : null;
+  }
+
   function chooseAiAction(owner){
     const ps = state.players[owner];
+
     if(canResurrect(owner)){
       const cap = state.lastCapture?.captured;
-      if(cap && pieceValues[cap.type] >= 3 && state.players[owner].gold > 11) return () => resurrect(owner);
+      if(cap && cap.type === 'K'){
+        // A resurrected king is survival first and economy second. Even with
+        // extra kings alive, the AI almost always wants the king back unless the
+        // resurrection would leave it nearly broke.
+        if(!hasKing(owner) || state.players[owner].gold > 10 || Math.random() < .92){
+          return () => resurrect(owner);
+        }
+      }
+      if(cap && pieceValues[cap.type] >= 5 && state.players[owner].gold > 14) return () => resurrect(owner);
+      if(cap && pieceValues[cap.type] >= 3 && state.players[owner].gold > 18 && Math.random() < .45) return () => resurrect(owner);
     }
+
+    const freeKingPunish = findAiUnprotectedKingPunishAction(owner);
+    if(freeKingPunish) return freeKingPunish;
+
     // Buy generator chip if standing on a default generator and it makes sense.
     const genCandidate = livingPieces(owner).find(p => isDefaultGen(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (state.players[owner].gold > (state.genChip[p.r][p.c] ? 13 : 9)));
     if(genCandidate && hasActionSlot(owner)) return () => buyGeneratorChip(owner, genCandidate.id, false);
@@ -1505,10 +1665,7 @@
 
     const best = bestMoveFor(owner);
 
-    const pieceDeficit = livingPieces(other(owner)).length - livingPieces(owner).length;
-    const missingKing = !hasKing(owner);
-    const drawLooksGood = canDrawPieceCard(owner) && state.players[owner].gold > 12 && (missingKing || pieceDeficit >= 2 || !best || best.score < 6 || (state.players[owner].gold > 32 && Math.random() < .35));
-    if(drawLooksGood) return () => drawCard(owner);
+    if(aiShouldDrawPieceCard(owner, best)) return () => drawCard(owner);
 
     if(best && best.score > 10 && state.players[owner].gold > 10){
       const secondPotential = secondMovePotential(owner, best);
@@ -1523,7 +1680,7 @@
     }
 
     if(best) return () => executeMove(best.pieceId, best.move, false);
-    if(canDrawPieceCard(owner) && state.players[owner].gold > 12) return () => drawCard(owner);
+    if(aiShouldDrawPieceCard(owner, null)) return () => drawCard(owner);
     return () => { ps.usedTurnAction = true; log(`${label(owner)} AI passed.`); };
   }
 
@@ -1535,14 +1692,291 @@
     return all[0].score;
   }
 
+
+  function findAiUnprotectedKingPunishAction(owner){
+    const direct = findImmediateUnprotectedKingCapture(owner);
+    if(direct){
+      return () => {
+        log(`${label(owner)} AI punishes an unprotected king.`);
+        executeMove(direct.pieceId, direct.move, false);
+      };
+    }
+
+    const strike = findDoubleMoveUnprotectedKingStrike(owner);
+    if(strike){
+      return () => {
+        log(`${label(owner)} AI buys double move to punish an unprotected king.`);
+        if(!buyDoubleMove(owner)) return;
+        executeMove(strike.first.pieceId, strike.first.move, false);
+        if(!state.gameOver){
+          executeMove(strike.second.pieceId, strike.second.move, false);
+        }
+      };
+    }
+    return null;
+  }
+
+  function isUnprotectedEnemyKingTarget(owner, r, c){
+    const target = getPieceAt(r,c);
+    return !!target && target.owner === other(owner) && target.type === 'K' && state.land[r][c] !== target.owner;
+  }
+
+  function findImmediateUnprotectedKingCapture(owner){
+    const moves = allMoves(owner).filter(m => isUnprotectedEnemyKingTarget(owner, m.move.r, m.move.c));
+    if(!moves.length) return null;
+    moves.sort((a,b) => b.score - a.score);
+    const best = moves[0];
+    if(best.money && best.money.bankruptsSelf && !best.money.winsImmediately) return null;
+    return best;
+  }
+
+  function findDoubleMoveUnprotectedKingStrike(owner){
+    const ps = state.players[owner];
+    if(!ps || ps.usedTurnAction || ps.doubleMovesRemaining) return null;
+    if(!voluntaryAffordable(owner,6) || ps.gold <= 10) return null;
+
+    const hasFreeEnemyKing = livingPieces(other(owner)).some(k => k.type === 'K' && state.land[k.r][k.c] !== k.owner);
+    if(!hasFreeEnemyKing) return null;
+
+    const base = deepClone(state);
+    base.players[owner].gold -= 6;
+    if(base.players[owner].gold <= 0) return null;
+
+    let best = null;
+    let bestScore = -99999;
+
+    for(const p of livingPieces(owner)){
+      for(const mv of legalMovesForPiece(p)){
+        // Do not waste a double-move search on a first move that already captures
+        // the free king. The normal immediate punish handles that cleaner.
+        if(isUnprotectedEnemyKingTarget(owner, mv.r, mv.c)) continue;
+
+        const temp = deepClone(base);
+        if(!applyQuietAiMove(temp, owner, p.id, mv)) continue;
+        if(temp.gameOver) continue;
+
+        const result = withTemporaryState(temp, () => {
+          let localBest = null;
+          let localScore = -99999;
+          for(const p2 of livingPieces(owner)){
+            for(const mv2 of legalMovesForPiece(p2)){
+              if(!isUnprotectedEnemyKingTarget(owner, mv2.r, mv2.c)) continue;
+              const money = estimateMoveMoneyResult(p2, mv2);
+              if(money.bankruptsSelf && !money.winsImmediately) continue;
+              const target = getPieceAt(mv2.r, mv2.c);
+              const remainingEnemyKings = livingPieces(other(owner)).filter(k => k.type === 'K' && k.id !== target.id).length;
+              let score = 145;
+              if(remainingEnemyKings === 0) score += 45;
+              if(money.winsImmediately) score += 75;
+              score += Math.max(0, money.afterGold) * .55;
+              score -= money.taxPaid * 5;
+              score -= (mv.cost || 0) * 2;
+              score -= (mv2.cost || 0) * 2;
+              if(score > localScore){
+                localScore = score;
+                localBest = {pieceId:p2.id, move:{...mv2}, score};
+              }
+            }
+          }
+          return localBest;
+        });
+
+        if(result && result.score > bestScore){
+          bestScore = result.score;
+          best = {first:{pieceId:p.id, move:{...mv}}, second:{pieceId:result.pieceId, move:{...result.move}}, score:result.score};
+        }
+      }
+    }
+
+    // It should be strongly preferred, but not if it leaves the AI completely
+    // broke after paying for the double move and any paid movement/tax.
+    return bestScore >= 120 ? best : null;
+  }
+
+  function withTemporaryState(tempState, fn){
+    const oldState = state;
+    state = tempState;
+    try{ return fn(); }
+    finally{ state = oldState; }
+  }
+
+  function hasKingQuiet(tempState, owner){
+    return Object.values(tempState.pieces).some(p => !p.captured && p.owner === owner && p.type === 'K');
+  }
+
+  function applyQuietAiMove(tempState, owner, pieceId, mv){
+    const p = tempState.pieces[pieceId];
+    if(!p || p.captured || p.owner !== owner) return false;
+    const ps = tempState.players[owner];
+    if(!ps) return false;
+
+    if(mv.cost){
+      ps.gold -= mv.cost;
+      if(ps.gold <= 0) return false;
+    }
+
+    if(mv.special === 'castleKing' || mv.special === 'castleQueen') return false;
+    if(p.type === 'N') p.knightFeePaid = true;
+
+    const targetId = tempState.board[mv.r]?.[mv.c];
+    const target = targetId ? tempState.pieces[targetId] : null;
+    if(target && target.owner === owner) return false;
+
+    if(target && target.owner !== owner){
+      target.captured = true;
+      tempState.board[target.r][target.c] = null;
+      tempState.players[target.owner].gold -= 1;
+      ps.gold += 1;
+      if(tempState.players[target.owner].gold <= 0){
+        tempState.gameOver = true;
+        tempState.winner = owner;
+      }
+    }
+
+    tempState.board[p.r][p.c] = null;
+    tempState.board[mv.r][mv.c] = p.id;
+    p.r = mv.r;
+    p.c = mv.c;
+    p.moved = true;
+
+    const landOwner = tempState.land[p.r][p.c];
+    if(landOwner && landOwner !== owner){
+      const tax = hasKingQuiet(tempState, landOwner) ? 1 : 6;
+      ps.gold -= tax;
+      tempState.players[landOwner].gold += tax;
+      if(ps.gold <= 0){
+        tempState.gameOver = true;
+        tempState.winner = other(owner);
+        return false;
+      }
+    }
+
+    if(isDefaultGen(p.r,p.c)){
+      const chipOwner = tempState.genChip[p.r][p.c];
+      if(!chipOwner){
+        ps.gold += 1;
+      } else if(chipOwner === owner && hasKingQuiet(tempState, owner)){
+        ps.gold += 1;
+      }
+    }
+    if(tempState.customGen[p.r][p.c]){
+      ps.gold += isDefaultGen(p.r,p.c) ? 6 : 5;
+    }
+
+    if(p.type === 'P'){
+      const end = owner === PLAYER ? 0 : 7;
+      if(p.r === end){
+        if(ps.gold > 3){
+          ps.gold -= 3;
+        }
+        p.type = 'Q';
+        if(ps.gold <= 0) return false;
+      }
+    }
+
+    return ps.gold > 0;
+  }
+
   function allMoves(owner){
     const arr = [];
     for(const p of livingPieces(owner)){
       for(const mv of legalMovesForPiece(p)){
-        arr.push({pieceId:p.id, move:mv, score:scoreMove(p,mv)});
+        const money = estimateMoveMoneyResult(p, mv);
+        // The AI should not knowingly make a move that immediately bankrupts itself.
+        // Example: capturing a king on enemy taxable land can still trigger a 6 gold
+        // landing tax because that enemy is now kingless. If the AI can tank it, fine.
+        // If not, the move is removed from consideration instead of throwing the game.
+        if(money.bankruptsSelf && !money.winsImmediately) continue;
+        arr.push({pieceId:p.id, move:mv, score:scoreMove(p,mv,money), money});
       }
     }
     return arr;
+  }
+
+  function hasKingAfter(owner, capturedId=null){
+    return Object.values(state.pieces).some(p => !p.captured && p.owner === owner && p.type === 'K' && p.id !== capturedId);
+  }
+
+  function estimateLandingMoney(owner, r, c, capturedId=null, startingGold=null){
+    let gold = startingGold == null ? state.players[owner].gold : startingGold;
+    let taxPaid = 0;
+    let genGain = 0;
+    const landOwner = state.land[r][c];
+    if(landOwner && landOwner !== owner){
+      const tax = hasKingAfter(landOwner, capturedId) ? 1 : 6;
+      gold -= tax;
+      taxPaid += tax;
+      if(gold <= 0){
+        return {gold, taxPaid, genGain, bankruptsSelf:true};
+      }
+    }
+    if(isDefaultGen(r,c)){
+      const chipOwner = state.genChip[r][c];
+      if(!chipOwner){
+        gold += 1; genGain += 1;
+      } else if(chipOwner === owner && hasKingAfter(owner, capturedId)){
+        gold += 1; genGain += 1;
+      }
+    }
+    if(state.customGen[r][c]){
+      const gain = isDefaultGen(r,c) ? 6 : 5;
+      gold += gain; genGain += gain;
+    }
+    return {gold, taxPaid, genGain, bankruptsSelf:false};
+  }
+
+  function estimateMoveMoneyResult(p, mv){
+    const owner = p.owner;
+    let gold = state.players[owner].gold;
+    let taxPaid = 0;
+    let genGain = 0;
+    let captureGain = 0;
+    let actionCost = mv.cost || 0;
+    let winsImmediately = false;
+    let promotionCost = 0;
+    const target = getPieceAt(mv.r,mv.c);
+
+    if(actionCost){
+      gold -= actionCost;
+      if(gold <= 0) return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:true, winsImmediately:false};
+    }
+
+    if(target && target.owner !== owner){
+      const enemyGoldAfterBounty = state.players[target.owner].gold - 1;
+      if(enemyGoldAfterBounty <= 0){
+        winsImmediately = true;
+        return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:false, winsImmediately};
+      }
+      gold += 1;
+      captureGain = 1;
+    }
+
+    if(mv.special === 'castleKing' || mv.special === 'castleQueen'){
+      const side = mv.special === 'castleKing' ? 'king' : 'queen';
+      const info = castleInfo(owner, side, p);
+      if(!info.ok) return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:true, winsImmediately:false};
+      let first = estimateLandingMoney(owner, info.row, info.kingTo, null, gold);
+      taxPaid += first.taxPaid; genGain += first.genGain; gold = first.gold;
+      if(first.bankruptsSelf) return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:true, winsImmediately:false};
+      let second = estimateLandingMoney(owner, info.row, info.rookTo, null, gold);
+      taxPaid += second.taxPaid; genGain += second.genGain; gold = second.gold;
+      return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:second.bankruptsSelf, winsImmediately:false};
+    }
+
+    const capturedId = target && target.owner !== owner ? target.id : null;
+    const landing = estimateLandingMoney(owner, mv.r, mv.c, capturedId, gold);
+    taxPaid += landing.taxPaid; genGain += landing.genGain; gold = landing.gold;
+    if(landing.bankruptsSelf) return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:true, winsImmediately:false};
+
+    if(p.type === 'P'){
+      const end = owner === PLAYER ? 0 : 7;
+      if(mv.r === end && gold > 3){
+        gold -= 3;
+        promotionCost = 3;
+      }
+    }
+
+    return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:gold <= 0, winsImmediately};
   }
 
   function bestMoveFor(owner){
@@ -1558,8 +1992,9 @@
     return moves[0];
   }
 
-  function scoreMove(p,mv){
+  function scoreMove(p,mv,money=null){
     let score = 0;
+    if(!money) money = estimateMoveMoneyResult(p,mv);
     const target = getPieceAt(mv.r,mv.c);
     if(target && target.owner !== p.owner){
       score += pieceValues[target.type] * 7 + 3;
@@ -1567,6 +2002,18 @@
     }
     if(mv.special === 'castleKing' || mv.special === 'castleQueen') score += 4;
     if(mv.cost) score -= mv.cost * 3.2;
+
+    // Price the move by its real immediate economy result, not only piece value.
+    // This keeps the AI from making suicidal captures on taxed land.
+    if(money.winsImmediately) score += 90;
+    if(money.bankruptsSelf) score -= 9999;
+    score += money.captureGain * 2.5;
+    score += money.genGain * 1.8;
+    score -= money.taxPaid * 4.2;
+    score -= money.promotionCost * 1.2;
+    if(money.afterGold > 0 && money.afterGold < 4) score -= 12;
+    else if(money.afterGold > 0 && money.afterGold < 7) score -= 5;
+
     const landOwner = state.land[mv.r][mv.c];
     if(landOwner === p.owner) score += 1.1;
     else if(landOwner === other(p.owner)) score -= hasKing(landOwner) ? 1.6 : 6.5;
