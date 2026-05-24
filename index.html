@@ -473,6 +473,7 @@
   const inBounds = (r,c) => r >= 0 && r < SIZE && c >= 0 && c < SIZE;
   const key = (r,c) => `${r},${c}`;
   const isDefaultGen = (r,c) => defaultGenerators.has(key(r,c));
+  const hasGeneratorAt = (r,c) => isDefaultGen(r,c) || !!(state?.customGen?.[r]?.[c]);
   const coord = (r,c) => files[c] + (8-r);
   const matrix = fill => Array.from({length:SIZE},()=>Array.from({length:SIZE},()=> typeof fill === 'function' ? fill() : fill));
   const deepClone = obj => JSON.parse(JSON.stringify(obj));
@@ -562,6 +563,11 @@
   function addPiece(s, owner, type, r, c, opts={}){
     const id = 'p' + nextPieceId++;
     const castleOriginal = !!opts.castleOriginal;
+    const fromCard = !!opts.fromCard;
+    const defaultPawnStart = owner === PLAYER ? 6 : 1;
+    const pawnStartRow = type === 'P'
+      ? (Number.isInteger(opts.pawnStartRow) ? opts.pawnStartRow : (fromCard ? r : defaultPawnStart))
+      : null;
     s.pieces[id] = {
       id,owner,type,r,c,
       moved:false,
@@ -570,7 +576,9 @@
       castleOriginal,
       castleHomeOwner: castleOriginal ? owner : null,
       castleHomeRow: castleOriginal ? r : null,
-      castleHomeCol: castleOriginal ? c : null
+      castleHomeCol: castleOriginal ? c : null,
+      fromCard,
+      pawnStartRow
     };
     s.board[r][c] = id;
     return id;
@@ -771,7 +779,7 @@
     const enemy = other(p.owner);
     if(p.type === 'P'){
       const dir = p.owner === PLAYER ? -1 : 1;
-      const start = p.owner === PLAYER ? 6 : 1;
+      const start = pawnStartRowFor(p);
       // normal one step
       if(inBounds(r+dir,c) && !state.board[r+dir][c]) addMove(moves,p,r+dir,c,{note:'pawn'});
       // normal first two
@@ -1040,9 +1048,9 @@
       transferGold(p.owner, landOwner, tax, `landing tax on ${coord(p.r,p.c)}`);
       if(state.gameOver) return;
     }
-    if(isDefaultGen(p.r,p.c)){
+    if(hasGeneratorAt(p.r,p.c)){
       const chipOwner = state.genChip[p.r][p.c];
-      if(!chipOwner){
+      if(isDefaultGen(p.r,p.c) && !chipOwner){
         gainGold(p.owner, 1, `immediate generator landing at ${coord(p.r,p.c)}`);
       } else if(chipOwner === p.owner && hasKing(p.owner)){
         gainGold(p.owner, 1, `own generator landing at ${coord(p.r,p.c)}`);
@@ -1055,7 +1063,7 @@
 
   function maybePromote(p, isHuman){
     if(p.type !== 'P' || p.captured) return;
-    const endRow = p.owner === PLAYER ? 0 : 7;
+    const endRow = pawnPromotionRow(p.owner);
     if(p.r !== endRow) return;
     if(p.owner === PLAYER && isHuman){
       state.pendingPromotion = {pieceId:p.id};
@@ -1151,7 +1159,7 @@
     const ps = state.players[owner];
     const p = state.pieces[pieceId];
     if(!p || p.owner !== owner || p.captured || !hasActionSlot(owner)) return false;
-    if(!isDefaultGen(p.r,p.c)) return false;
+    if(!hasGeneratorAt(p.r,p.c)) return false;
     const current = state.genChip[p.r][p.c];
     if(current === owner) return false;
     if(ps.freeGenChip){
@@ -1204,6 +1212,20 @@
 
   function backRankRow(owner){
     return owner === PLAYER ? 7 : 0;
+  }
+
+  function pawnPromotionRow(owner){
+    return owner === PLAYER ? 0 : 7;
+  }
+
+  function pawnStartRowFor(piece){
+    if(piece && Number.isInteger(piece.pawnStartRow)) return piece.pawnStartRow;
+    return piece?.owner === PLAYER ? 6 : 1;
+  }
+
+  function pawnProgressFor(piece, row=piece?.r){
+    const start = pawnStartRowFor(piece);
+    return piece?.owner === PLAYER ? Math.max(0, start-row) : Math.max(0, row-start);
   }
 
   function openBackRankSlots(owner){
@@ -1283,10 +1305,11 @@
 
   function placeDrawnCard(owner, pieceType, r, c){
     if(r !== backRankRow(owner) || state.board[r][c]) return false;
-    addPiece(state, owner, pieceType, r, c);
+    addPiece(state, owner, pieceType, r, c, {fromCard:true, pawnStartRow: pieceType === 'P' ? r : undefined});
     state.players[owner].usedTurnAction = true;
-    state.status = `${label(owner)} placed a drawn ${pieceType} on ${coord(r,c)}.`;
-    log(`${label(owner)} placed the drawn ${pieceType} on ${coord(r,c)}.`);
+    const pawnNote = pieceType === 'P' ? ' It starts on your back rank and only promotes on the enemy back rank.' : '';
+    state.status = `${label(owner)} placed a drawn ${pieceType} on ${coord(r,c)}.${pawnNote}`;
+    log(`${label(owner)} placed the drawn ${pieceType} on ${coord(r,c)}.${pieceType === 'P' ? ' Pawn start row set to that back rank.' : ''}`);
     return true;
   }
 
@@ -1430,7 +1453,7 @@
     const ps = state.players[owner];
     if(ps.usedTurnAction || ps.doubleMovesRemaining || !voluntaryAffordable(owner,15)) return false;
     if(!transferGold(owner,BANK,15,'for Gold Dice roll')) return false;
-    const faces = ['P','N','B','R','Q','K','X'];
+    const faces = ['P','N','B','R','Q','X'];
     const roll = faces[Math.floor(Math.random()*faces.length)];
     log(`${label(owner)} rolled Gold Dice: <b>${roll}</b>.`);
     purchaseSfx();
@@ -1540,6 +1563,10 @@
     // has an equal 1-in-6 chance to be a king. The AI will try this before
     // wasting its action on normal development while kingless.
     if(canDrawPieceCard(owner)){
+      // When the AI is kingless and cannot resurrect, a random piece card is not
+      // just a meme. It is often the only realistic 1-in-6 route back into the
+      // game or into an extra-king economy race. Even if a miss can bankrupt it
+      // next turn, passing or making a normal move usually loses anyway.
       return () => {
         log(`${label(owner)} AI is kingless and draws a piece card hoping for a king.`);
         drawCard(owner);
@@ -1813,7 +1840,7 @@
 
     // Buy generator chip if standing on a default generator and it makes sense.
     const genNeedGold = p => (state.genChip[p.r][p.c] ? 13 : 9) + Math.max(0, style.reserveShift) - (style.generatorFocus-1)*4;
-    const genCandidate = livingPieces(owner).find(p => isDefaultGen(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (state.players[owner].gold > genNeedGold(p)));
+    const genCandidate = livingPieces(owner).find(p => hasGeneratorAt(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (state.players[owner].gold > genNeedGold(p)));
     if(genCandidate && hasActionSlot(owner)) return () => buyGeneratorChip(owner, genCandidate.id, false);
 
     const customCandidate = bestCustomGenSpot(owner, style);
@@ -2070,9 +2097,9 @@
       }
     }
 
-    if(isDefaultGen(p.r,p.c)){
+    if(isDefaultGen(p.r,p.c) || tempState.customGen[p.r][p.c]){
       const chipOwner = tempState.genChip[p.r][p.c];
-      if(!chipOwner){
+      if(isDefaultGen(p.r,p.c) && !chipOwner){
         ps.gold += 1;
       } else if(chipOwner === owner && hasKingQuiet(tempState, owner)){
         ps.gold += 1;
@@ -2083,7 +2110,7 @@
     }
 
     if(p.type === 'P'){
-      const end = owner === PLAYER ? 0 : 7;
+      const end = pawnPromotionRow(owner);
       if(p.r === end){
         if(ps.gold > 3){
           ps.gold -= 3;
@@ -2250,9 +2277,9 @@
         return {gold, taxPaid, genGain, bankruptsSelf:true};
       }
     }
-    if(isDefaultGen(r,c)){
+    if(hasGeneratorAt(r,c)){
       const chipOwner = state.genChip[r][c];
-      if(!chipOwner){
+      if(isDefaultGen(r,c) && !chipOwner){
         gold += 1; genGain += 1;
       } else if(chipOwner === owner && hasKingAfter(owner, capturedId)){
         gold += 1; genGain += 1;
@@ -2309,7 +2336,7 @@
     if(landing.bankruptsSelf) return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:true, winsImmediately:false};
 
     if(p.type === 'P'){
-      const end = owner === PLAYER ? 0 : 7;
+      const end = pawnPromotionRow(owner);
       if(mv.r === end && gold > 3){
         gold -= 3;
         promotionCost = 3;
@@ -2362,11 +2389,11 @@
     else if(landOwner === other(p.owner)) score -= hasKing(landOwner) ? 1.6 : 6.5;
     else score += 1.3; // unowned land can be bought
 
-    if(isDefaultGen(mv.r,mv.c)){
+    if(hasGeneratorAt(mv.r,mv.c)){
       const chipOwner = state.genChip[mv.r][mv.c];
-      if(!chipOwner) score += 5.5 + style.generatorFocus*2.1;
-      else if(chipOwner === p.owner) score += 1.5 + style.generatorFocus*.8;
-      else score += 2 + style.generatorFocus*.9; // can possibly buy it later
+      if(isDefaultGen(mv.r,mv.c) && !chipOwner) score += 5.5 + style.generatorFocus*2.1;
+      else if(chipOwner === p.owner) score += 1.8 + style.generatorFocus*.9;
+      else score += 2.2 + style.generatorFocus*.95; // can possibly buy it later
     }
     if(state.customGen[mv.r][mv.c]) score += 5 + style.generatorFocus*3;
 
@@ -2374,8 +2401,8 @@
     score += (7-centerDist) * .45;
 
     if(p.type === 'P'){
-      const end = p.owner === PLAYER ? 0 : 7;
-      const progress = p.owner === PLAYER ? (6-mv.r) : (mv.r-1);
+      const end = pawnPromotionRow(p.owner);
+      const progress = pawnProgressFor(p, mv.r);
       score += progress * .65;
       if(mv.r === end) score += 18;
     }
@@ -2722,7 +2749,7 @@
     const typeScore = {};
     for(const p of enemyPieces) typeScore[p.type] = (typeScore[p.type]||0) + pieceValues[p.type];
     const best = Math.max(0,...Object.values(typeScore));
-    // Expected gain is one random face out of seven. Use when enemy has big stacks or AI is rich.
+    // Expected gain is one random face out of six. Gold Dice cannot roll kings.
     return best >= 18 || (state.players[owner].gold > 45 && best >= 10 && Math.random() < (.34 + (style.costFear < 1 ? .22 : 0)));
   }
 
@@ -2993,7 +3020,7 @@
     el('customGenBtn').textContent = p && state.customGen[p.r][p.c] ? 'XX Gen Already Here' : 'Build XX Gen (30g)';
     el('doubleMoveBtn').textContent = 'Buy Double Move (6g)';
     el('drawCardBtn').textContent = openBackRankSlots(owner).length ? 'Draw Piece Card (5g)' : 'Draw Piece Card (No Slot)';
-    el('goldDiceBtn').textContent = 'Gold Dice (15g)';
+    el('goldDiceBtn').textContent = 'Gold Dice (15g • no kings)';
     el('castleBtn').textContent = ps.castlingUsed ? 'Castling Used' : (ps.castlingRightsTurn != null ? 'Castling Rights Owned' : 'Buy Castling Rights (3g)');
     el('castleKingBtn').textContent = 'Castle Kingside (owned)';
     el('castleQueenBtn').textContent = 'Castle Queenside (owned)';
@@ -3015,7 +3042,7 @@
     setControlPrices(owner, p);
     el('buyLandBtn').disabled = !(localHumanTurn && p && state.land[p.r][p.c] !== owner && ps.landPurchases < 2 && (ps.freeLand || voluntaryAffordable(owner,landCost)));
     const genCost = p ? genChipCostAt(p.r,p.c,owner) : Infinity;
-    el('buyGenBtn').disabled = !(canSpendActionSlot && p && isDefaultGen(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (ps.freeGenChip || voluntaryAffordable(owner,genCost)));
+    el('buyGenBtn').disabled = !(canSpendActionSlot && p && hasGeneratorAt(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (ps.freeGenChip || voluntaryAffordable(owner,genCost)));
     el('customGenBtn').disabled = !(canSpendActionSlot && p && !state.customGen[p.r][p.c] && voluntaryAffordable(owner,30));
     el('doubleMoveBtn').disabled = !(localHumanTurn && !ps.usedTurnAction && !ps.doubleMovesRemaining && voluntaryAffordable(owner,6));
     el('drawCardBtn').disabled = !(canAct && canDrawPieceCard(owner));
@@ -3059,7 +3086,7 @@
 
   function genChipCostAt(r,c,buyer){
     const current = state.genChip[r][c];
-    if(current === buyer || !isDefaultGen(r,c)) return Infinity;
+    if(current === buyer || !hasGeneratorAt(r,c)) return Infinity;
     return current ? 8 : 5;
   }
 
