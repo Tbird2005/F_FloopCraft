@@ -326,7 +326,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v40</div>
+    <div class="versionBadge">Version v41</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -500,6 +500,8 @@
   const START_CLOCK_MS = 30 * 60 * 1000;
   const AI_THINK_MIN_MS = 1000;
   const AI_THINK_MAX_MS = 10000;
+  const AI_STEP_MIN_MS = 1000;
+  const AI_STEP_MAX_MS = 2000;
   let clockInterval = null;
 
   const CARD_BACK = 'https://steamusercontent-a.akamaihd.net/ugc/2057617493352657144/EB19779C122B04B5E04B0A6F7BD039F5ACD9FF07/';
@@ -1617,6 +1619,122 @@
     }
   }
 
+  function randomAiStepDelay(){
+    return AI_STEP_MIN_MS + Math.floor(Math.random() * (AI_STEP_MAX_MS - AI_STEP_MIN_MS + 1));
+  }
+
+  function runAiStepList(owner, steps, done){
+    const list = Array.isArray(steps) ? steps : [];
+    let i = 0;
+    const next = () => {
+      if(state.gameOver || state.turn !== owner) return;
+      if(i >= list.length){
+        done?.();
+        return;
+      }
+      const step = list[i++];
+      try{ step?.(); }
+      catch(err){
+        console.error(err);
+        log('AI step error recovered.');
+      }
+      render();
+      if(state.gameOver || state.turn !== owner) return;
+      setTimeout(next, randomAiStepDelay());
+    };
+    next();
+  }
+
+  function aiBuyOneLandSlow(owner){
+    const ps = state.players[owner];
+    if(!ps || ps.landPurchases >= 2 || !hasKing(owner)) return false;
+
+    // First protect exposed kings, but only one land tile per visible AI step.
+    const kings = livingPieces(owner)
+      .filter(p => p.type === 'K' && state.land[p.r][p.c] !== owner)
+      .map(p => {
+        const direct = enemyCanCaptureSquareNow(owner, p.r, p.c);
+        const dbl = !direct && enemyCanDoubleMoveCaptureSquare(owner, p.r, p.c);
+        const cost = landCostForPiece(p);
+        let score = 100;
+        if(direct) score += 80;
+        if(dbl) score += 55;
+        if(state.land[p.r][p.c] === other(owner)) score += 35;
+        score -= cost * 4;
+        return {p, cost, score};
+      })
+      .sort((a,b) => b.score - a.score);
+
+    for(const k of kings){
+      if(ps.freeLand || voluntaryAffordable(owner, k.cost)){
+        return buyLand(owner, k.p.id);
+      }
+    }
+
+    const style = getAiStyle(owner);
+    const candidates = livingPieces(owner)
+      .map(p => ({p, score:landBuyValue(p, style), cost:landCostForPiece(p)}))
+      .filter(x => x.score > -90)
+      .sort((a,b) => b.score - a.score);
+
+    for(const x of candidates){
+      const threshold = aiLandBuyThreshold(owner, x.p, x.cost, style);
+      if(x.score < threshold) continue;
+      if(!aiCanSpendOnLand(owner, x.cost, x.score, style)) continue;
+      return buyLand(owner, x.p.id);
+    }
+
+    return false;
+  }
+
+  function runAiLandSteps(owner, done){
+    if(state.gameOver || state.turn !== owner){ done?.(); return; }
+    if(!hasKing(owner)){ done?.(); return; }
+
+    const bought = aiBuyOneLandSlow(owner);
+    if(bought){
+      render();
+      if(state.gameOver || state.turn !== owner) return;
+      setTimeout(() => runAiLandSteps(owner, done), randomAiStepDelay());
+      return;
+    }
+
+    done?.();
+  }
+
+  function finishAiTurnSlowly(owner){
+    render();
+    if(state.gameOver || state.turn !== owner) return;
+
+    setTimeout(() => {
+      if(state.gameOver || state.turn !== owner) return;
+      runAiLandSteps(owner, () => {
+        if(state.gameOver || state.turn !== owner) return;
+        setTimeout(() => {
+          if(!state.gameOver && state.turn === owner) endTurn();
+        }, randomAiStepDelay());
+      });
+    }, randomAiStepDelay());
+  }
+
+  function runAiActionAndFinish(owner, action){
+    let result = null;
+    try{
+      result = action ? action() : null;
+    }catch(err){
+      console.error(err);
+      log('AI action error recovered by passing turn.');
+      state.players[owner].usedTurnAction = true;
+    }
+
+    if(result && Array.isArray(result.aiSteps)){
+      runAiStepList(owner, result.aiSteps, () => finishAiTurnSlowly(owner));
+      return;
+    }
+
+    finishAiTurnSlowly(owner);
+  }
+
   function aiTakeTurn(){
     const owner = state.turn;
     if(state.gameOver || !shouldAutoAct(owner)) return;
@@ -1630,10 +1748,7 @@
       // while kingless can turn a recoverable position into a forced bankruptcy.
       const emergencyKingAction = chooseAiEmergencyKingAction(owner);
       if(emergencyKingAction){
-        emergencyKingAction();
-        if(hasKing(owner)) aiBuyLandPass(owner);
-        render();
-        if(!state.gameOver){ setTimeout(() => endTurn(), 650); }
+        runAiActionAndFinish(owner, emergencyKingAction);
         return;
       }
 
@@ -1643,10 +1758,7 @@
       // gambit for a 1-in-6 shot at an extra king and its +5 gold income.
       const bookAction = chooseAiOpeningKingGambitAction(owner);
       if(bookAction){
-        bookAction();
-        aiBuyLandPass(owner);
-        render();
-        if(!state.gameOver){ setTimeout(() => endTurn(), 650); }
+        runAiActionAndFinish(owner, bookAction);
         return;
       }
 
@@ -1654,10 +1766,7 @@
       // first made the AI waste its land slots, then sometimes move its king
       // onto an unprotected square with no way to insure it afterward.
       const action = chooseAiAction(owner);
-      if(action) action();
-      if(hasKing(owner)) aiBuyLandPass(owner);
-      render();
-      if(!state.gameOver){ setTimeout(() => endTurn(), 650); }
+      runAiActionAndFinish(owner, action);
     } catch(err){
       console.error(err);
       log('AI error recovered by passing turn.');
@@ -1986,12 +2095,21 @@
     if(best && best.score > 10 && state.players[owner].gold > 10){
       const secondPotential = secondMovePotential(owner, best, style);
       if(secondPotential > 6 / style.doubleBias && voluntaryAffordable(owner,6) && state.players[owner].gold - 6 > Math.max(3, 7 + style.reserveShift - style.aggression*2)){
-        return () => {
-          buyDoubleMove(owner);
-          const first = bestMoveFor(owner, style);
-          if(first) executeMove(first.pieceId, first.move, false);
-          if(!state.gameOver){ const second = bestMoveFor(owner, style); if(second) executeMove(second.pieceId, second.move, false); }
-        };
+        return () => ({
+          aiSteps:[
+            () => buyDoubleMove(owner),
+            () => {
+              const first = bestMoveFor(owner, style);
+              if(first) executeMove(first.pieceId, first.move, false);
+            },
+            () => {
+              if(!state.gameOver){
+                const second = bestMoveFor(owner, style);
+                if(second) executeMove(second.pieceId, second.move, false);
+              }
+            }
+          ]
+        });
       }
     }
 
@@ -2055,12 +2173,16 @@
       }
     }
     if(best && bestScore > 58){
-      return () => {
-        log(`${label(owner)} AI buys double move to hunt the enemy extra king.`);
-        if(!buyDoubleMove(owner)) return;
-        executeMove(best.first.pieceId, best.first.move, false);
-        if(!state.gameOver) executeMove(best.second.pieceId, best.second.move, false);
-      };
+      return () => ({
+        aiSteps:[
+          () => {
+            log(`${label(owner)} AI buys double move to hunt the enemy extra king.`);
+            buyDoubleMove(owner);
+          },
+          () => executeMove(best.first.pieceId, best.first.move, false),
+          () => { if(!state.gameOver) executeMove(best.second.pieceId, best.second.move, false); }
+        ]
+      });
     }
     return null;
   }
@@ -2076,14 +2198,20 @@
 
     const strike = findDoubleMoveUnprotectedKingStrike(owner);
     if(strike){
-      return () => {
-        log(`${label(owner)} AI buys double move to punish an unprotected king.`);
-        if(!buyDoubleMove(owner)) return;
-        executeMove(strike.first.pieceId, strike.first.move, false);
-        if(!state.gameOver){
-          executeMove(strike.second.pieceId, strike.second.move, false);
-        }
-      };
+      return () => ({
+        aiSteps:[
+          () => {
+            log(`${label(owner)} AI buys double move to punish an unprotected king.`);
+            buyDoubleMove(owner);
+          },
+          () => executeMove(strike.first.pieceId, strike.first.move, false),
+          () => {
+            if(!state.gameOver){
+              executeMove(strike.second.pieceId, strike.second.move, false);
+            }
+          }
+        ]
+      });
     }
     return null;
   }
