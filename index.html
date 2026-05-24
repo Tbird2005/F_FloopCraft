@@ -1635,23 +1635,122 @@
   }
 
   function aiBuyLandPass(owner){
-    const pieces = livingPieces(owner).slice().sort((a,b)=>landBuyValue(b)-landBuyValue(a));
-    for(const p of pieces){
-      if(state.players[owner].landPurchases >= 2) break;
-      if(landBuyValue(p) > 0) buyLand(owner,p.id);
+    const ps = state.players[owner];
+    if(!ps || ps.landPurchases >= 2) return;
+
+    // Land is not supposed to be spammed by the AI. It is insurance, control,
+    // and payback for important captures. Score every occupied square first,
+    // then only buy the ones that actually have strategic value.
+    const candidates = livingPieces(owner)
+      .map(p => ({p, score:landBuyValue(p), cost:landCostForPiece(p)}))
+      .filter(x => x.score > -90)
+      .sort((a,b) => b.score - a.score);
+
+    for(const x of candidates){
+      if(ps.landPurchases >= 2) break;
+      const threshold = aiLandBuyThreshold(owner, x.p, x.cost);
+      if(x.score < threshold) continue;
+      if(!aiCanSpendOnLand(owner, x.cost, x.score)) continue;
+      buyLand(owner, x.p.id);
     }
+  }
+
+  function landCostForPiece(p){
+    const current = state.land[p.r][p.c];
+    if(current === p.owner) return 0;
+    return !current ? 1 : (hasKing(current) ? 2 : 3);
+  }
+
+  function homeRank(owner){
+    return owner === PLAYER ? 7 : 0;
   }
 
   function landBuyValue(p){
     const current = state.land[p.r][p.c];
     if(current === p.owner) return -99;
-    let val = 2;
-    if(!current) val += isDefaultGen(p.r,p.c) ? 5 : 0;
-    if(current === other(p.owner)) val += hasKing(current) ? 5 : 8;
-    if(state.customGen[p.r][p.c]) val += 5;
-    const cost = !current ? 1 : (hasKing(current) ? 2 : 3);
-    if(!voluntaryAffordable(p.owner,cost)) return -99;
-    return val - cost;
+
+    const owner = p.owner;
+    const cost = landCostForPiece(p);
+    if(!state.players[owner].freeLand && !voluntaryAffordable(owner,cost)) return -99;
+
+    const enemy = other(owner);
+    const value = pieceValues[p.type] || 1;
+    const enemyAttacks = countEnemyAttacks(p.r,p.c,owner);
+    const centerDist = Math.abs(3.5-p.r)+Math.abs(3.5-p.c);
+    const centerScore = Math.max(0, 5.2 - centerDist);
+    const isHome = p.r === homeRank(owner);
+    const defaultGen = isDefaultGen(p.r,p.c);
+    const xxGen = !!state.customGen[p.r][p.c];
+    const forwardProgress = owner === PLAYER ? Math.max(0, 6-p.r) : Math.max(0, p.r-1);
+
+    let score = 0;
+
+    if(current === enemy){
+      // Buying out enemy land under our own piece stops repeat taxes and denies
+      // the enemy a paid capture square. This can be worth more than fresh land.
+      score += 8.5;
+      if(defaultGen) score += 3.5;
+      if(xxGen) score += 5;
+      score += centerScore * .75;
+      if(value >= 5) score += 2;
+    } else {
+      // Fresh land is only worth buying when it protects a valuable/important
+      // piece or claims a useful square. No more buying every back rank pawn.
+      score += .35;
+      score += centerScore * .9;
+      score += forwardProgress * .35;
+
+      if(p.type === 'K') score += 8.2;       // king insurance for resurrection money
+      else if(p.type === 'Q') score += 5.4;
+      else if(p.type === 'R') score += 3.4;
+      else if(['B','N'].includes(p.type)) score += 2.2;
+      else score += .4;
+
+      if(enemyAttacks > 0){
+        // If the opponent can take this piece, land becomes payback insurance.
+        score += enemyAttacks * (1.8 + value * .45);
+      }
+      if(defaultGen) score += 4.6;
+      if(xxGen) score += 6.5;
+
+      // Strongly discourage pointless home rank land. The exception is the king,
+      // a generator square, or a piece that is actually under threat.
+      if(isHome && p.type !== 'K' && !defaultGen && !xxGen && enemyAttacks === 0){
+        score -= 8;
+      }
+      // Pawns on quiet side/back squares usually are not worth insuring.
+      if(p.type === 'P' && enemyAttacks === 0 && !defaultGen && !xxGen && centerDist > 2.7){
+        score -= 3.5;
+      }
+    }
+
+    // Owning land costs gold now, so make the score cost-aware.
+    score -= cost * .9;
+
+    // Free deeds are still not thrown away, but they need less justification.
+    if(state.players[owner].freeLand) score += 1.4;
+    return score;
+  }
+
+  function aiLandBuyThreshold(owner, p, cost){
+    let threshold = 6.2;
+    const gold = state.players[owner].gold;
+    if(gold < 10) threshold += 2.2;
+    else if(gold > 35) threshold -= .7;
+    if(p.type === 'K') threshold -= 1.4;
+    if(state.players[owner].freeLand) threshold -= 1.5;
+    return threshold;
+  }
+
+  function aiCanSpendOnLand(owner, cost, score){
+    const ps = state.players[owner];
+    if(ps.freeLand) return true;
+    const after = ps.gold - cost;
+    let reserve = 9; // keep resurrection / emergency money instead of wasting it
+    if(countKings(owner) > 1) reserve = 7;
+    if(ps.gold > 35) reserve = 5;
+    if(score >= 12) reserve = 3;
+    return after > reserve;
   }
 
   function bestCustomGenSpot(owner){
