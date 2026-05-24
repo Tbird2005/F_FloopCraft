@@ -64,7 +64,7 @@
   }
   .boardGameArea{
     display:grid;
-    grid-template-columns:96px auto;
+    grid-template-columns:132px auto;
     gap:10px;
     align-items:center;
     height:100%;
@@ -78,13 +78,15 @@
     min-height:420px;
   }
   .endTurnRail #endTurnBtn{
-    width:86px;
-    min-height:220px;
-    padding:12px 8px;
-    writing-mode:vertical-rl;
-    transform:rotate(180deg);
-    font-size:18px;
-    line-height:1.1;
+    width:120px;
+    min-height:108px;
+    padding:14px 10px;
+    writing-mode:horizontal-tb;
+    transform:none;
+    font-size:16px;
+    line-height:1.15;
+    white-space:normal;
+    text-align:center;
     position:sticky;
     top:12px;
   }
@@ -109,8 +111,8 @@
   }
   @media(max-width:1250px){
     main{grid-template-columns:minmax(500px,1fr) minmax(270px,330px);gap:8px;padding:5px 8px 8px}
-    .boardGameArea{grid-template-columns:82px auto;gap:8px}
-    .endTurnRail #endTurnBtn{width:74px;min-height:190px;font-size:16px}
+    .boardGameArea{grid-template-columns:112px auto;gap:8px}
+    .endTurnRail #endTurnBtn{width:104px;min-height:92px;font-size:14px}
     .boardWrap{width:min(50vw, calc(100vh - 250px), 640px);min-width:390px;padding:7px}
     .panel{padding:9px}
     button{font-size:12px;padding:7px 7px;min-height:34px}
@@ -324,7 +326,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v35</div>
+    <div class="versionBadge">Version v37</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -3331,7 +3333,6 @@
   function joinFromMenu(){
     const code = (el('menuJoinCodeInput')?.value || '').trim();
     if(el('joinCodeInput')) el('joinCodeInput').value = code;
-    showGameScreen();
     joinFriendGame();
   }
 
@@ -3407,9 +3408,13 @@
   }
 
   function failJoin(message){
+    playSfx('error', false);
     cleanupNetwork(true);
-    net.status = message;
+    net.status = message || 'Invalid room code. Ask the host for a valid active 4 character code.';
+    if(state) state.status = net.status;
+    showMultiplayerMenu();
     render();
+    showNetAlert(net.status);
   }
 
   function hostFriendGame(){
@@ -3461,8 +3466,20 @@
   function joinFriendGame(){
     if(!window.Peer){ setNetStatus('PeerJS did not load. Open the hosted site with internet access.'); return; }
     const code = el('joinCodeInput').value.trim();
-    if(!code){ setNetStatus('Paste a room code first.'); return; }
-    if(!validRoomCode(code)){ setNetStatus('Room codes are exactly 4 letters or numbers. Capital letters matter.'); return; }
+    if(!code){
+      playSfx('error', false);
+      setNetStatus('Paste a valid active 4 character room code first.');
+      showNetAlert('Paste a valid active 4 character room code first.');
+      showMultiplayerMenu();
+      return;
+    }
+    if(!validRoomCode(code)){
+      playSfx('error', false);
+      setNetStatus('Invalid room code. Enter exactly 4 letters or numbers from the host.');
+      showNetAlert('Invalid room code. Enter exactly 4 letters or numbers from the host.');
+      showMultiplayerMenu();
+      return;
+    }
     cleanupNetwork(true);
     net.mode = 'joining';
     net.role = 'guest';
@@ -3474,7 +3491,7 @@
     net.peer = new Peer();
     net.joinTimer = setTimeout(()=>{
       if(!net.connected){
-        failJoin('Could not join that room. Check the room code and make sure the host still has the page open.');
+        failJoin('Invalid or inactive room code. Ask the host for a valid active 4 character code.');
       }
     }, 9000);
     net.peer.on('open', () => {
@@ -3484,7 +3501,7 @@
     });
     net.peer.on('error', err => {
       const msg = err?.type === 'peer-unavailable'
-        ? 'Invalid room code or host is not online. Ask the host for the current room code.'
+        ? 'Invalid or inactive room code. Ask the host for a valid active 4 character code.'
         : 'Network error while joining: ' + (err?.message || err);
       failJoin(msg);
     });
@@ -3497,7 +3514,10 @@
         clearTimeout(net.joinTimer);
         net.joinTimer = null;
       }
-      if(net.role === 'guest') net.mode = 'online';
+      if(net.role === 'guest'){
+        net.mode = 'online';
+        showGameScreen();
+      }
       net.connected = true;
       net.lastSeen = Date.now();
       startNetHeartbeat();
@@ -3512,7 +3532,7 @@
       if(net.suppressCloseAlert) return;
       const wasJoining = net.mode === 'joining' || (net.role === 'guest' && !net.connected);
       if(wasJoining){
-        failJoin('Could not join that room. Check the room code and make sure the host still has the page open.');
+        failJoin('Invalid or inactive room code. Ask the host for a valid active 4 character code.');
         return;
       }
       const message = net.role === 'host'
