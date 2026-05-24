@@ -326,7 +326,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v37</div>
+    <div class="versionBadge">Version v38</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -768,39 +768,59 @@
     state.pendingCardPlacement = null;
     state.status = shouldAutoAct(owner) ? `${label(owner)} AI is thinking.` : 'Your turn. Pay attention to land taxes and generators.';
 
-    applyStartTurnEconomy(owner);
+    applyGlobalTurnEconomy();
   }
 
-  function applyStartTurnEconomy(owner){
+  function applyGlobalTurnEconomy(){
     if(state.gameOver) return;
-    // Occupancy tax happens before new income.
-    for(const p of livingPieces(owner)){
-      const landOwner = state.land[p.r][p.c];
-      if(landOwner && landOwner !== owner){
-        const tax = hasKing(landOwner) ? 1 : 6;
-        if(!transferGold(owner, landOwner, tax, `start-turn land tax on ${coord(p.r,p.c)}`)) return;
+    const owners = [PLAYER, AI];
+
+    // Every half-turn is still a turn. Taxes happen for every piece on the board,
+    // not only the side whose move it is.
+    for(const owner of owners){
+      for(const p of livingPieces(owner)){
+        const landOwner = state.land[p.r][p.c];
+        if(landOwner && landOwner !== owner){
+          const tax = hasKing(landOwner) ? 1 : 6;
+          if(!transferGold(owner, landOwner, tax, `turn land tax on ${coord(p.r,p.c)}`)) return;
+        }
       }
+      if(state.gameOver) return;
     }
-    const kings = countKings(owner);
-    if(kings === 0){
-      if(!transferGold(owner, BANK, 5, 'kingless penalty')) return;
-    } else if(kings > 1){
-      gainGold(owner, 5 * (kings - 1), 'for additional kings');
+
+    // King economy is also passive. Extra kings pay every turn. Kingless sides
+    // pay the penalty every turn until they recover or go bankrupt.
+    for(const owner of owners){
+      const kings = countKings(owner);
+      if(kings === 0){
+        if(!transferGold(owner, BANK, 5, 'kingless penalty')) return;
+      } else if(kings > 1){
+        gainGold(owner, 5 * (kings - 1), 'for additional kings');
+      }
+      if(state.gameOver) return;
     }
-    // Unowned default generators and green XX generators pay pieces that are physically on them.
-    for(const p of livingPieces(owner)){
-      if(isDefaultGen(p.r,p.c) && !state.genChip[p.r][p.c]){
-        gainGold(owner, 1, `from unowned generator at ${coord(p.r,p.c)}`);
+
+    // All generator income pays every turn regardless of whose move it is.
+    for(const owner of owners){
+      const kings = countKings(owner);
+
+      // Unowned default generators and green XX generators pay pieces that are physically on them.
+      for(const p of livingPieces(owner)){
+        if(isDefaultGen(p.r,p.c) && !state.genChip[p.r][p.c]){
+          gainGold(owner, 1, `from unowned generator at ${coord(p.r,p.c)}`);
+        }
+        if(state.customGen[p.r][p.c]){
+          gainGold(owner, isDefaultGen(p.r,p.c) ? 6 : 5, `from green XX generator at ${coord(p.r,p.c)}`);
+        }
       }
-      if(state.customGen[p.r][p.c]){
-        gainGold(owner, isDefaultGen(p.r,p.c) ? 6 : 5, `from green XX generator at ${coord(p.r,p.c)}`);
+
+      // Owned generator chips are passive income, but ineffective while kingless.
+      if(kings > 0){
+        for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
+          if(state.genChip[r][c] === owner) gainGold(owner, 1, `from generator ownership chip at ${coord(r,c)}`);
+        }
       }
-    }
-    // Owned generator chips on the original 4 generators are passive income, but ineffective while kingless.
-    if(kings > 0){
-      for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
-        if(state.genChip[r][c] === owner) gainGold(owner, 1, `from generator ownership chip at ${coord(r,c)}`);
-      }
+      if(state.gameOver) return;
     }
   }
 
