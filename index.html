@@ -330,7 +330,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v50</div>
+    <div class="versionBadge">Version v51</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -1913,6 +1913,12 @@
         return;
       }
 
+      const centerPressureSetupAction = chooseAiCenterPawnPressureSetupAction(owner);
+      if(centerPressureSetupAction){
+        runAiActionAndFinish(owner, centerPressureSetupAction);
+        return;
+      }
+
       const centerCounterAction = chooseAiCenterCounterAction(owner);
       if(centerCounterAction){
         runAiActionAndFinish(owner, centerCounterAction);
@@ -2527,6 +2533,24 @@
 
     const king = state.pieces[threat.kingId];
     if(!king || king.captured) return null;
+
+    const attacker = threat.first?.pieceId ? state.pieces[threat.first.pieceId] : null;
+    if(attacker && !attacker.captured){
+      const attackerTakes = allMoves(owner, getAiStyle(owner))
+        .filter(m => m.move.r === attacker.r && m.move.c === attacker.c)
+        .filter(m => {
+          const target = getPieceAt(m.move.r,m.move.c);
+          return target && target.owner === other(owner) && !aiMoveLeavesDangerousTurnTax(owner, m.money, target);
+        })
+        .sort((a,b) => b.score - a.score)[0];
+
+      if(attackerTakes){
+        return () => {
+          log(`${label(owner)} AI blocks a double-move king-cover threat by removing the attacking piece.`);
+          executeMove(attackerTakes.pieceId, attackerTakes.move, false);
+        };
+      }
+    }
 
     const safeMove = findSafeKingMoveFromCoverThreat(owner, king.id);
     if(safeMove){
@@ -3308,6 +3332,178 @@
     if(futureTax >= 6 && money.afterGold <= futureTax + 8 && !canEscape) return true;
     if(futureTax > 0 && money.afterGold <= futureTax + 3 && !canEscape) return true;
     return false;
+  }
+
+  function aiPawnSupportMoveCandidates(owner, targetR, targetC){
+    const dir = owner === PLAYER ? -1 : 1;
+    const supportRow = targetR - dir;
+    const supportCols = new Set([targetC - 1, targetC + 1].filter(c => inBounds(supportRow,c)));
+
+    const candidates = [];
+    for(const p of livingPieces(owner).filter(x => x.type === 'P')){
+      for(const mv of legalMovesForPiece(p)){
+        if(mv.capture) continue;
+        if(mv.r !== supportRow || !supportCols.has(mv.c)) continue;
+
+        const money = estimateMoveMoneyResult(p, mv);
+        if(money.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, money, getPieceAt(mv.r,mv.c))) continue;
+
+        let score = 30;
+        if(mv.note === 'pawn') score += 8;
+        if(mv.note === 'first double') score += 3;
+        if(mv.note === 'paid 3-square pawn start') score -= 5;
+        if(mv.note === 'paid sideways pawn move') score -= 2;
+        score -= (mv.cost || 0) * 4;
+        score += pawnProgressFor(p, mv.r) * 1.4;
+        if(Math.abs(mv.c - targetC) === 1) score += 7;
+        if(state.land[targetR][targetC] === other(owner)) score += 5;
+        if(state.genChip[targetR][targetC] === other(owner)) score += 5;
+        if(hasGeneratorAt(targetR,targetC)) score += 6;
+        if(state.customGen[targetR][targetC]) score += 9;
+
+        candidates.push({pieceId:p.id, move:{...mv}, score, dest:key(mv.r,mv.c)});
+      }
+    }
+
+    candidates.sort((a,b) => b.score - a.score);
+    return candidates;
+  }
+
+  function chooseTwoPawnPressurePair(owner, targetR, targetC){
+    const cands = aiPawnSupportMoveCandidates(owner, targetR, targetC);
+    let best = null;
+    let bestScore = -9999;
+
+    for(let i=0;i<cands.length;i++){
+      for(let j=i+1;j<cands.length;j++){
+        const a = cands[i], b = cands[j];
+        if(a.pieceId === b.pieceId) continue;
+        if(a.dest === b.dest) continue;
+
+        const pA = state.pieces[a.pieceId];
+        const pB = state.pieces[b.pieceId];
+        if(!pA || !pB) continue;
+
+        const okPair = withTemporaryMove(pA, a.move, () => {
+          const legal = legalMovesForPiece(pB).some(m => m.r === b.move.r && m.c === b.move.c && m.note === b.move.note && (m.cost || 0) === (b.move.cost || 0));
+          return legal;
+        });
+        if(!okPair) continue;
+
+        let score = a.score + b.score + 22;
+        if(Math.abs(a.move.c - targetC) === 1 && Math.abs(b.move.c - targetC) === 1) score += 14;
+        if(state.land[targetR][targetC] === other(owner)) score += 8;
+        if(state.genChip[targetR][targetC] === other(owner)) score += 8;
+        if(hasGeneratorAt(targetR,targetC)) score += 10;
+        if(state.customGen[targetR][targetC]) score += 14;
+
+        if(score > bestScore){
+          bestScore = score;
+          best = {first:a, second:b, score};
+        }
+      }
+    }
+    return best;
+  }
+
+  function aiEnemyBoldPawnPressureTarget(owner){
+    const targets = aiBoldEnemyCenterTargets(owner);
+    if(!targets.length) return null;
+
+    // Prefer a target on a generator that the enemy bought land/chip on, or one
+    // that already has enemy support. That is the exact "do not panic-capture,
+    // build pressure first" situation from the sample opening.
+    let best = null;
+    let bestScore = -999;
+
+    for(const t of targets){
+      let score = 20;
+      if(state.land[t.r][t.c] === t.owner) score += 12;
+      if(state.genChip[t.r][t.c] === t.owner) score += 10;
+      if(hasGeneratorAt(t.r,t.c)) score += 8;
+      if(state.customGen[t.r][t.c]) score += 12;
+      score += countOwnDefenders(t.r,t.c,t.owner,t.id) * 7;
+      score -= countOwnDefenders(t.r,t.c,owner) * 3;
+
+      const pair = chooseTwoPawnPressurePair(owner, t.r, t.c);
+      if(pair) score += pair.score * .15;
+      else score -= 15;
+
+      if(score > bestScore){
+        bestScore = score;
+        best = {target:t, pair, score};
+      }
+    }
+
+    return best && best.pair ? best : null;
+  }
+
+  function aiOwnCenterSupportTarget(owner){
+    const ownedCenter = livingPieces(owner)
+      .filter(p => isDefaultGen(p.r,p.c) || !!state.customGen[p.r]?.[p.c])
+      .map(p => {
+        const ownDef = countOwnDefenders(p.r,p.c,owner,p.id);
+        const enemyAtk = countEnemyAttacks(p.r,p.c,owner);
+        let score = 0;
+        if(isDefaultGen(p.r,p.c)) score += 18;
+        if(state.customGen[p.r][p.c]) score += 26;
+        if(state.land[p.r][p.c] === owner) score += 5;
+        if(state.genChip[p.r][p.c] === owner) score += 7;
+        score += Math.max(0, enemyAtk - ownDef) * 12;
+        score += (pieceValues[p.type] || 1) * 2;
+        const pair = chooseTwoPawnPressurePair(owner, p.r, p.c);
+        if(pair) score += pair.score * .12;
+        else score -= 14;
+        return {piece:p, pair, score, ownDef, enemyAtk};
+      })
+      .filter(x => x.pair && x.score > 34)
+      .sort((a,b) => b.score - a.score);
+
+    return ownedCenter[0] || null;
+  }
+
+  function chooseAiCenterPawnPressureSetupAction(owner){
+    const ps = state.players[owner];
+    const style = getAiStyle(owner);
+    if(!ps || !hasActionSlot(owner) || !hasKing(owner)) return null;
+    if(state.turnNumber > 22 && aiPassiveIncome(owner) >= aiPassiveIncome(other(owner))) return null;
+    if(!voluntaryAffordable(owner,6)) return null;
+
+    const minReserve = Math.max(4, 7 + Math.max(0, style.reserveShift));
+    const pressureTarget = aiEnemyBoldPawnPressureTarget(owner);
+
+    if(pressureTarget && pressureTarget.pair && ps.gold - 6 - (pressureTarget.pair.first.move.cost || 0) - (pressureTarget.pair.second.move.cost || 0) > minReserve){
+      const t = pressureTarget.target;
+      const pair = pressureTarget.pair;
+      return () => ({
+        aiSteps:[
+          () => {
+            log(`${label(owner)} AI builds two-pawn pressure on ${coord(t.r,t.c)} instead of rushing a bad center retake.`);
+            buyDoubleMove(owner);
+          },
+          () => executeMove(pair.first.pieceId, pair.first.move, false),
+          () => executeMove(pair.second.pieceId, pair.second.move, false)
+        ]
+      });
+    }
+
+    const supportTarget = aiOwnCenterSupportTarget(owner);
+    if(supportTarget && supportTarget.pair && ps.gold - 6 - (supportTarget.pair.first.move.cost || 0) - (supportTarget.pair.second.move.cost || 0) > minReserve){
+      const p = supportTarget.piece;
+      const pair = supportTarget.pair;
+      return () => ({
+        aiSteps:[
+          () => {
+            log(`${label(owner)} AI reinforces its middle piece on ${coord(p.r,p.c)} with pawn pressure.`);
+            buyDoubleMove(owner);
+          },
+          () => executeMove(pair.first.pieceId, pair.first.move, false),
+          () => executeMove(pair.second.pieceId, pair.second.move, false)
+        ]
+      });
+    }
+
+    return null;
   }
 
   function chooseAiCenterCounterAction(owner){
