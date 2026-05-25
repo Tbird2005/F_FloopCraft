@@ -330,7 +330,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v58</div>
+    <div class="versionBadge">Version v59</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -1915,6 +1915,24 @@
       const centerHighValueRetakeAction = chooseAiCenterHighValueRetakeAction(owner);
       if(centerHighValueRetakeAction){
         runAiActionAndFinish(owner, centerHighValueRetakeAction);
+        return;
+      }
+
+      const aggressiveUnboughtGenCaptureAction = chooseAiAggressiveUnboughtGeneratorCaptureAction(owner);
+      if(aggressiveUnboughtGenCaptureAction){
+        runAiActionAndFinish(owner, aggressiveUnboughtGenCaptureAction);
+        return;
+      }
+
+      const xxBankProtectionAction = chooseAiProtectXXBankAction(owner);
+      if(xxBankProtectionAction){
+        runAiActionAndFinish(owner, xxBankProtectionAction);
+        return;
+      }
+
+      const strategicXXBankAction = chooseAiStrategicXXBankAction(owner);
+      if(strategicXXBankAction){
+        runAiActionAndFinish(owner, strategicXXBankAction);
         return;
       }
 
@@ -3646,6 +3664,266 @@
     };
   }
 
+  function aiOwnedMiddleGeneratorChips(owner){
+    let total = 0;
+    for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
+      if(isDefaultGen(r,c) && state.genChip?.[r]?.[c] === owner) total++;
+    }
+    return total;
+  }
+
+  function aiMiddleIsContested(owner){
+    const enemy = other(owner);
+    for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
+      if(!isDefaultGen(r,c) && !state.customGen?.[r]?.[c]) continue;
+      const occ = getPieceAt(r,c);
+      if(occ && occ.owner === enemy) return true;
+      if(state.genChip?.[r]?.[c] === enemy) return true;
+      if(state.land?.[r]?.[c] === enemy) return true;
+      const ownOcc = occ && occ.owner === owner ? occ : null;
+      if(ownOcc && countEnemyAttacks(r,c,owner) > countOwnDefenders(r,c,owner,ownOcc.id)) return true;
+    }
+    return false;
+  }
+
+  function isUnmovedCornerRook(p){
+    if(!p || p.type !== 'R' || p.moved) return false;
+    return p.r === homeRank(p.owner) && (p.c === 0 || p.c === 7);
+  }
+
+  function aiSecureXXBankScore(owner, p, style=null){
+    if(!p || p.captured || p.owner !== owner) return -99999;
+    if(state.customGen?.[p.r]?.[p.c]) return -99999;
+    const enemy = other(owner);
+    const currentLand = state.land?.[p.r]?.[p.c];
+    if(currentLand === enemy) return -99999;
+
+    const enemyAtk = countEnemyAttacks(p.r,p.c,owner);
+    const ownDef = countOwnDefenders(p.r,p.c,owner,p.id);
+    const home = p.r === homeRank(owner);
+    const ownLand = currentLand === owner;
+    const defaultGen = isDefaultGen(p.r,p.c);
+    const centerDist = Math.abs(3.5-p.r)+Math.abs(3.5-p.c);
+    const kingThreat = p.type === 'K' && (enemyCanCaptureSquareNow(owner,p.r,p.c) || enemyCanDoubleMoveCaptureSquare(owner,p.r,p.c));
+
+    if(kingThreat) return -99999;
+    if(enemyAtk > 0 && ownDef < enemyAtk + 1) return -99999;
+    if(!home && !ownLand && !defaultGen && p.type !== 'K') return -99999;
+
+    let score = 0;
+    if(p.type === 'K'){
+      score += 32;
+      if(ownLand) score += 12;
+      else score += enemyAtk === 0 ? 2 : -12;
+    }
+    if(isUnmovedCornerRook(p)) score += 31;
+    if(home && ['R','B','N','Q'].includes(p.type)) score += 16;
+    if(ownLand) score += 12;
+    if(defaultGen) score += 12;
+    if(enemyAtk === 0) score += 10;
+    score += ownDef * 5;
+    score -= centerDist * .35;
+    if(p.type === 'P' && !ownLand && !defaultGen) score -= 12;
+    score += Math.random() * 1.5;
+    return score;
+  }
+
+  function chooseAiStrategicXXBankAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
+    if(ps.gold < 31 || !voluntaryAffordable(owner,30)) return null;
+    if(aiOwnedMiddleGeneratorChips(owner) < 2) return null;
+    if(!aiMiddleIsContested(owner)) return null;
+
+    const status = aiGeneratorGoalStatus(owner);
+    // Do not dump 30 gold into an XX bank if the enemy is already out-incomeing us
+    // badly and we still need to steal normal chips first.
+    if(status.enemyIncome > status.ownIncome + 4 && status.enemyChips > status.ownChips) return null;
+
+    const style = getAiStyle(owner);
+    let best = null;
+    let bestScore = -99999;
+
+    for(const p of livingPieces(owner)){
+      const score = aiSecureXXBankScore(owner,p,style);
+      if(score > bestScore){
+        bestScore = score;
+        best = p;
+      }
+    }
+
+    const threshold = ps.gold <= 34 ? 30 : 24;
+    if(!best || bestScore < threshold) return null;
+
+    return () => ({
+      aiSteps:[
+        () => {
+          log(`${label(owner)} AI banks its generator lead by building a guarded XX generator at ${coord(best.r,best.c)}.`);
+          buildCustomGenerator(owner, best.id, false);
+        },
+        () => {
+          const p = state.pieces[best.id];
+          if(p && !p.captured && p.owner === owner && state.land[p.r]?.[p.c] !== owner){
+            const cost = landCostForPiece(p);
+            if(voluntaryAffordable(owner,cost)) buyLand(owner, p.id);
+          }
+        }
+      ]
+    });
+  }
+
+  function chooseAiProtectXXBankAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || !hasKing(owner)) return null;
+
+    const xxTargets = [];
+    for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
+      if(state.customGen?.[r]?.[c] !== owner) continue;
+      const occ = getPieceAt(r,c);
+      if(!occ || occ.owner !== owner) continue;
+      const enemyAtk = countEnemyAttacks(r,c,owner);
+      const ownDef = countOwnDefenders(r,c,owner,occ.id);
+      if(enemyAtk <= 0 && ownDef >= 1) continue;
+      xxTargets.push({r,c,occ,enemyAtk,ownDef});
+    }
+
+    if(!xxTargets.length) return null;
+    xxTargets.sort((a,b) => (b.enemyAtk-b.ownDef) - (a.enemyAtk-a.ownDef));
+    const target = xxTargets[0];
+
+    let best = null;
+    let bestScore = -99999;
+    const beforeDef = countOwnDefenders(target.r,target.c,owner,target.occ.id);
+
+    for(const m of allMoves(owner, getAiStyle(owner))){
+      const p = state.pieces[m.pieceId];
+      if(!p || p.id === target.occ.id) continue;
+      if(m.money?.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, m.money, getPieceAt(m.move.r,m.move.c))) continue;
+
+      const afterDef = withTemporaryMove(p, m.move, () => countOwnDefenders(target.r,target.c,owner,target.occ.id));
+      if(afterDef <= beforeDef) continue;
+
+      let score = m.score * .35 + 45;
+      score += (afterDef - beforeDef) * 18;
+      const destTarget = getPieceAt(m.move.r,m.move.c);
+      if(destTarget && destTarget.owner === other(owner)) score += (pieceValues[destTarget.type] || 1) * 4;
+      if(isDefaultGen(m.move.r,m.move.c)) score += 6;
+      score -= (m.move.cost || 0) * 3;
+      score += Math.random() * 2;
+
+      if(score > bestScore){
+        bestScore = score;
+        best = {...m, protectScore:score};
+      }
+    }
+
+    if(!best || bestScore < 46) return null;
+
+    return () => {
+      log(`${label(owner)} AI protects its XX generator bank instead of drifting back into the center.`);
+      executeMove(best.pieceId, best.move, false);
+    };
+  }
+
+  function chooseAiAggressiveUnboughtGeneratorCaptureAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
+
+    const enemy = other(owner);
+    const style = getAiStyle(owner);
+    const targets = livingPieces(enemy)
+      .filter(t => isDefaultGen(t.r,t.c) && state.genChip[t.r][t.c] !== enemy)
+      .map(t => {
+        const enemyDef = countOwnDefenders(t.r,t.c,enemy,t.id);
+        const ownAtk = countEnemyAttacks(t.r,t.c,enemy);
+        let score = 0;
+        if(enemyDef === 0) score += 35;
+        else if(ownAtk > enemyDef) score += 18;
+        else score -= 20;
+        score += (pieceValues[t.type] || 1) * 5;
+        if(!state.genChip[t.r][t.c]) score += 16;
+        if(state.genChip[t.r][t.c] === owner) score += 12;
+        if(state.land[t.r][t.c] === owner) score += 8;
+        return {t, score, enemyDef, ownAtk};
+      })
+      .filter(x => x.score >= 32)
+      .sort((a,b) => b.score - a.score);
+
+    if(!targets.length) return null;
+    const target = targets[0].t;
+
+    const direct = allMoves(owner, style)
+      .filter(m => m.move.r === target.r && m.move.c === target.c)
+      .filter(m => {
+        const dest = getPieceAt(m.move.r,m.move.c);
+        return dest && dest.id === target.id && !aiMoveLeavesDangerousTurnTax(owner, m.money, dest);
+      })
+      .sort((a,b) => b.score - a.score)[0];
+
+    if(direct && Math.random() < .55){
+      return () => {
+        log(`${label(owner)} AI attacks an undefended generator piece before the chip can be bought.`);
+        executeMove(direct.pieceId, direct.move, false);
+        if(!state.gameOver) aiMaybeBuyLandUnderPiece(owner, direct.pieceId, true);
+      };
+    }
+
+    if(!voluntaryAffordable(owner,6) || ps.gold < 13 + Math.max(0, style.reserveShift)) return null;
+
+    let best = null;
+    let bestScore = -99999;
+
+    for(const knight of livingPieces(owner).filter(p => p.type === 'N')){
+      for(const first of legalMovesForPiece(knight)){
+        const firstMoney = estimateMoveMoneyResult(knight, first);
+        if(firstMoney.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, firstMoney, getPieceAt(first.r,first.c))) continue;
+
+        const secondOptions = withTemporaryMove(knight, first, () => legalMovesForPiece(knight)
+          .filter(second => second.r === target.r && second.c === target.c)
+          .map(second => {
+            const dest = getPieceAt(second.r, second.c);
+            const money = estimateMoveMoneyResult(knight, second);
+            return {second:{...second}, dest, money};
+          })
+        );
+
+        for(const option of secondOptions){
+          if(!option.dest || option.dest.id !== target.id) continue;
+          if(option.money.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, option.money, option.dest)) continue;
+
+          const roughAfter = ps.gold - 6 - (first.cost || 0) - (option.second.cost || 0);
+          if(roughAfter <= Math.max(4, 7 + Math.max(0, style.reserveShift))) continue;
+
+          let score = targets[0].score + 40;
+          score += (pieceValues[target.type] || 1) * 7;
+          if(!state.genChip[target.r][target.c]) score += 15;
+          if(state.land[target.r][target.c] === owner) score += 8;
+          score -= (first.cost || 0) * 3 + (option.second.cost || 0) * 3;
+          score += Math.random() * 3;
+
+          if(score > bestScore){
+            bestScore = score;
+            best = {pieceId:knight.id, first:{...first}, second:{...option.second}, targetCoord:coord(target.r,target.c)};
+          }
+        }
+      }
+    }
+
+    if(!best || bestScore < 55 || Math.random() > .62) return null;
+
+    return () => ({
+      aiSteps:[
+        () => {
+          log(`${label(owner)} AI buys Double Move for a knight strike before the enemy can lock the generator chip.`);
+          buyDoubleMove(owner);
+        },
+        () => executeMove(best.pieceId, best.first, false),
+        () => executeMove(best.pieceId, best.second, false),
+        () => aiMaybeBuyLandUnderPiece(owner, best.pieceId, true)
+      ]
+    });
+  }
+
   function chooseAiMoveThenGeneratorChipAction(owner){
     const ps = state.players[owner];
     if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
@@ -4083,6 +4361,19 @@
     if(pressureTarget && pressureTarget.pair && ps.gold - 6 - (pressureTarget.pair.first.move.cost || 0) - (pressureTarget.pair.second.move.cost || 0) > minReserve){
       const t = pressureTarget.target;
       const pair = pressureTarget.pair;
+
+      // Do not always blow 6 gold on the exact same two-pawn push. Sometimes
+      // build pressure with one pawn and let normal piece development add the
+      // second layer later.
+      const onePawn = pair.first.score >= pair.second.score ? pair.first : pair.second;
+      const canOnePawn = ps.gold - (onePawn.move.cost || 0) > minReserve;
+      if(canOnePawn && Math.random() < .34){
+        return () => {
+          log(`${label(owner)} AI adds one pawn of pressure on ${coord(t.r,t.c)} and saves the double move for later.`);
+          executeMove(onePawn.pieceId, onePawn.move, false);
+        };
+      }
+
       return () => ({
         aiSteps:[
           () => {
@@ -4099,6 +4390,16 @@
     if(supportTarget && supportTarget.pair && ps.gold - 6 - (supportTarget.pair.first.move.cost || 0) - (supportTarget.pair.second.move.cost || 0) > minReserve){
       const p = supportTarget.piece;
       const pair = supportTarget.pair;
+
+      const onePawn = pair.first.score >= pair.second.score ? pair.first : pair.second;
+      const canOnePawn = ps.gold - (onePawn.move.cost || 0) > minReserve;
+      if(canOnePawn && Math.random() < .30){
+        return () => {
+          log(`${label(owner)} AI reinforces ${coord(p.r,p.c)} with one pawn first instead of forcing max pressure immediately.`);
+          executeMove(onePawn.pieceId, onePawn.move, false);
+        };
+      }
+
       return () => ({
         aiSteps:[
           () => {
@@ -4932,6 +5233,7 @@
     if(state.land[p.r]?.[p.c] === owner) threshold -= 1.7;
     if(ps.gold > 48) threshold -= 2.5;
     if(ps.gold > 65) threshold -= 2.5;
+    if(ps.gold >= 31 && aiOwnedMiddleGeneratorChips(owner) >= 2 && aiMiddleIsContested(owner) && aiSecureXXBankScore(owner,p,style) >= 24) threshold -= 7;
     if(style.extraKingHunt > 0) threshold += 6;
     if(style.name === 'catch up survival') threshold += 3;
 
