@@ -330,7 +330,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v48</div>
+    <div class="versionBadge">Version v49</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -1882,6 +1882,12 @@
 
       if(state.players[owner].gold >= 100){ buyGoldBar(owner); render(); return; }
 
+      const kingCoverCaptureAction = findAiKingCaptureCoverAction(owner, getAiStyle(owner));
+      if(kingCoverCaptureAction){
+        runAiActionAndFinish(owner, kingCoverCaptureAction);
+        return;
+      }
+
       const centerCounterAction = chooseAiCenterCounterAction(owner);
       if(centerCounterAction){
         runAiActionAndFinish(owner, centerCounterAction);
@@ -2265,6 +2271,140 @@
     return all[0].score;
   }
 
+
+  function aiTempLivingPieces(tempState, owner){
+    return Object.values(tempState.pieces).filter(p => !p.captured && p.owner === owner);
+  }
+
+  function aiProjectedTaxCleanupPossible(tempState, owner){
+    const ps = tempState.players[owner];
+    if(!ps) return false;
+
+    let gold = ps.gold;
+    let landBuysLeft = Math.max(0, 2 - (ps.landPurchases || 0));
+    const risks = [];
+
+    for(const p of aiTempLivingPieces(tempState, owner)){
+      const landOwner = tempState.land?.[p.r]?.[p.c];
+      if(!landOwner || landOwner === owner) continue;
+      const tax = hasKingQuiet(tempState, landOwner) ? 1 : 6;
+      const cost = landCostAtForState(tempState, owner, p.r, p.c);
+      const value = pieceValues[p.type] || 1;
+      risks.push({p,tax,cost,value});
+    }
+
+    risks.sort((a,b) => (b.tax*20 + b.value*3) - (a.tax*20 + a.value*3));
+
+    for(const risk of risks){
+      const serious = risk.tax >= 6 || risk.p.type === 'K' || gold <= risk.tax + 8;
+      if(!serious) continue;
+
+      if(landBuysLeft > 0 && gold - risk.cost > (risk.tax >= 6 ? 6 : 2)){
+        gold -= risk.cost;
+        landBuysLeft--;
+        continue;
+      }
+
+      return false;
+    }
+
+    return gold > 0;
+  }
+
+  function findAiKingCaptureCoverAction(owner, style=null){
+    style = style || getAiStyle(owner);
+    const enemy = other(owner);
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining) return null;
+    if(!voluntaryAffordable(owner,6)) return null;
+    if(ps.gold < 16 + Math.max(0, style.reserveShift)) return null;
+    if(!livingPieces(enemy).some(p => p.type === 'K')) return null;
+
+    const base = deepClone(state);
+    base.players[owner].gold -= 6;
+    if(base.players[owner].gold <= 0) return null;
+
+    let best = null;
+    let bestScore = -99999;
+
+    for(const p of livingPieces(owner)){
+      for(const first of legalMovesForPiece(p)){
+        const firstTarget = getPieceAt(first.r, first.c);
+        if(!firstTarget || firstTarget.owner !== enemy || firstTarget.type !== 'K') continue;
+
+        // If the first king capture already instantly wins by bankruptcy, the
+        // normal move picker can take it. This routine is specifically for
+        // hiding the king from resurrection by making a second capture after it.
+        const temp = deepClone(base);
+        if(!applyQuietAiMove(temp, owner, p.id, first)) continue;
+        if(temp.gameOver) continue;
+
+        const secondOptions = withTemporaryState(temp, () => {
+          const options = [];
+          for(const m of allMoves(owner, style)){
+            const t = getPieceAt(m.move.r, m.move.c);
+            if(!t || t.owner !== enemy || t.type === 'K') continue;
+            if(m.money?.bankruptsSelf && !m.money?.winsImmediately) continue;
+            options.push({pieceId:m.pieceId, move:{...m.move}, targetType:t.type, targetId:t.id, score:m.score, money:m.money});
+          }
+          return options;
+        });
+
+        for(const second of secondOptions){
+          const temp2 = deepClone(temp);
+          if(!applyQuietAiMove(temp2, owner, second.pieceId, second.move)) continue;
+          if(!aiProjectedTaxCleanupPossible(temp2, owner)) continue;
+
+          const enemyHasNoKing = !hasKingQuiet(temp2, enemy);
+          const ownGoldAfter = temp2.players[owner]?.gold || 0;
+          const enemyGoldAfter = temp2.players[enemy]?.gold || 0;
+          const finalIncomeEdge = withTemporaryState(temp2, () => aiPassiveIncome(owner) - aiPassiveIncome(enemy));
+
+          let score = 165;
+          if(enemyHasNoKing) score += 80;
+          score += (pieceValues[second.targetType] || 1) * 8;
+          score += Math.max(-20, Math.min(35, finalIncomeEdge * 5));
+          score += Math.max(0, ownGoldAfter - enemyGoldAfter) * .65;
+          score += ownGoldAfter * .35;
+          score -= (first.cost || 0) * 2.5;
+          score -= (second.move.cost || 0) * 2.5;
+          if(state.land[first.r]?.[first.c] === enemy) score -= hasKing(enemy) ? 2 : 7;
+          if(state.land[second.move.r]?.[second.move.c] === enemy) score -= hasKingQuiet(temp, enemy) ? 2 : 7;
+          if(hasGeneratorAt(second.move.r, second.move.c) || state.customGen[second.move.r]?.[second.move.c]) score += 10;
+
+          if(score > bestScore){
+            bestScore = score;
+            best = {
+              first:{pieceId:p.id, move:{...first}, kingCoord:coord(first.r,first.c)},
+              second:{pieceId:second.pieceId, move:{...second.move}, targetType:second.targetType, coord:coord(second.move.r,second.move.c)},
+              score
+            };
+          }
+        }
+      }
+    }
+
+    if(!best || bestScore < 150) return null;
+
+    return () => ({
+      aiSteps:[
+        () => {
+          log(`${label(owner)} AI buys double move to capture the king first, then cover the resurrection with another capture.`);
+          buyDoubleMove(owner);
+        },
+        () => executeMove(best.first.pieceId, best.first.move, false),
+        () => {
+          if(!state.gameOver) executeMove(best.second.pieceId, best.second.move, false);
+        },
+        () => {
+          if(!state.gameOver) aiMaybeBuyLandUnderPiece(owner, best.first.pieceId, false);
+        },
+        () => {
+          if(!state.gameOver) aiMaybeBuyLandUnderPiece(owner, best.second.pieceId, false);
+        }
+      ]
+    });
+  }
 
   function findAiExtraKingHuntAction(owner, style){
     if(!style || style.extraKingHunt <= 0) return null;
