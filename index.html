@@ -330,7 +330,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v46</div>
+    <div class="versionBadge">Version v48</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -1775,6 +1775,8 @@
     const ps = state.players[owner];
     if(!ps || ps.landPurchases >= 2 || !hasKing(owner)) return false;
 
+    if(aiForceEscapeTurnTax(owner)) return true;
+
     // First protect exposed kings, but only one land tile per visible AI step.
     const kings = livingPieces(owner)
       .filter(p => p.type === 'K' && state.land[p.r][p.c] !== owner)
@@ -1880,8 +1882,21 @@
 
       if(state.players[owner].gold >= 100){ buyGoldBar(owner); render(); return; }
 
+      const centerCounterAction = chooseAiCenterCounterAction(owner);
+      if(centerCounterAction){
+        runAiActionAndFinish(owner, centerCounterAction);
+        return;
+      }
+
+      const economyBookAction = chooseAiOpeningEconomyAction(owner);
+      if(economyBookAction){
+        runAiActionAndFinish(owner, economyBookAction);
+        return;
+      }
+
       // Some AI personalities will try the early knight-out, random-card-in
-      // gambit for a 1-in-6 shot at an extra king and its +5 gold income.
+      // gambit for a 1-in-6 shot at an extra king and its +5 gold income, but
+      // only after the basic generator economy is not being ignored.
       const bookAction = chooseAiOpeningKingGambitAction(owner);
       if(bookAction){
         runAiActionAndFinish(owner, bookAction);
@@ -2099,7 +2114,7 @@
     // because kings are income engines in this ruleset. Do not overdo it when poor.
     if(kings === 1 && gold > 16 && openBackRankSlots(owner).length > 0){
       const early = state.turnNumber <= 14 && (ps.kingGambitPlan === true || Math.random() < style.gambitChance);
-      if(early) return true;
+      if(early && aiOpeningEconomyReady(owner) && aiCurrentTaxBurden(owner) === 0) return true;
     }
 
     if(gold <= 12 + style.reserveShift) return false;
@@ -2114,7 +2129,14 @@
     const ps = state.players[owner];
     if(ps.kingGambitPlan === null || typeof ps.kingGambitPlan === 'undefined'){
       // Not every AI should play this. It is a risky book idea, not a forced opener.
-      ps.kingGambitPlan = Math.random() < Math.min(.46, .18 + getAiStyle(owner).gambitChance);
+      // Diamond was wasting too much early money on this in the test logs, so the
+      // bot now wants at least a small economy first.
+      const style = getAiStyle(owner);
+      let chance = Math.min(.34, .12 + style.gambitChance * .75);
+      if(!aiOpeningEconomyReady(owner)) chance *= .28;
+      if(sideOf(owner) === 'diamond' && aiOwnedGeneratorChips(owner) < 2) chance *= .55;
+      if(aiCurrentTaxBurden(owner) > 0) chance = 0;
+      ps.kingGambitPlan = Math.random() < chance;
       ps.kingGambitDraws = 0;
     }
     return ps.kingGambitPlan;
@@ -2131,7 +2153,7 @@
     // Step two of the gambit: after a knight opens a back-rank slot, buy a
     // random piece card and hope for the 1-in-6 king. Limit the number of
     // opening attempts so it does not throw the economy every game.
-    if(canDrawPieceCard(owner) && ps.gold > 10 + style.reserveShift && (ps.kingGambitDraws || 0) < 2 && Math.random() < (.72 + style.cardRisk)){
+    if(canDrawPieceCard(owner) && aiOpeningEconomyReady(owner) && aiCurrentTaxBurden(owner) === 0 && ps.gold > 14 + style.reserveShift && (ps.kingGambitDraws || 0) < 2 && Math.random() < (.55 + style.cardRisk)){
       return () => {
         ps.kingGambitDraws = (ps.kingGambitDraws || 0) + 1;
         log(`${label(owner)} AI tries the early extra-king card gambit.`);
@@ -2140,7 +2162,7 @@
     }
 
     // Step one: move a home-rank knight out to create an open back-rank card slot.
-    if(openBackRankSlots(owner).length === 0 && ps.gold > 13 + Math.max(0, style.reserveShift)){
+    if(aiOpeningEconomyReady(owner) && openBackRankSlots(owner).length === 0 && ps.gold > 15 + Math.max(0, style.reserveShift)){
       const dev = bestKnightDevelopmentForGambit(owner);
       if(dev){
         return () => {
@@ -2618,6 +2640,8 @@
         // landing tax because that enemy is now kingless. If the AI can tank it, fine.
         // If not, the move is removed from consideration instead of throwing the game.
         if(money.bankruptsSelf && !money.winsImmediately) continue;
+        const target = getPieceAt(mv.r,mv.c);
+        if(aiMoveLeavesDangerousTurnTax(owner, money, target)) continue;
 
         if(p.type === 'K' && !mv.special){
           const exposure = evaluateKingMoveExposure(p, mv, money);
@@ -2663,6 +2687,319 @@
     return {gold, taxPaid, genGain, bankruptsSelf:false};
   }
 
+  function aiCurrentTaxBurden(owner){
+    let total = 0;
+    for(const p of livingPieces(owner)){
+      const landOwner = state.land?.[p.r]?.[p.c];
+      if(landOwner && landOwner !== owner){
+        total += hasKing(landOwner) ? 1 : 6;
+      }
+    }
+    return total;
+  }
+
+  function aiOwnedGeneratorChips(owner){
+    let total = 0;
+    for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
+      if(state.genChip?.[r]?.[c] === owner) total++;
+    }
+    return total;
+  }
+
+  function aiOpeningEconomyReady(owner){
+    const ps = state.players[owner];
+    if(!ps) return false;
+    if(aiOwnedGeneratorChips(owner) >= 2) return true;
+    if(aiPassiveIncome(owner) >= 2) return true;
+    if(ps.gold >= 24) return true;
+    return false;
+  }
+
+  function estimatedFutureTurnTax(owner, r, c, capturedId=null){
+    const landOwner = state.land?.[r]?.[c];
+    if(!landOwner || landOwner === owner) return 0;
+    return hasKingAfter(landOwner, capturedId) ? 1 : 6;
+  }
+
+  function isDefaultGeneratorMove(mv){
+    return !!mv && isDefaultGen(mv.r, mv.c);
+  }
+
+  function chooseAiOpeningEconomyAction(owner){
+    const ps = state.players[owner];
+    const style = getAiStyle(owner);
+    if(!ps || !hasActionSlot(owner) || state.turnNumber > 24 || !hasKing(owner)) return null;
+
+    // In the logs, weak games usually came from gambling on cards or side moves
+    // while the other side locked the middle generators. Early AI now treats the
+    // four default generator squares as the opening fight.
+    const standingChip = livingPieces(owner)
+      .filter(p => isDefaultGen(p.r,p.c) && state.genChip[p.r][p.c] !== owner)
+      .map(p => {
+        const enemyChip = state.genChip[p.r][p.c] === other(owner);
+        const cost = enemyChip ? 8 : 5;
+        const score = 24 + (enemyChip ? 4 : 0) - cost + (state.land[p.r][p.c] === owner ? 2 : 0);
+        return {p, score, cost};
+      })
+      .filter(x => voluntaryAffordable(owner, x.cost) && ps.gold - x.cost > Math.max(4, 8 + style.reserveShift))
+      .sort((a,b) => b.score - a.score)[0];
+
+    if(standingChip){
+      return () => {
+        log(`${label(owner)} AI prioritizes early generator chip control.`);
+        buyGeneratorChip(owner, standingChip.p.id, false);
+      };
+    }
+
+    const controlScore = aiDefaultGenControlScore(owner);
+    const moves = allMoves(owner, style)
+      .filter(m => isDefaultGeneratorMove(m.move))
+      .map(m => {
+        const chipOwner = state.genChip[m.move.r][m.move.c];
+        const landOwner = state.land[m.move.r][m.move.c];
+        let score = m.score + 22;
+        if(!chipOwner) score += 13;
+        else if(chipOwner === owner) score += 7;
+        else score += 5;
+        if(!landOwner) score += 4;
+        else if(landOwner === owner) score += 4;
+        else score -= hasKing(landOwner) ? 2 : 8;
+        if(m.move.note === 'paid 3-square pawn start') score += 7;
+        if(m.move.note === 'paid sideways pawn move') score -= .5;
+        if((m.money.futureTurnTax || 0) > 0) score -= (m.money.futureTurnTax || 0) * 6;
+        if(m.money.afterGold <= Math.max(5, (m.money.futureTurnTax || 0) + 4)) score -= 14;
+        return {...m, openingScore:score};
+      })
+      .filter(m => {
+        const minimum = state.turnNumber <= 8 || controlScore < 1 ? 4 : (sideOf(owner) === 'diamond' ? 9 : 11);
+        return m.openingScore >= minimum;
+      })
+      .sort((a,b) => b.openingScore - a.openingScore);
+
+    if(moves.length){
+      const best = moves[0];
+      return () => {
+        log(`${label(owner)} AI prioritizes early generator square ${coord(best.move.r,best.move.c)}.`);
+        executeMove(best.pieceId, best.move, false);
+      };
+    }
+
+    return null;
+  }
+
+  function aiDefaultGenControlScore(owner){
+    let score = 0;
+    for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
+      if(!isDefaultGen(r,c)) continue;
+      const chip = state.genChip[r][c];
+      const land = state.land[r][c];
+      const occ = getPieceAt(r,c);
+      if(chip === owner) score += 2;
+      else if(chip === other(owner)) score -= 2;
+      if(land === owner) score += 1;
+      else if(land === other(owner)) score -= 1;
+      if(occ && occ.owner === owner) score += 1.5;
+      else if(occ && occ.owner === other(owner)) score -= 1.5;
+    }
+    return score;
+  }
+
+  function isBoldEnemyCenterPawn(owner, p){
+    if(!p || p.captured || p.owner !== other(owner) || p.type !== 'P') return false;
+    if(!isDefaultGen(p.r,p.c)) return false;
+    return Math.abs(p.r - pawnStartRowFor(p)) >= 3;
+  }
+
+  function aiBoldEnemyCenterTargets(owner){
+    return livingPieces(other(owner))
+      .filter(p => isBoldEnemyCenterPawn(owner, p))
+      .sort((a,b) => {
+        const la = state.land[a.r][a.c] === a.owner ? 1 : 0;
+        const lb = state.land[b.r][b.c] === b.owner ? 1 : 0;
+        const ca = state.genChip[a.r][a.c] === a.owner ? 1 : 0;
+        const cb = state.genChip[b.r][b.c] === b.owner ? 1 : 0;
+        return (lb+cb) - (la+ca);
+      });
+  }
+
+  function withTemporaryMove(p, mv, callback){
+    const fromR = p.r, fromC = p.c;
+    const oldMoved = p.moved;
+    const oldKnightFee = p.knightFeePaid;
+    const targetId = state.board[mv.r]?.[mv.c];
+    const target = targetId ? state.pieces[targetId] : null;
+    const oldTargetCaptured = target ? target.captured : null;
+
+    state.board[fromR][fromC] = null;
+    if(target) target.captured = true;
+    state.board[mv.r][mv.c] = p.id;
+    p.r = mv.r;
+    p.c = mv.c;
+    p.moved = true;
+    if(p.type === 'N') p.knightFeePaid = true;
+
+    let result;
+    try{ result = callback(); }
+    finally{
+      state.board[mv.r][mv.c] = targetId || null;
+      if(target) target.captured = oldTargetCaptured;
+      state.board[fromR][fromC] = p.id;
+      p.r = fromR;
+      p.c = fromC;
+      p.moved = oldMoved;
+      p.knightFeePaid = oldKnightFee;
+    }
+    return result;
+  }
+
+  function aiMaybeBuyLandUnderPiece(owner, pieceId, force=false){
+    const p = state.pieces[pieceId];
+    if(!p || p.captured || p.owner !== owner) return false;
+    if(state.land[p.r][p.c] === owner) return false;
+    const important = force || hasGeneratorAt(p.r,p.c) || !!state.customGen[p.r][p.c] || state.land[p.r][p.c] === other(owner);
+    if(!important) return false;
+    return buyLand(owner, p.id);
+  }
+
+  function aiMoveLeavesDangerousTurnTax(owner, money, target=null){
+    const futureTax = money?.futureTurnTax || 0;
+    if(!futureTax || money?.winsImmediately) return false;
+
+    const escapeCost = Number.isFinite(money.futureTaxEscapeCost) ? money.futureTaxEscapeCost : 999;
+    const canEscape = !!money.futureTaxEscapePossible && (money.afterGold - escapeCost > (futureTax >= 6 ? 6 : 2));
+
+    if(target && target.owner === other(owner) && target.type === 'K' && futureTax >= 6 && !canEscape) return true;
+    if(futureTax >= 6 && money.afterGold <= futureTax + 8 && !canEscape) return true;
+    if(futureTax > 0 && money.afterGold <= futureTax + 3 && !canEscape) return true;
+    return false;
+  }
+
+  function chooseAiCenterCounterAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || state.turnNumber > 24 || !hasKing(owner)) return null;
+
+    const targets = aiBoldEnemyCenterTargets(owner);
+    if(!targets.length) return null;
+    const targetKeys = new Set(targets.map(p => key(p.r,p.c)));
+    const style = getAiStyle(owner);
+
+    const direct = allMoves(owner, style)
+      .filter(m => targetKeys.has(key(m.move.r,m.move.c)))
+      .filter(m => {
+        const target = getPieceAt(m.move.r,m.move.c);
+        return target && target.owner === other(owner) && target.type === 'P' && !aiMoveLeavesDangerousTurnTax(owner, m.money, target);
+      })
+      .sort((a,b) => b.score - a.score)[0];
+
+    if(direct){
+      return () => {
+        const target = getPieceAt(direct.move.r,direct.move.c);
+        log(`${label(owner)} AI counters the bold center pawn on ${coord(direct.move.r,direct.move.c)}.`);
+        executeMove(direct.pieceId, direct.move, false);
+        if(!state.gameOver) aiMaybeBuyLandUnderPiece(owner, direct.pieceId, !!target);
+      };
+    }
+
+    if(!voluntaryAffordable(owner,6) || ps.gold < 13 + Math.max(0, style.reserveShift)) return null;
+
+    let best = null;
+    let bestScore = -999;
+
+    for(const p of livingPieces(owner).filter(x => x.type === 'N' || x.type === 'P')){
+      const firstMoves = legalMovesForPiece(p);
+      for(const first of firstMoves){
+        if(targetKeys.has(key(first.r, first.c))) continue;
+        const firstMoney = estimateMoveMoneyResult(p, first);
+        if(firstMoney.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, firstMoney, getPieceAt(first.r,first.c))) continue;
+
+        const secondMoves = withTemporaryMove(p, first, () => legalMovesForPiece(p)
+          .filter(second => targetKeys.has(key(second.r,second.c)))
+          .map(second => {
+            const target = getPieceAt(second.r, second.c);
+            const money = estimateMoveMoneyResult(p, second);
+            return {second:{...second}, target, money};
+          })
+        );
+
+        for(const option of secondMoves){
+          const target = option.target;
+          if(!target || target.owner !== other(owner) || target.type !== 'P') continue;
+          if(option.money.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, option.money, target)) continue;
+
+          const landCost = state.land[target.r][target.c] && state.land[target.r][target.c] !== owner ? (hasKing(other(owner)) ? 2 : 3) : 1;
+          const needLand = state.land[target.r][target.c] !== owner;
+          const roughAfter = ps.gold - 6 - (first.cost || 0) - (option.second.cost || 0) - (needLand ? landCost : 0);
+          if(roughAfter <= Math.max(3, 6 + Math.max(0, style.reserveShift))) continue;
+
+          let score = 50;
+          if(p.type === 'N') score += 12;
+          if(p.type === 'P') score += 7;
+          if(state.land[target.r][target.c] === other(owner)) score += 10;
+          if(state.genChip[target.r][target.c] === other(owner)) score += 8;
+          if(hasGeneratorAt(target.r,target.c)) score += 8;
+          score += (option.money.genGain || 0) * 3;
+          score -= (first.cost || 0) * 2 + (option.second.cost || 0) * 2;
+          score += Math.random() * .5;
+
+          if(score > bestScore){
+            bestScore = score;
+            best = {pieceId:p.id, first:{...first}, second:{...option.second}, targetCoord:coord(target.r,target.c)};
+          }
+        }
+      }
+    }
+
+    if(best){
+      return () => ({
+        aiSteps:[
+          () => {
+            log(`${label(owner)} AI buys double move to take back the center pawn on ${best.targetCoord}.`);
+            buyDoubleMove(owner);
+          },
+          () => executeMove(best.pieceId, best.first, false),
+          () => executeMove(best.pieceId, best.second, false),
+          () => aiMaybeBuyLandUnderPiece(owner, best.pieceId, true)
+        ]
+      });
+    }
+
+    return null;
+  }
+
+  function aiForceEscapeTurnTax(owner){
+    const ps = state.players[owner];
+    if(!ps || ps.landPurchases >= 2) return false;
+
+    const candidates = livingPieces(owner)
+      .map(p => {
+        const landOwner = state.land[p.r][p.c];
+        if(!landOwner || landOwner === owner) return null;
+        const tax = hasKing(landOwner) ? 1 : 6;
+        const cost = landCostForPiece(p);
+        const value = pieceValues[p.type] || 1;
+        let score = tax * 12 + value * 2;
+        if(tax >= 6) score += 45;
+        if(hasGeneratorAt(p.r,p.c)) score += 12;
+        if(state.customGen[p.r][p.c]) score += 18;
+        if(p.type === 'K') score += 55;
+        if(ps.gold <= tax + 8) score += 35;
+        score -= cost * 3;
+        return {p, tax, cost, score};
+      })
+      .filter(Boolean)
+      .sort((a,b) => b.score - a.score);
+
+    for(const x of candidates){
+      if(x.tax >= 6 || x.score >= 28 || ps.gold <= x.tax + 8){
+        if(ps.freeLand || voluntaryAffordable(owner, x.cost)){
+          log(`${label(owner)} AI buys land on ${coord(x.p.r,x.p.c)} to avoid a ${x.tax} gold turn tax.`);
+          return buyLand(owner, x.p.id);
+        }
+      }
+    }
+    return false;
+  }
+
   function estimateMoveMoneyResult(p, mv){
     const owner = p.owner;
     let gold = state.players[owner].gold;
@@ -2704,7 +3041,15 @@
     const capturedId = target && target.owner !== owner ? target.id : null;
     const landing = estimateLandingMoney(owner, mv.r, mv.c, capturedId, gold);
     taxPaid += landing.taxPaid; genGain += landing.genGain; gold = landing.gold;
-    if(landing.bankruptsSelf) return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:true, winsImmediately:false};
+    const futureTurnTax = estimatedFutureTurnTax(owner, mv.r, mv.c, capturedId);
+    const landOwner = state.land[mv.r][mv.c];
+    let futureTaxEscapeCost = Infinity;
+    let futureTaxEscapePossible = false;
+    if(futureTurnTax > 0 && landOwner && landOwner !== owner && state.players[owner].landPurchases < 2){
+      futureTaxEscapeCost = state.players[owner].freeLand ? 0 : (hasKingAfter(landOwner, capturedId) ? 2 : 3);
+      futureTaxEscapePossible = gold - futureTaxEscapeCost > (futureTurnTax >= 6 ? 6 : 2);
+    }
+    if(landing.bankruptsSelf) return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, futureTurnTax, futureTaxEscapeCost, futureTaxEscapePossible, bankruptsSelf:true, winsImmediately:false};
 
     if(p.type === 'P'){
       const end = pawnPromotionRow(owner);
@@ -2714,7 +3059,7 @@
       }
     }
 
-    return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, bankruptsSelf:gold <= 0, winsImmediately};
+    return {afterGold:gold, delta:gold-state.players[owner].gold, taxPaid, genGain, captureGain, actionCost, promotionCost, futureTurnTax, futureTaxEscapeCost, futureTaxEscapePossible, bankruptsSelf:gold <= 0, winsImmediately};
   }
 
   function bestMoveFor(owner, style=null){
@@ -2738,7 +3083,10 @@
     if(!money) money = estimateMoveMoneyResult(p,mv);
     const target = getPieceAt(mv.r,mv.c);
     if(target && target.owner !== p.owner){
+      const retaliation = countEnemyAttacks(mv.r,mv.c,p.owner);
       score += (pieceValues[target.type] * 7 + 3) * (.9 + style.aggression*.12);
+      if(retaliation === 0) score += 5 + pieceValues[target.type] * 1.5;
+      if(hasGeneratorAt(mv.r,mv.c) || state.customGen[mv.r][mv.c]) score += 4;
       if(target.type === 'K') score += 28 + style.extraKingHunt * (countKings(target.owner) > 1 ? 54 : 22);
     }
     if(mv.special === 'castleKing' || mv.special === 'castleQueen') score += 4;
@@ -2751,6 +3099,15 @@
     score += money.captureGain * 2.5;
     score += money.genGain * (1.45 + style.generatorFocus*.65);
     score -= money.taxPaid * (3.6 + style.costFear*.85);
+    const futureTax = money.futureTurnTax || 0;
+    if(futureTax){
+      const escapeCost = Number.isFinite(money.futureTaxEscapeCost) ? money.futureTaxEscapeCost : 999;
+      const canEscape = !!money.futureTaxEscapePossible && (money.afterGold - escapeCost > (futureTax >= 6 ? 6 : 2));
+      score -= futureTax * (7.5 + style.costFear*1.4);
+      if(!canEscape && money.afterGold <= futureTax + 8) score -= 9999;
+      else if(!canEscape && money.afterGold <= futureTax + 12) score -= 55;
+      else if(canEscape) score -= Math.max(0, escapeCost * 2.8 - 3);
+    }
     score -= money.promotionCost * 1.2;
     if(money.afterGold > 0 && money.afterGold < 4) score -= 12;
     else if(money.afterGold > 0 && money.afterGold < 7) score -= 5;
@@ -2762,11 +3119,11 @@
 
     if(hasGeneratorAt(mv.r,mv.c)){
       const chipOwner = state.genChip[mv.r][mv.c];
-      if(isDefaultGen(mv.r,mv.c) && !chipOwner) score += 5.5 + style.generatorFocus*2.1;
-      else if(chipOwner === p.owner) score += 1.8 + style.generatorFocus*.9;
-      else score += 2.2 + style.generatorFocus*.95; // can possibly buy it later
+      if(isDefaultGen(mv.r,mv.c) && !chipOwner) score += 9.5 + style.generatorFocus*3.2;
+      else if(chipOwner === p.owner) score += 3.2 + style.generatorFocus*1.3;
+      else score += 4.8 + style.generatorFocus*1.7; // can possibly buy it later
     }
-    if(state.customGen[mv.r][mv.c]) score += 5 + style.generatorFocus*3;
+    if(state.customGen[mv.r][mv.c]) score += 8 + style.generatorFocus*4.2;
 
     const centerDist = Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c);
     score += (7-centerDist) * .45;
@@ -2831,6 +3188,9 @@
     const ps = state.players[owner];
     const style = getAiStyle(owner);
     if(!ps || ps.landPurchases >= 2) return;
+
+    while(ps.landPurchases < 2 && aiForceEscapeTurnTax(owner)){}
+    if(ps.landPurchases >= 2) return;
 
     // First priority: if the AI has moved a king onto a square it does not own,
     // buy that king square before doing any normal land logic. This prevents the
@@ -3115,13 +3475,18 @@
   function shouldGoldDice(owner, style=null){
     style = style || getAiStyle(owner);
     const ps = state.players[owner];
-    if(ps.usedTurnAction || ps.doubleMovesRemaining || !voluntaryAffordable(owner,15) || state.players[owner].gold < 28 + Math.max(0, style.reserveShift) || style.extraKingHunt > 0) return false;
+    const taxBurden = aiCurrentTaxBurden(owner);
+    const after = ps.gold - 15;
+    if(ps.usedTurnAction || ps.doubleMovesRemaining || !voluntaryAffordable(owner,15) || ps.gold < 30 + Math.max(0, style.reserveShift) || style.extraKingHunt > 0) return false;
+    if(after <= 10 + taxBurden * 2 + Math.max(0, style.reserveShift)) return false;
+    if(aiPassiveIncome(other(owner)) > aiPassiveIncome(owner) + 5 && after < 28) return false;
+
     const enemyPieces = livingPieces(other(owner));
     const typeScore = {};
     for(const p of enemyPieces) typeScore[p.type] = (typeScore[p.type]||0) + pieceValues[p.type];
     const best = Math.max(0,...Object.values(typeScore));
     // Expected gain is one random face out of six. Gold Dice cannot roll kings.
-    return best >= 18 || (state.players[owner].gold > 45 && best >= 10 && Math.random() < (.34 + (style.costFear < 1 ? .22 : 0)));
+    return best >= 22 || (ps.gold > 52 && best >= 14 && Math.random() < (.24 + (style.costFear < 1 ? .18 : 0)));
   }
 
   // RENDER SECTION
