@@ -330,7 +330,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v56</div>
+    <div class="versionBadge">Version v57</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -1919,6 +1919,12 @@
         return;
       }
 
+      const generatorParityAction = chooseAiGeneratorParityAction(owner);
+      if(generatorParityAction){
+        runAiActionAndFinish(owner, generatorParityAction);
+        return;
+      }
+
       const sneakyKingPressureAction = chooseAiSneakyKingPressureAction(owner);
       if(sneakyKingPressureAction){
         runAiActionAndFinish(owner, sneakyKingPressureAction);
@@ -2043,6 +2049,8 @@
     const enemyKings = countKings(enemy);
     const ownIncome = aiPassiveIncome(owner);
     const enemyIncome = aiPassiveIncome(enemy);
+    const ownChips = aiOwnedGeneratorChips(owner);
+    const enemyChips = aiOwnedGeneratorChips(enemy);
     const pieceDelta = livingPieces(owner).length - livingPieces(enemy).length;
 
     const style = {
@@ -2133,6 +2141,22 @@
       style.xxHomeBias *= .88;
       style.xxRisk *= .86;
       style.costFear *= 1.05;
+    }
+
+    // Long term goal: do not let the enemy sit on better passive income.
+    // The AI tries to reach at least equal income and prefers being one chip
+    // ahead on default generators before gambling on low-value moves.
+    if(ownKings > 0){
+      const genDeficit = Math.max(0, enemyChips + 1 - ownChips);
+      if(ownIncome < enemyIncome || genDeficit > 0){
+        style.name = ownIncome < enemyIncome ? 'income parity chase' : style.name;
+        style.generatorFocus *= 1.35 + Math.min(.65, genDeficit * .18);
+        style.cardRisk *= .55;
+        style.xxHomeBias *= 1.08;
+        style.xxKingBias *= 1.04;
+        style.costFear *= ownIncome < enemyIncome ? .86 : .94;
+        style.reserveShift -= ownIncome < enemyIncome ? 1 : 0;
+      }
     }
 
     // Small per-turn drift keeps it from acting like a fixed scripted bot.
@@ -2268,8 +2292,22 @@
     if(extraKingHunt) return extraKingHunt;
 
     // Buy generator chip if standing on a default generator and it makes sense.
-    const genNeedGold = p => (state.genChip[p.r][p.c] ? 13 : 9) + Math.max(0, style.reserveShift) - (style.generatorFocus-1)*4;
-    const genCandidate = livingPieces(owner).find(p => hasGeneratorAt(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (state.players[owner].gold > genNeedGold(p)));
+    // When behind on generator chips or passive income, chip control is not a
+    // luxury. It is how the AI stops the opponent from snowballing.
+    const genStatus = aiGeneratorGoalStatus(owner);
+    const genNeedGold = p => {
+      const stealing = state.genChip[p.r][p.c] === other(owner);
+      const base = stealing ? 10 : 7;
+      const pressureDiscount = genStatus.needsPush ? 3 : 0;
+      return base + Math.max(0, style.reserveShift) - (style.generatorFocus-1)*4 - pressureDiscount;
+    };
+    const genCandidate = livingPieces(owner)
+      .filter(p => hasGeneratorAt(p.r,p.c) && state.genChip[p.r][p.c] !== owner && (state.players[owner].gold > genNeedGold(p)))
+      .sort((a,b) => {
+        const as = (state.genChip[a.r][a.c] === other(owner) ? 20 : 8) + (isDefaultGen(a.r,a.c) ? 4 : 0);
+        const bs = (state.genChip[b.r][b.c] === other(owner) ? 20 : 8) + (isDefaultGen(b.r,b.c) ? 4 : 0);
+        return bs - as;
+      })[0];
     if(genCandidate && hasActionSlot(owner)) return () => buyGeneratorChip(owner, genCandidate.id, false);
 
     const customCandidate = bestCustomGenSpot(owner, style);
@@ -3430,6 +3468,33 @@
     return {forbid, penalty, directThreat, doubleThreat, destOwnLand, canBuyProtection, protectedOrInsurable};
   }
 
+  function moveWouldOpenKingCoverThreat(owner, pieceId, mv){
+    if(state?._suppressKingTrapMoveRisk) return null;
+    if(!hasKing(owner)) return null;
+
+    // If the king is already under this exact kind of threat, normal defense
+    // handles it. This helper is for moves that create the threat by opening a
+    // file/diagonal or uncovering a second capture target.
+    const oldSuppress = state._suppressKingTrapMoveRisk;
+    state._suppressKingTrapMoveRisk = true;
+    let alreadyThreat = null;
+    try{ alreadyThreat = findEnemyKingCoverCaptureThreat(owner); }
+    finally{ state._suppressKingTrapMoveRisk = oldSuppress; }
+    if(alreadyThreat) return null;
+
+    const temp = deepClone(state);
+    if(!applyQuietAiMove(temp, owner, pieceId, mv)) return null;
+    if(temp.gameOver) return null;
+
+    const previous = temp._suppressKingTrapMoveRisk;
+    temp._suppressKingTrapMoveRisk = true;
+    try{
+      return withTemporaryState(temp, () => findEnemyKingCoverCaptureThreat(owner));
+    } finally {
+      temp._suppressKingTrapMoveRisk = previous;
+    }
+  }
+
   function allMoves(owner, style=null){
     const arr = [];
     for(const p of livingPieces(owner)){
@@ -3447,6 +3512,17 @@
           const exposure = evaluateKingMoveExposure(p, mv, money);
           money.kingExposure = exposure;
           if(exposure.forbid && !money.winsImmediately) continue;
+        }
+
+        if(!state._suppressKingTrapMoveRisk && p.type !== 'K'){
+          const openedTrap = moveWouldOpenKingCoverThreat(owner, p.id, mv);
+          if(openedTrap){
+            money.opensKingCoverThreat = openedTrap;
+            // With only one king, do not open a clean king-first/cover-capture
+            // line just to win a normal piece or square. That is exactly how the
+            // AI ended up praying for card draws after losing its king.
+            if(countKings(owner) <= 1 && !money.winsImmediately) continue;
+          }
         }
 
         arr.push({pieceId:p.id, move:mv, score:scoreMove(p,mv,money,style), money});
@@ -3504,6 +3580,86 @@
       if(state.genChip?.[r]?.[c] === owner) total++;
     }
     return total;
+  }
+
+  function aiGeneratorGoalStatus(owner){
+    const enemy = other(owner);
+    const ownChips = aiOwnedGeneratorChips(owner);
+    const enemyChips = aiOwnedGeneratorChips(enemy);
+    const ownIncome = aiPassiveIncome(owner);
+    const enemyIncome = aiPassiveIncome(enemy);
+    return {
+      ownChips, enemyChips, ownIncome, enemyIncome,
+      incomeBehind: ownIncome < enemyIncome,
+      incomeNotAhead: ownIncome <= enemyIncome,
+      generatorDeficit: Math.max(0, enemyChips + 1 - ownChips),
+      needsPush: ownIncome < enemyIncome || ownChips <= enemyChips
+    };
+  }
+
+  function chooseAiGeneratorParityAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || !hasKing(owner)) return null;
+    const style = getAiStyle(owner);
+    const status = aiGeneratorGoalStatus(owner);
+    if(!status.needsPush && status.ownIncome >= status.enemyIncome + 2 && status.ownChips >= status.enemyChips + 1) return null;
+
+    const reserve = status.incomeBehind ? Math.max(2, 5 + Math.min(2, style.reserveShift || 0)) : Math.max(4, 7 + Math.max(0, style.reserveShift || 0));
+
+    const standing = livingPieces(owner)
+      .filter(p => isDefaultGen(p.r,p.c) && state.genChip[p.r][p.c] !== owner)
+      .map(p => {
+        const chip = state.genChip[p.r][p.c];
+        const stealing = chip === other(owner);
+        const cost = stealing ? 8 : 5;
+        let score = 40;
+        if(stealing) score += 34;       // stealing is a 2 income swing: -1 enemy, +1 us
+        else score += 18;
+        if(status.incomeBehind) score += 20;
+        if(status.generatorDeficit > 0) score += status.generatorDeficit * 13;
+        if(state.land[p.r][p.c] === owner) score += 6;
+        else if(state.land[p.r][p.c] === other(owner)) score -= hasKing(other(owner)) ? 3 : 9;
+        score += (pieceValues[p.type] || 1) * .8;
+        score -= cost * 2.2;
+        score += Math.random() * 1.5;
+        return {p,cost,score,stealing};
+      })
+      .filter(x => voluntaryAffordable(owner, x.cost) && ps.gold - x.cost > reserve)
+      .sort((a,b) => b.score - a.score)[0];
+
+    if(standing && standing.score >= (standing.stealing ? 38 : 34)){
+      return () => {
+        log(`${label(owner)} AI fights for generator income parity by ${standing.stealing ? 'stealing' : 'claiming'} the chip at ${coord(standing.p.r,standing.p.c)}.`);
+        buyGeneratorChip(owner, standing.p.id, false);
+      };
+    }
+
+    const move = allMoves(owner, style)
+      .filter(m => isDefaultGen(m.move.r,m.move.c) && state.genChip[m.move.r][m.move.c] !== owner)
+      .map(m => {
+        const chip = state.genChip[m.move.r][m.move.c];
+        const stealing = chip === other(owner);
+        const target = getPieceAt(m.move.r,m.move.c);
+        let score = m.score + 18;
+        if(stealing) score += 28;
+        if(status.incomeBehind) score += 14;
+        if(status.generatorDeficit > 0) score += status.generatorDeficit * 8;
+        if(target && target.owner === other(owner)) score += (pieceValues[target.type] || 1) * 4;
+        if(m.money?.futureTurnTax) score -= m.money.futureTurnTax * 6;
+        if(m.money?.afterGold <= reserve + 2) score -= 18;
+        return {...m, parityScore:score, stealing};
+      })
+      .filter(m => m.parityScore >= (m.stealing ? 34 : 29))
+      .sort((a,b) => b.parityScore - a.parityScore)[0];
+
+    if(move){
+      return () => {
+        log(`${label(owner)} AI moves toward generator income parity at ${coord(move.move.r,move.move.c)}.`);
+        executeMove(move.pieceId, move.move, false);
+      };
+    }
+
+    return null;
   }
 
   function aiOpeningEconomyReady(owner){
@@ -4278,6 +4434,10 @@
     // This keeps the AI from making suicidal captures on taxed land.
     if(money.winsImmediately) score += 90;
     if(money.bankruptsSelf) score -= 9999;
+    if(money.opensKingCoverThreat){
+      score -= 120 * (style.safety || 1);
+      if(countKings(p.owner) <= 1) score -= 9999;
+    }
     score += money.captureGain * 2.5;
     score += money.genGain * (1.45 + style.generatorFocus*.65);
     score -= money.taxPaid * (3.6 + style.costFear*.85);
