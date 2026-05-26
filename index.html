@@ -477,7 +477,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v71</div>
+    <div class="versionBadge">Version v72</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -1915,10 +1915,178 @@
     return null;
   }
 
+  function aiCheapRecaptureTarget(owner){
+    const lc = state.lastCapture;
+    if(!lc || lc.used || lc.owner !== owner || !lc.location || !lc.captured) return null;
+    const {r,c} = lc.location;
+    const occupant = getPieceAt(r,c);
+    if(!occupant || occupant.owner !== other(owner)) return null;
+
+    const cap = lc.captured;
+    return {
+      r,c,
+      occupant,
+      captured:cap,
+      targetValue:pieceValues[occupant.type] || 1,
+      lostValue:pieceValues[cap.type] || 1,
+      hotSquare:hasGeneratorAt(r,c) || !!state.customGen?.[r]?.[c] || state.land?.[r]?.[c] === other(owner) || state.genChip?.[r]?.[c] === other(owner)
+    };
+  }
+
+  function aiScoreCheapRecapture(owner, data, mover, mv, extraCost=0, kind='direct'){
+    if(!data || !mover || !mv) return -99999;
+    const moverValue = pieceValues[mover.type] || 1;
+    const targetValue = data.targetValue || 1;
+    const capValue = data.lostValue || 1;
+    const target = getPieceAt(data.r,data.c);
+
+    const moveCost = (mv.cost || 0) + extraCost;
+    let score = 0;
+
+    // Main idea: if the enemy queen/rook is sitting on the capture square, a
+    // cheap pawn/minor recapture is better than paying 8g for a resurrection
+    // battle that may just trade expensive pieces back and forth.
+    score += targetValue * 24;
+    score -= moverValue * 8;
+    score -= moveCost * 5;
+    score += 12; // capture bounty + denying their material.
+    if(mover.type === 'P') score += 32;
+    if(['N','B'].includes(mover.type)) score += 16;
+    if(['R','Q'].includes(mover.type)) score -= 14;
+    if(target && target.type === 'Q') score += 44;
+    if(target && target.type === 'R') score += 26;
+    if(data.hotSquare) score += 18;
+    if(kind === 'double') score -= 8; // still cheaper than resurrection sometimes, but not free.
+    if(capValue <= 3 && targetValue >= 5) score += 18;
+    if(capValue >= 5 && targetValue >= capValue) score += 10;
+
+    const postRisk = aiPostMovePieceCaptureRisk(owner, mover.id, mv);
+    if(postRisk.severe && moverValue > 1) score -= 38;
+    if(postRisk.severe && mover.type === 'P') score -= 5; // pawn getting resurrected/captured back is acceptable.
+    if(postRisk.risk) score -= Math.max(0, postRisk.risk) * (mover.type === 'P' ? .18 : .45);
+
+    // Compare against resurrection cost. If resurrection would cost 8 and put the
+    // same square into a loop, a 6g pawn recapture is often correct.
+    if(moveCost < 8) score += (8 - moveCost) * 8;
+    if(kind === 'double' && mover.type === 'P' && targetValue >= 5) score += 18;
+
+    const money = estimateMoveMoneyResult(mover,mv);
+    if(money.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, money, target)) score -= 9999;
+    if(money.winsImmediately) score += 10000;
+
+    return score;
+  }
+
+  function chooseAiCheapRecaptureInsteadOfResurrectionAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || state.gameOver) return null;
+
+    const data = aiCheapRecaptureTarget(owner);
+    if(!data) return null;
+
+    const style = getAiStyle(owner);
+    let best = null;
+    let bestScore = -99999;
+
+    // Direct cheap recapture first.
+    for(const m of allMoves(owner, style)){
+      if(m.move.r !== data.r || m.move.c !== data.c) continue;
+      const target = getPieceAt(m.move.r,m.move.c);
+      if(!target || target.owner !== other(owner)) continue;
+
+      const mover = state.pieces[m.pieceId];
+      const score = aiScoreCheapRecapture(owner, data, mover, m.move, 0, 'direct') + m.score * .15;
+      if(score > bestScore){
+        bestScore = score;
+        best = {kind:'direct', pieceId:m.pieceId, move:{...m.move}, score, moverType:mover?.type || '?', targetType:data.occupant.type};
+      }
+    }
+
+    // Same-piece double move recapture. This catches the "move pawn then recapture
+    // queen" idea. We strongly prefer pawns/minors here.
+    if(voluntaryAffordable(owner,6) && ps.gold > 8){
+      for(const mover of livingPieces(owner).filter(p => p.type !== 'K')){
+        const moverValue = pieceValues[mover.type] || 1;
+        if(moverValue >= 5 && data.targetValue < 9) continue;
+
+        for(const first of legalMovesForPiece(mover)){
+          if(first.r === data.r && first.c === data.c) continue;
+          if(first.capture) continue;
+
+          const firstMoney = estimateMoveMoneyResult(mover, first);
+          if(firstMoney.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner, firstMoney, getPieceAt(first.r,first.c))) continue;
+
+          const options = withTemporaryMove(mover, first, () => {
+            return legalMovesForPiece(mover)
+              .filter(second => second.r === data.r && second.c === data.c)
+              .map(second => ({second:{...second}, score:aiScoreCheapRecapture(owner, data, mover, second, 6 + (first.cost || 0), 'double')}));
+          });
+
+          for(const opt of options){
+            const roughAfter = ps.gold - 6 - (first.cost || 0) - (opt.second.cost || 0);
+            if(roughAfter <= 1) continue;
+
+            let score = opt.score;
+            if(mover.type === 'P') score += 20;
+            if(mover.type === 'N' || mover.type === 'B') score += 8;
+            score -= (first.cost || 0) * 4 + (opt.second.cost || 0) * 4;
+
+            if(score > bestScore){
+              bestScore = score;
+              best = {
+                kind:'double',
+                pieceId:mover.id,
+                first:{...first},
+                second:opt.second,
+                score,
+                moverType:mover.type,
+                targetType:data.occupant.type
+              };
+            }
+          }
+        }
+      }
+    }
+
+    if(!best) return null;
+
+    // Require a real reason to skip resurrection. Queen/rook recaptures with pawns
+    // pass easily. Minor-for-minor noise does not.
+    const threshold = data.targetValue >= 9 ? 72 : data.targetValue >= 5 ? 64 : 84;
+    if(bestScore < threshold) return null;
+
+    if(best.kind === 'direct'){
+      return () => {
+        log(`${label(owner)} AI chooses the cheaper recapture over an 8g resurrection battle.`);
+        executeMove(best.pieceId, best.move, false);
+        if(!state.gameOver) aiMaybeBuyLandUnderPiece(owner, best.pieceId, true);
+      };
+    }
+
+    return () => ({
+      aiSteps:[
+        () => {
+          log(`${label(owner)} AI buys Double Move for a cheaper ${best.moverType}-recapture instead of paying 8g resurrection.`);
+          buyDoubleMove(owner);
+        },
+        () => executeMove(best.pieceId, best.first, false),
+        () => {
+          if(!state.gameOver){
+            executeMove(best.pieceId, best.second, false);
+            if(!state.gameOver) aiMaybeBuyLandUnderPiece(owner, best.pieceId, true);
+          }
+        }
+      ]
+    });
+  }
+
   function chooseAiTacticalResurrectionAction(owner){
     const ps = state.players[owner];
     const lc = state.lastCapture;
     if(!ps || !hasActionSlot(owner) || !canResurrect(owner) || !lc?.captured || !lc.location) return null;
+
+    const cheapRecapture = chooseAiCheapRecaptureInsteadOfResurrectionAction(owner);
+    if(cheapRecapture) return null;
 
     const cap = lc.captured;
     const {r,c} = lc.location;
@@ -2213,6 +2381,12 @@
       }
 
       if(state.players[owner].gold >= 100){ buyGoldBar(owner); render(); return; }
+
+      const cheapRecaptureAction = chooseAiCheapRecaptureInsteadOfResurrectionAction(owner);
+      if(cheapRecaptureAction){
+        runAiActionAndFinish(owner, cheapRecaptureAction);
+        return;
+      }
 
       const tacticalResurrectionAction = chooseAiTacticalResurrectionAction(owner);
       if(tacticalResurrectionAction){
