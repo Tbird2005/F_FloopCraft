@@ -3,7 +3,7 @@
 <html lang="en" style="--app-scale: 1.0622222222222222;"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Capitalism Chess Online v81 AI Brain Fix</title>
+<title>Capitalism Chess Online v82 Bishop Timing Fix</title>
 <style>
   :root{
     --bg:#101319;
@@ -477,7 +477,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v81 AI Brain Fix</div>
+    <div class="versionBadge">Version v82 Bishop Timing Fix</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -2832,6 +2832,10 @@
     }
     income += Math.max(0, countKings(owner)-1) * 5;
     for(const p of livingPieces(owner)){
+      // v82: unowned default generators are real turn income if a piece is
+      // physically sitting there. The old evaluator ignored this, so the AI
+      // thought income was equal while the human was farming d4/e4/d5/e5.
+      if(isDefaultGen(p.r,p.c) && !state.genChip?.[p.r]?.[p.c]) income += 1;
       if(state.customGen[p.r]?.[p.c]) income += isDefaultGen(p.r,p.c) ? 6 : 5;
     }
     return income;
@@ -5530,6 +5534,7 @@
         const p = state.pieces[m.pieceId];
         if(!p || p.type === 'Q') continue;
         if(m.move.r === t.r && m.move.c === t.c) continue;
+        if(aiMoveBlocksActiveFianchettoRay(owner,p,m.move)) continue;
         if(m.money?.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner,m.money,getPieceAt(m.move.r,m.move.c))) continue;
         if(aiMoveAbandonsHeldGeneratorBlunder(owner,p,m.move,m.money,getPieceAt(m.move.r,m.move.c))) continue;
 
@@ -5684,6 +5689,7 @@
         if(mv.capture) continue;
         if(aiWouldUndoLastMove(owner,p,mv)) continue;
         if(p.moved && p.type !== 'R' && mv.r === homeRank(owner)) continue;
+        if(aiMoveBlocksActiveFianchettoRay(owner,p,mv)) continue;
 
         const centerDistDest = Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c);
         const landsOnHotCenter = centerDistDest <= 3 || hasGeneratorAt(mv.r,mv.c) || state.customGen?.[mv.r]?.[mv.c];
@@ -5827,6 +5833,7 @@
         if(money.bankruptsSelf && !money.winsImmediately) continue;
         const target = getPieceAt(mv.r,mv.c);
         if(aiMoveLeavesDangerousTurnTax(owner, money, target)) continue;
+        if(aiMoveBlocksActiveFianchettoRay(owner,p,mv) && !money.winsImmediately) continue;
 
         if(p.type !== 'K' && !mv.special && !money.winsImmediately){
           const postRisk = aiPostMovePieceCaptureRisk(owner, p.id, mv);
@@ -6474,6 +6481,35 @@
     return false;
   }
 
+  function aiMoveBlocksActiveFianchettoRay(owner, piece, mv){
+    if(!piece || !mv || mv.capture) return false;
+    for(const side of ['king','queen']){
+      const sq = aiFianchettoSquares(owner, side);
+      const bishop = getPieceAt(sq.bishopTo.r, sq.bishopTo.c);
+      if(!bishop || bishop.owner !== owner || bishop.type !== 'B' || bishop.captured) continue;
+
+      // v82: after a bishop reaches b7/g7/b2/g2, the first diagonal square
+      // in front of it must stay open. In the bad log, Gold played Bb7 and
+      // then Nb8-c6, which literally put its own knight in front of the bishop.
+      if(mv.r === sq.lineBlock.r && mv.c === sq.lineBlock.c){
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function aiUnownedDefaultGeneratorOccupancy(owner){
+    let total = 0;
+    for(const p of livingPieces(owner)){
+      if(isDefaultGen(p.r,p.c) && !state.genChip?.[p.r]?.[p.c]) total++;
+    }
+    return total;
+  }
+
+  function aiEnemyIsFarmingUnownedMiddle(owner){
+    return aiUnownedDefaultGeneratorOccupancy(other(owner)) > aiUnownedDefaultGeneratorOccupancy(owner);
+  }
+
   function aiFianchettoOptions(owner){
     const out = [];
     for(const side of ['king','queen']){
@@ -6536,6 +6572,22 @@
     const status = aiGeneratorGoalStatus(owner);
     const style = getAiStyle(owner);
     const incomeOK = status.ownIncome >= status.enemyIncome;
+
+    // v82: one fianchetto is enough until the middle is not being farmed by the
+    // opponent. The old bishopDevelop plan could spend four early actions on
+    // b6/Bb7 and g6/Bg7 while Diamond sat on d4/e4/d5/e5 collecting generator
+    // income. Finish an already-started bishop plan, but do not start the
+    // second side while behind in real middle income.
+    const alreadyFianchettoed = (ps.aiFianchettoUses || 0) >= 1;
+    const losingMiddleIncome = status.incomeBehind || aiEnemyIsFarmingUnownedMiddle(owner);
+    if(alreadyFianchettoed && !ps.aiFianchettoPlan && losingMiddleIncome){
+      if(ps._lastBishopTempoLogTurn !== state.turnNumber){
+        ps._lastBishopTempoLogTurn = state.turnNumber;
+        log(`${label(owner)} AI delays the second bishop plan because the opponent is already farming the middle.`);
+      }
+      return null;
+    }
+
     const options = aiFianchettoOptions(owner);
     if(!options.length) return null;
 
@@ -6651,6 +6703,7 @@
 
         const movingOffBackRank = p.r === row && mv.r !== row;
         const openingBackSlot = movingOffBackRank && ['N','B','Q'].includes(p.type);
+        if(aiMoveBlocksActiveFianchettoRay(owner,p,mv)) continue;
         // Development means open the back rank with a minor piece or queen.
         // Rooks are handled by the rook-activation routine so a one-square rook
         // shuffle does not get mislabeled as useful development.
@@ -6765,7 +6818,14 @@
     }
 
     if(plan === 'bishopDevelop'){
-      return chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiDevelopmentCardGambleAction(owner) || chooseAiKnightStagingAction(owner) || chooseAiOpeningVarietyAction(owner);
+      const middleTempoProblem = ((ps.aiFianchettoUses || 0) >= 1) &&
+        (aiEnemyIsFarmingUnownedMiddle(owner) || aiGeneratorGoalStatus(owner).incomeBehind || aiDefaultGenControlScore(owner) < 0);
+
+      if(middleTempoProblem){
+        return chooseAiOpeningEconomyAction(owner) || chooseAiExpandOpenGeneratorAction(owner) || chooseAiCenterCounterAction(owner) || chooseAiKnightStagingAction(owner) || chooseAiOpeningVarietyAction(owner) || chooseAiBishopFianchettoDevelopmentAction(owner);
+      }
+
+      return chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiOpeningEconomyAction(owner) || chooseAiDevelopmentCardGambleAction(owner) || chooseAiKnightStagingAction(owner) || chooseAiOpeningVarietyAction(owner);
     }
 
     if(plan === 'supportPawns'){
