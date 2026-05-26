@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!-- saved from url=(0393)https://sdmntprnorthcentralus.oaiusercontent.com/files/00000000-7150-722f-96e5-d5fb9908ba8d/raw?se=2026-05-26T19:18:23Z&sp=r&sv=2026-02-06&sr=b&scid=309c6da2-242d-4f7e-b9c3-aabb9ba907fb&skoid=456594af-533f-44ef-9bdc-35ea2f9daee5&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-05-26T17:28:58Z&ske=2026-05-28T17:28:58Z&sks=b&skv=2026-02-06&sig=O4uYwRn/uxRMnPnA9rInaJkEwMbmt2nZtYBoLsOjQuE%3D -->
+<html lang="en" style="--app-scale: 1.0622222222222222;"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Capitalism Chess Online v81 AI Brain Fix</title>
 <style>
   :root{
@@ -466,10 +466,10 @@
   #appScaleShell .cardRevealPanel{width:420px !important;max-width:420px !important}
 
 </style>
-  <link rel="icon" href="favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
-  <link rel="apple-touch-icon" sizes="192x192" href="favicon-192.png">
-  <link rel="icon" type="image/png" sizes="512x512" href="favicon-512.png">
+  <link rel="icon" href="https://sdmntprnorthcentralus.oaiusercontent.com/files/00000000-7150-722f-96e5-d5fb9908ba8d/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="https://sdmntprnorthcentralus.oaiusercontent.com/files/00000000-7150-722f-96e5-d5fb9908ba8d/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="https://sdmntprnorthcentralus.oaiusercontent.com/files/00000000-7150-722f-96e5-d5fb9908ba8d/favicon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="https://sdmntprnorthcentralus.oaiusercontent.com/files/00000000-7150-722f-96e5-d5fb9908ba8d/favicon-512.png">
 </head>
 <body>
 <div id="appScaleShell" class="appScaleShell">
@@ -497,11 +497,11 @@
     </div>
     <div class="menuActions">
       <button id="menuHostBtn" class="bigPrimary">Host a Game</button>
-      <input id="menuJoinCodeInput" class="menuInput" placeholder="Code" maxlength="4" autocomplete="off" spellcheck="false" />
+      <input id="menuJoinCodeInput" class="menuInput" placeholder="Code" maxlength="4" autocomplete="off" spellcheck="false">
       <button id="menuJoinBtn" class="bigWarn">Join With Code</button>
       <button id="menuBackBtn">Back</button>
     </div>
-    <div class="menuSmall" id="menuNetStatus">Use the room code shown after hosting. Do not use the website URL as the room code. This is Peer to Peer. VPNs commonly make it fail.</div>
+    <div class="menuSmall" id="menuNetStatus">Offline local mode. Use this as normal single player or AI vs AI.</div>
   </div>
 </div>
 
@@ -560,12 +560,12 @@
     <section class="panel hidden" id="inGameOnlinePanel">
       <div class="panelTitle">Multiplayer Room</div>
       <div class="roomCodeBox" id="roomCodeBox">Room code: none</div>
-      <button id="copyLinkBtn" class="full" style="margin-top:8px">Copy Room Code</button>
+      <button id="copyLinkBtn" class="full" style="margin-top:8px" disabled="">Copy Joined Room Code</button>
       <div class="netStatus" id="netStatus">Offline local mode. Use this as normal single player or AI vs AI.</div>
       <div class="hidden">
         <button id="hostGameBtn" class="primary">Host Online Game</button>
-        <button id="disconnectNetBtn" class="danger">Disconnect</button>
-        <input id="joinCodeInput" class="onlineInput" placeholder="4 character code" maxlength="4" autocomplete="off" spellcheck="false" />
+        <button id="disconnectNetBtn" class="danger" disabled="">Disconnect</button>
+        <input id="joinCodeInput" class="onlineInput" placeholder="4 character code" maxlength="4" autocomplete="off" spellcheck="false">
         <button id="joinGameBtn" class="warn">Join Online Game</button>
       </div>
     </section>
@@ -597,7 +597,7 @@
     </section>
 
     <section class="panel">
-      <div class="panelTitle">Move & Event History</div>
+      <div class="panelTitle">Move &amp; Event History</div>
       <div class="log" id="log"></div>
     </section>
   </aside>
@@ -628,14 +628,14 @@
 <div class="cardReveal hidden" id="cardReveal">
   <div class="cardRevealPanel">
     <h2 id="cardRevealTitle">Card Drawn</h2>
-    <img id="cardRevealImg" alt="Card reveal" />
+    <img id="cardRevealImg" alt="Card reveal">
     <div class="cardCaption" id="cardRevealCaption"></div>
   </div>
 </div>
 
 </div>
 
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="./Capitalism Chess Online v81 AI Brain Fix_files/peerjs.min.js.download"></script>
 <script>
 
 (() => {
@@ -794,6 +794,10 @@
       backRankDevelopUses:0,
       aiSupportCooldownUntil:0,
       aiRookActivationUses:0,
+      aiFianchettoPlan:null,
+      aiFianchettoUses:0,
+      aiDevelopmentCardDraws:0,
+      aiKnightStageUses:0,
       aiLastPieceMove:null,
       aiTemper:null,
       aiLastStyle:null
@@ -2473,6 +2477,18 @@
         return;
       }
 
+      const bishopFianchettoDevelopmentAction = chooseAiBishopFianchettoDevelopmentAction(owner);
+      if(bishopFianchettoDevelopmentAction && !findAnyKingLineThreat(owner)){
+        runAiActionAndFinish(owner, bishopFianchettoDevelopmentAction);
+        return;
+      }
+
+      const developmentCardGambleAction = chooseAiDevelopmentCardGambleAction(owner);
+      if(developmentCardGambleAction && !findAnyKingLineThreat(owner)){
+        runAiActionAndFinish(owner, developmentCardGambleAction);
+        return;
+      }
+
       const proactiveXXBuildAction = chooseAiProactiveXXBuildAction(owner);
       if(proactiveXXBuildAction && !findAnyKingLineThreat(owner)){
         runAiActionAndFinish(owner, proactiveXXBuildAction);
@@ -2584,6 +2600,18 @@
       const laterCastleDevelopmentAction = chooseAiCastleDevelopmentAction(owner);
       if(laterCastleDevelopmentAction){
         runAiActionAndFinish(owner, laterCastleDevelopmentAction);
+        return;
+      }
+
+      const laterBishopFianchettoDevelopmentAction = chooseAiBishopFianchettoDevelopmentAction(owner);
+      if(laterBishopFianchettoDevelopmentAction){
+        runAiActionAndFinish(owner, laterBishopFianchettoDevelopmentAction);
+        return;
+      }
+
+      const laterDevelopmentCardGambleAction = chooseAiDevelopmentCardGambleAction(owner);
+      if(laterDevelopmentCardGambleAction){
+        runAiActionAndFinish(owner, laterDevelopmentCardGambleAction);
         return;
       }
 
@@ -5650,7 +5678,7 @@
     let best = null;
     let bestScore = -99999;
 
-    for(const p of livingPieces(owner).filter(x => ['N','B','R','Q'].includes(x.type))){
+    for(const p of livingPieces(owner).filter(x => ['N','B','Q'].includes(x.type))){
       if(p.type === 'Q' && state.turnNumber < 46 && aiPassiveIncome(owner) >= aiPassiveIncome(other(owner)) - 1) continue;
       for(const mv of legalMovesForPiece(p)){
         if(mv.capture) continue;
@@ -5749,6 +5777,11 @@
         }).length;
         const homeSlide = mv.r === homeRank(owner);
         const fileOpened = rPiece.c !== mv.c || rPiece.r !== mv.r;
+        const castleRuiningShuffle = isUnmovedCornerRook(rPiece) && homeSlide && Math.abs(mv.c - rPiece.c) <= 2;
+
+        // v82: do not call h1-g1 / a1-b1 style shuffles development. They ruin
+        // that side's future castling rights and usually do nothing for middle.
+        if(castleRuiningShuffle && gain <= 0 && centerLineControl < 2 && enemyBackPressure <= 0) continue;
 
         // v81: do not require a perfect center-support gain. A rook sliding onto
         // an open file or rank is still valuable because it frees the back rank
@@ -5757,7 +5790,8 @@
 
         let score = 42 + gain * 16 + centerLineControl * 8 + enemyBackPressure * 14;
         if(!rPiece.moved) score += 18;
-        if(homeSlide) score += 12;
+        if(castleRuiningShuffle) score -= 55;
+        if(homeSlide) score += castleRuiningShuffle ? 0 : 12;
         if(fileOpened) score += 6;
         if(state.land?.[mv.r]?.[mv.c] === owner) score += 7;
         if(hasGeneratorAt(mv.r,mv.c)) score += 6;
@@ -6331,6 +6365,8 @@
         return () => ({
           aiSteps:[
             () => {
+              ps.aiKnightStageUses = (ps.aiKnightStageUses || 0) + 2;
+              ps.backRankDevelopUses = (ps.backRankDevelopUses || 0) + 2;
               log(`${label(owner)} AI uses Double Move to develop both horses toward future generator captures.`);
               buyDoubleMove(owner);
             },
@@ -6348,8 +6384,10 @@
     if(best.score < (openingPlan === 'knightStage' ? 56 : 62) || Math.random() > chance) return null;
 
     return () => {
+      ps.aiKnightStageUses = (ps.aiKnightStageUses || 0) + 1;
+      ps.backRankDevelopUses = (ps.backRankDevelopUses || 0) + 1;
       const targetList = best.targets.slice(0,2).map(t => coord(t.r,t.c)).join(' and ');
-      log(`${label(owner)} AI develops a horse early so it can threaten generator squares ${targetList} without a later double move.`);
+      log(`${label(owner)} AI develops a horse early so it can threaten generator squares ${targetList} without a later double move. This also opens a back-rank slot for a possible card gamble.`);
       executeMove(best.pieceId, best.move, false);
     };
   }
@@ -6359,13 +6397,15 @@
     if(!ps) return 'balanced';
     if(!ps.openingPlan){
       const roll = Math.random();
-      // v81: spread openings out more. Support-pawn openings were showing up too often.
-      if(roll < .18) ps.openingPlan = 'instantChip';
-      else if(roll < .32) ps.openingPlan = 'queenPawn';
-      else if(roll < .45) ps.openingPlan = 'supportPawns';
-      else if(roll < .66) ps.openingPlan = 'knightStage';
-      else if(roll < .80) ps.openingPlan = 'wildPawns';
-      else if(roll < .90) ps.openingPlan = 'kingGambit';
+      // v82: spread openings out more. Support-pawn openings are now rare.
+      // Bishop development and knight/card slots are real opening plans now.
+      if(roll < .16) ps.openingPlan = 'instantChip';
+      else if(roll < .30) ps.openingPlan = 'queenPawn';
+      else if(roll < .38) ps.openingPlan = 'supportPawns';
+      else if(roll < .56) ps.openingPlan = 'knightStage';
+      else if(roll < .70) ps.openingPlan = 'bishopDevelop';
+      else if(roll < .82) ps.openingPlan = 'wildPawns';
+      else if(roll < .92) ps.openingPlan = 'kingGambit';
       else ps.openingPlan = 'balanced';
       ps.openingPlanLockedTurn = state.turnNumber;
       log(`${label(owner)} AI opening plan: ${ps.openingPlan}.`);
@@ -6398,6 +6438,202 @@
     return last.pieceId === p.id && last.fromR === mv.r && last.fromC === mv.c;
   }
 
+
+  function aiFianchettoSquares(owner, side){
+    const bottom = owner === PLAYER;
+    const homeR = bottom ? 7 : 0;
+    const pawnR = bottom ? 6 : 1;
+    const pawnToR = bottom ? 5 : 2;
+    const isKingSide = side === 'king';
+    const pawnC = isKingSide ? 6 : 1;
+    const bishopC = isKingSide ? 5 : 2;
+    const bishopTo = {r:pawnR, c:pawnC};
+    const pawnTo = {r:pawnToR, c:pawnC};
+    const lineBlock = isKingSide
+      ? {r:pawnToR, c:5}
+      : {r:pawnToR, c:2};
+    const targets = bottom
+      ? (isKingSide ? [{r:4,c:4},{r:3,c:3}] : [{r:4,c:3},{r:3,c:4}])
+      : (isKingSide ? [{r:3,c:4},{r:4,c:3}] : [{r:3,c:3},{r:4,c:4}]);
+    return {homeR,pawnR,pawnToR,pawnC,bishopC,bishopTo,pawnTo,lineBlock,targets,side};
+  }
+
+  function aiMoveBlocksFutureBishopDevelopment(owner, mv){
+    if(!mv) return false;
+    for(const side of ['king','queen']){
+      const sq = aiFianchettoSquares(owner, side);
+      if(mv.r === sq.lineBlock.r && mv.c === sq.lineBlock.c){
+        const bishop = getPieceAt(sq.homeR, sq.bishopC);
+        const target = getPieceAt(sq.bishopTo.r, sq.bishopTo.c);
+        // If the fianchetto bishop is still home or the target is already ready,
+        // do not casually park a pawn on the diagonal square that makes that
+        // bishop useless for middle pressure.
+        if(bishop && bishop.owner === owner && bishop.type === 'B' && (!target || target.owner === owner)) return true;
+      }
+    }
+    return false;
+  }
+
+  function aiFianchettoOptions(owner){
+    const out = [];
+    for(const side of ['king','queen']){
+      const sq = aiFianchettoSquares(owner, side);
+      const pawn = getPieceAt(sq.pawnR, sq.pawnC);
+      const bishop = getPieceAt(sq.homeR, sq.bishopC);
+      if(!bishop || bishop.owner !== owner || bishop.type !== 'B' || bishop.captured) continue;
+
+      const targetOcc = getPieceAt(sq.bishopTo.r, sq.bishopTo.c);
+      const pawnReady = !targetOcc;
+      let bishopMove = null;
+      if(pawnReady){
+        bishopMove = legalMovesForPiece(bishop).find(m => !m.capture && m.r === sq.bishopTo.r && m.c === sq.bishopTo.c) || null;
+      }
+
+      let pawnMove = null;
+      if(pawn && pawn.owner === owner && pawn.type === 'P' && !pawn.captured && !pawn.moved){
+        pawnMove = legalMovesForPiece(pawn).find(m => !m.capture && m.r === sq.pawnTo.r && m.c === sq.pawnTo.c) || null;
+      }
+
+      let doubleBishopMove = null;
+      if(pawnMove){
+        doubleBishopMove = withTemporaryMove(pawn, pawnMove, () => {
+          return legalMovesForPiece(bishop).find(m => !m.capture && m.r === sq.bishopTo.r && m.c === sq.bishopTo.c) || null;
+        });
+      }
+
+      const beforeTargets = sq.targets.reduce((sum,t)=>sum+countEnemyAttacks(t.r,t.c,other(owner)),0);
+      let afterTargets = beforeTargets;
+      if(bishopMove){
+        afterTargets = withTemporaryMove(bishop,bishopMove,() => sq.targets.reduce((sum,t)=>sum+countEnemyAttacks(t.r,t.c,other(owner)),0));
+      } else if(doubleBishopMove){
+        afterTargets = withTemporaryMove(pawn,pawnMove,() => withTemporaryMove(bishop,doubleBishopMove,() => sq.targets.reduce((sum,t)=>sum+countEnemyAttacks(t.r,t.c,other(owner)),0)));
+      }
+
+      let score = 48 + (afterTargets-beforeTargets) * 24;
+      if(side === 'queen') score += 3;
+      if(psuedoSquareOwnedByEnemyOrChip(owner, sq.targets)) score += 8;
+      if(openBackRankSlots(owner).length === 0) score += 12;
+      if(state.players[owner]?.aiFianchettoPlan?.side === side) score += 18;
+      score += Math.random() * 2;
+
+      out.push({side, sq, pawn, bishop, pawnMove, bishopMove, doubleBishopMove, score});
+    }
+    out.sort((a,b)=>b.score-a.score);
+    return out;
+  }
+
+  function psuedoSquareOwnedByEnemyOrChip(owner, targets){
+    const enemy = other(owner);
+    return targets.some(t => state.land?.[t.r]?.[t.c] === enemy || state.genChip?.[t.r]?.[t.c] === enemy);
+  }
+
+  function chooseAiBishopFianchettoDevelopmentAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
+    if(state.turnNumber > 34) return null;
+
+    const plan = getAiOpeningPlan(owner);
+    const status = aiGeneratorGoalStatus(owner);
+    const style = getAiStyle(owner);
+    const incomeOK = status.ownIncome >= status.enemyIncome;
+    const options = aiFianchettoOptions(owner);
+    if(!options.length) return null;
+
+    const planned = plan === 'bishopDevelop' || !!ps.aiFianchettoPlan;
+    const lightChance = plan === 'balanced' ? .18 : (plan === 'queenPawn' ? .14 : .08);
+    const shouldTry = planned || ((ps.backRankDevelopUses || 0) === 0 && incomeOK && Math.random() < lightChance);
+    if(!shouldTry) return null;
+
+    const finish = options.find(o => o.bishopMove && (ps.aiFianchettoPlan?.side === o.side || planned || o.score >= 48));
+    if(finish){
+      const money = estimateMoveMoneyResult(finish.bishop, finish.bishopMove);
+      if(!money.bankruptsSelf && !aiMoveLeavesDangerousTurnTax(owner,money,getPieceAt(finish.bishopMove.r,finish.bishopMove.c))){
+        return () => {
+          ps.aiFianchettoPlan = null;
+          ps.aiFianchettoUses = (ps.aiFianchettoUses || 0) + 1;
+          ps.backRankDevelopUses = (ps.backRankDevelopUses || 0) + 1;
+          log(`${label(owner)} AI finishes bishop development to ${coord(finish.bishopMove.r,finish.bishopMove.c)} so the bishop pressures middle generator lines.`);
+          executeMove(finish.bishop.id, finish.bishopMove, false);
+        };
+      }
+    }
+
+    const best = options.find(o => o.pawnMove && o.doubleBishopMove);
+    if(!best) return null;
+
+    const pawnMoney = estimateMoveMoneyResult(best.pawn, best.pawnMove);
+    if(pawnMoney.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner,pawnMoney,getPieceAt(best.pawnMove.r,best.pawnMove.c))) return null;
+
+    const canDouble = voluntaryAffordable(owner,6) && ps.gold > 15 + Math.max(0, style.reserveShift || 0);
+    const preferDouble = plan === 'bishopDevelop' || (!incomeOK && ps.gold > 19) || (state.turnNumber <= 8 && Math.random() < .35);
+
+    if(canDouble && preferDouble){
+      return () => ({
+        aiSteps:[
+          () => {
+            ps.aiFianchettoUses = (ps.aiFianchettoUses || 0) + 1;
+            ps.backRankDevelopUses = (ps.backRankDevelopUses || 0) + 1;
+            ps.aiFianchettoPlan = null;
+            log(`${label(owner)} AI uses Double Move for a bishop development plan: pawn opens the diagonal, then bishop aims at middle generators.`);
+            buyDoubleMove(owner);
+          },
+          () => executeMove(best.pawn.id, best.pawnMove, false),
+          () => {
+            const bishop = state.pieces[best.bishop.id];
+            if(bishop && !bishop.captured && bishop.owner === owner){
+              const mv = legalMovesForPiece(bishop).find(m => !m.capture && m.r === best.sq.bishopTo.r && m.c === best.sq.bishopTo.c);
+              if(mv) executeMove(bishop.id, mv, false);
+            }
+          }
+        ]
+      });
+    }
+
+    if(incomeOK || plan === 'bishopDevelop'){
+      return () => {
+        ps.aiFianchettoPlan = {side:best.side, turnNumber:state.turnNumber};
+        log(`${label(owner)} AI starts a bishop development plan without spending Double Move because its income is not behind.`);
+        executeMove(best.pawn.id, best.pawnMove, false);
+      };
+    }
+
+    return null;
+  }
+
+  function chooseAiDevelopmentCardGambleAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
+    if(state.turnNumber > 28) return null;
+    if(countKings(owner) !== 1) return null;
+    if(!canDrawPieceCard(owner)) return null;
+    if((ps.aiDevelopmentCardDraws || 0) >= 1 && getAiOpeningPlan(owner) !== 'kingGambit') return null;
+
+    const plan = getAiOpeningPlan(owner);
+    const status = aiGeneratorGoalStatus(owner);
+    const hasDevelopmentSlot = openBackRankSlots(owner).length > 0 && ((ps.backRankDevelopUses || 0) > 0 || (ps.aiKnightStageUses || 0) > 0 || (ps.aiFianchettoUses || 0) > 0 || plan === 'kingGambit');
+    if(!hasDevelopmentSlot) return null;
+
+    const gold = ps.gold;
+    if(gold <= 13) return null;
+    if(status.incomeBehind && gold < 22 && !['kingGambit','knightStage'].includes(plan)) return null;
+
+    let chance = 0;
+    if(plan === 'kingGambit') chance = .78;
+    else if(plan === 'knightStage') chance = .42;
+    else if(plan === 'bishopDevelop') chance = .20;
+    else if(plan === 'balanced') chance = .12;
+    else chance = .08;
+    if(status.ownIncome >= status.enemyIncome) chance += .10;
+    if(gold > 24) chance += .10;
+    if(Math.random() > chance) return null;
+
+    return () => {
+      ps.aiDevelopmentCardDraws = (ps.aiDevelopmentCardDraws || 0) + 1;
+      log(`${label(owner)} AI uses the newly opened back-rank slot for a controlled card gamble instead of forcing another pawn support move.`);
+      drawCard(owner);
+    };
+  }
+
   function chooseAiDevelopBackRankAction(owner){
     const ps = state.players[owner];
     if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
@@ -6415,11 +6651,10 @@
 
         const movingOffBackRank = p.r === row && mv.r !== row;
         const openingBackSlot = movingOffBackRank && ['N','B','Q'].includes(p.type);
-        const rookBankPiece = p.type === 'R' && p.r === row;
-
-        // Development means open the back rank. Do not call bishop f1-g2-f1
-        // "development" after it already moved.
-        if(!openingBackSlot && !rookBankPiece) continue;
+        // Development means open the back rank with a minor piece or queen.
+        // Rooks are handled by the rook-activation routine so a one-square rook
+        // shuffle does not get mislabeled as useful development.
+        if(!openingBackSlot) continue;
         if(p.moved && p.type !== 'R') continue;
 
         const money = estimateMoveMoneyResult(p,mv);
@@ -6522,16 +6757,20 @@
     }
 
     if(plan === 'kingGambit'){
-      return chooseAiOpeningKingGambitAction(owner) || chooseAiKnightStagingAction(owner) || chooseAiOpeningVarietyAction(owner);
+      return chooseAiOpeningKingGambitAction(owner) || chooseAiKnightStagingAction(owner) || chooseAiDevelopmentCardGambleAction(owner) || chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiOpeningVarietyAction(owner);
     }
 
     if(plan === 'knightStage'){
-      return chooseAiKnightStagingAction(owner) || chooseAiOpeningKingGambitAction(owner) || chooseAiOpeningVarietyAction(owner);
+      return chooseAiKnightStagingAction(owner) || chooseAiDevelopmentCardGambleAction(owner) || chooseAiOpeningKingGambitAction(owner) || chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiOpeningVarietyAction(owner);
+    }
+
+    if(plan === 'bishopDevelop'){
+      return chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiDevelopmentCardGambleAction(owner) || chooseAiKnightStagingAction(owner) || chooseAiOpeningVarietyAction(owner);
     }
 
     if(plan === 'supportPawns'){
       if((ps.pawnSupportBookUses || 0) >= 1){
-        return chooseAiDevelopBackRankAction(owner) || chooseAiCastleDevelopmentAction(owner) || chooseAiOpeningVarietyAction(owner);
+        return chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiDevelopBackRankAction(owner) || chooseAiCastleDevelopmentAction(owner) || chooseAiDevelopmentCardGambleAction(owner) || chooseAiOpeningVarietyAction(owner);
       }
       return chooseAiOpeningVarietyAction(owner);
     }
@@ -6544,12 +6783,12 @@
     }
 
     if(plan === 'queenPawn'){
-      return chooseAiOpeningVarietyAction(owner) || chooseAiDevelopBackRankAction(owner);
+      return chooseAiOpeningVarietyAction(owner) || chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiDevelopBackRankAction(owner);
     }
 
     // Balanced still gets a little book variety instead of only d/e pawn expansion.
     if(plan === 'balanced' && Math.random() < .65){
-      return chooseAiOpeningVarietyAction(owner) || chooseAiKnightStagingAction(owner);
+      return chooseAiBishopFianchettoDevelopmentAction(owner) || chooseAiOpeningVarietyAction(owner) || chooseAiKnightStagingAction(owner) || chooseAiDevelopmentCardGambleAction(owner);
     }
 
     return null;
@@ -6773,6 +7012,9 @@
           if([3,4].includes(firstStartCol)) score += 12;
           if([2,3,4,5].includes(secondStartCol)) score += 8;
           if(aiIsRookShieldPawn(firstP) || aiIsRookShieldPawn(bestSupport.secondP)) score -= 70;
+          const blocksFutureBishop = aiMoveBlocksFutureBishopDevelopment(owner, first) || aiMoveBlocksFutureBishopDevelopment(owner, bestSupport.second);
+          if(blocksFutureBishop && plan !== 'supportPawns') score -= 55;
+          if(blocksFutureBishop && (plan === 'bishopDevelop' || ps.aiFianchettoPlan)) score -= 999;
           if((ps.backRankDevelopUses || 0) === 0 && state.turnNumber > 6) score -= 28;
           if(isDefaultGen(first.r,first.c)) score += 18;
           if(first.note === 'paid 3-square pawn start') score += 4;
@@ -6839,6 +7081,7 @@
 
           const shieldCount = (aiIsRookShieldPawn(a.p) ? 1 : 0) + (aiIsRookShieldPawn(b.p) ? 1 : 0);
           if(shieldCount > 0) continue;
+          if(plan !== 'wildPawns' && (aiMoveBlocksFutureBishopDevelopment(owner,a.mv) || aiMoveBlocksFutureBishopDevelopment(owner,b.mv))) continue;
 
           let score = 44;
           if(plan === 'wildPawns') score += 26;
@@ -6881,6 +7124,7 @@
       if(plan === 'queenPawn' && c.type === 'singleQueenFile') c.score += 45;
       if(plan === 'supportPawns' && c.type === 'supportPawnDouble') c.score += 44;
       if(plan === 'wildPawns' && c.type === 'rareTwoThreeSquare') c.score += 55;
+      if(plan === 'bishopDevelop') c.score -= 32;
       if(plan === 'instantChip' && c.type !== 'singleQueenFile') c.score -= 4;
       if(plan === 'knightStage') c.score -= 10; // knight plan should actually develop knights first.
     }
@@ -10016,5 +10260,43 @@
 })();
 </script>
 
-</body>
-</html>
+
+
+<div id="give-freely-root-ejkiikneibegknkgimmihdpcbcedgmpo" class="give-freely-root" data-extension-id="ejkiikneibegknkgimmihdpcbcedgmpo" data-extension-name="Volume Booster" style="display: block;"><template shadowrootmode="open"><style>
+  :host {
+    all: initial;
+  }
+
+  .gf-scroll-remove::-webkit-scrollbar {
+    border-radius-bottom-right: 15px;
+  }
+
+  button {
+    cursor: pointer;
+    transition: transform 0.1s ease;
+  }
+
+  button:active {
+    transform: scale(0.98);
+  }
+
+  .give-freely-close-button:hover {
+    opacity: 0.7;
+  }
+
+  input[type="radio"] {
+    margin-right: 8px;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid #e5e5e5;
+    margin: 1em 0;
+  }
+
+  @media (max-width: 600px), (max-height: 480px) {
+    #give-freely-checkout-popup {
+      display: none !important;
+    }
+  }
+</style><div><div class="gf-app"></div></div></template></div></body></html>
