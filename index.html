@@ -477,7 +477,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v79</div>
+    <div class="versionBadge">Version v80</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -789,6 +789,10 @@
       timeMs:START_CLOCK_MS,
       kingGambitPlan:null,
       kingGambitDraws:0,
+      pawnSupportBookUses:0,
+      wildPawnBookUses:0,
+      backRankDevelopUses:0,
+      aiLastPieceMove:null,
       aiTemper:null,
       aiLastStyle:null
     };
@@ -812,7 +816,8 @@
       castleHomeRow: castleOriginal ? r : null,
       castleHomeCol: castleOriginal ? c : null,
       fromCard,
-      pawnStartRow
+      pawnStartRow,
+      pawnStartCol: type === 'P' ? c : null
     };
     s.board[r][c] = id;
     return id;
@@ -1208,6 +1213,7 @@
     state.board[fromR][fromC] = null;
     state.board[move.r][move.c] = p.id;
     p.r = move.r; p.c = move.c; p.moved = true;
+    ps.aiLastPieceMove = {pieceId:p.id, fromR, fromC, toR:move.r, toC:move.c, turnNumber:state.turnNumber, type:p.type};
     log(`${label(owner)} moved ${p.type} from ${coord(fromR,fromC)} to ${coord(move.r,move.c)}${target ? ' and captured ' + target.type : ''}.`);
     if(!target) playSfx('move');
     resolveLanding(p);
@@ -2447,6 +2453,18 @@
         return;
       }
 
+      const backRankDevelopmentAction = chooseAiDevelopBackRankAction(owner);
+      if(backRankDevelopmentAction && !findAnyKingLineThreat(owner)){
+        runAiActionAndFinish(owner, backRankDevelopmentAction);
+        return;
+      }
+
+      const castleDevelopmentAction = chooseAiCastleDevelopmentAction(owner);
+      if(castleDevelopmentAction && !findAnyKingLineThreat(owner)){
+        runAiActionAndFinish(owner, castleDevelopmentAction);
+        return;
+      }
+
       const proactiveXXBuildAction = chooseAiProactiveXXBuildAction(owner);
       if(proactiveXXBuildAction && !findAnyKingLineThreat(owner)){
         runAiActionAndFinish(owner, proactiveXXBuildAction);
@@ -2546,6 +2564,18 @@
       const rookActivationAction = chooseAiRookActivationAction(owner);
       if(rookActivationAction){
         runAiActionAndFinish(owner, rookActivationAction);
+        return;
+      }
+
+      const laterBackRankDevelopmentAction = chooseAiDevelopBackRankAction(owner);
+      if(laterBackRankDevelopmentAction){
+        runAiActionAndFinish(owner, laterBackRankDevelopmentAction);
+        return;
+      }
+
+      const laterCastleDevelopmentAction = chooseAiCastleDevelopmentAction(owner);
+      if(laterCastleDevelopmentAction){
+        runAiActionAndFinish(owner, laterCastleDevelopmentAction);
         return;
       }
 
@@ -5592,6 +5622,8 @@
       if(p.type === 'Q' && state.turnNumber < 46 && aiPassiveIncome(owner) >= aiPassiveIncome(other(owner)) - 1) continue;
       for(const mv of legalMovesForPiece(p)){
         if(mv.capture) continue;
+        if(aiWouldUndoLastMove(owner,p,mv)) continue;
+        if(p.moved && p.type !== 'R' && mv.r === homeRank(owner)) continue;
 
         const centerDistDest = Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c);
         const landsOnHotCenter = centerDistDest <= 3 || hasGeneratorAt(mv.r,mv.c) || state.customGen?.[mv.r]?.[mv.c];
@@ -5620,7 +5652,7 @@
         let score = 34 + pressureGain + mRandSmall();
         if(p.type === 'R') score += 24;   // rooks were too asleep.
         if(p.type === 'N') score += 10;
-        if(p.type === 'B') score += 8;
+        if(p.type === 'B') score += p.moved ? -18 : 8;
         if(p.type === 'Q') score -= 42;   // queen was over-shuffling instead of developing real support.
 
         if(!p.moved) score += p.type === 'R' ? 18 : 7;
@@ -6291,6 +6323,141 @@
     return ps.openingPlan;
   }
 
+  function aiPawnStartCol(p){
+    return Number.isInteger(p?.pawnStartCol) ? p.pawnStartCol : p?.c;
+  }
+
+  function aiIsRookShieldPawn(p){
+    if(!p || p.type !== 'P') return false;
+    const startCol = aiPawnStartCol(p);
+    return [0,1,6,7].includes(startCol);
+  }
+
+  function aiPawnMoveWeakensRookBank(owner, p, mv){
+    if(!aiIsRookShieldPawn(p) || !mv || mv.capture) return false;
+    if(hasGeneratorAt(mv.r,mv.c) || state.customGen?.[mv.r]?.[mv.c]) return false;
+    const startCol = aiPawnStartCol(p);
+    // a/b/g/h pawns are the rook-side shield. Do not spend them on fake support
+    // moves unless they are actually taking a generator/capture.
+    return [0,1,6,7].includes(startCol);
+  }
+
+  function aiWouldUndoLastMove(owner, p, mv){
+    const last = state.players?.[owner]?.aiLastPieceMove;
+    if(!last || !p || !mv) return false;
+    return last.pieceId === p.id && last.fromR === mv.r && last.fromC === mv.c;
+  }
+
+  function chooseAiDevelopBackRankAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
+    if(state.turnNumber > 46) return null;
+
+    const row = homeRank(owner);
+    const style = getAiStyle(owner);
+    let best = null;
+    let bestScore = -99999;
+
+    for(const p of livingPieces(owner).filter(x => ['N','B','R','Q'].includes(x.type))){
+      for(const mv of legalMovesForPiece(p)){
+        if(mv.capture) continue;
+        if(aiWouldUndoLastMove(owner,p,mv)) continue;
+
+        const movingOffBackRank = p.r === row && mv.r !== row;
+        const openingBackSlot = movingOffBackRank && ['N','B','Q'].includes(p.type);
+        const rookBankPiece = p.type === 'R' && p.r === row;
+
+        // Development means open the back rank. Do not call bishop f1-g2-f1
+        // "development" after it already moved.
+        if(!openingBackSlot && !rookBankPiece) continue;
+        if(p.moved && p.type !== 'R') continue;
+
+        const money = estimateMoveMoneyResult(p,mv);
+        if(money.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner,money,getPieceAt(mv.r,mv.c))) continue;
+
+        const postRisk = aiPostMovePieceCaptureRisk(owner,p.id,mv);
+        if(postRisk.severe && state.land?.[mv.r]?.[mv.c] !== owner) continue;
+
+        let score = 42;
+        const centerDist = Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c);
+        score += (7-centerDist) * 2;
+        if(openingBackSlot) score += 24;
+        if(p.type === 'N'){
+          score += 18;
+          const idealR = owner === PLAYER ? 5 : 2;
+          if(p.c === 1 && mv.c === 2 && mv.r === idealR) score += 30; // queen-side knight c3/c6 supports both middle colors.
+          else if(p.c === 1) score += 14;
+          else if(p.c === 6) score += 8;
+        }
+        if(p.type === 'B') score += 16;
+        if(p.type === 'Q') score -= 18;
+        if(p.type === 'R'){
+          score += 10;
+          if(isUnmovedCornerRook(p)) score += 18;
+          if(mv.r === row) score += 10;
+        }
+
+        // Opening a card slot matters because extra king is +5 income.
+        if(openBackRankSlots(owner).length === 0 && openingBackSlot) score += 18;
+        if(aiEnemyActiveXXIncome(owner) >= 5 && openingBackSlot) score += 12;
+
+        score -= (mv.cost || 0) * 4;
+        if(postRisk.bad) score -= postRisk.risk * .35;
+        score += Math.random() * 2;
+
+        if(score > bestScore){
+          bestScore = score;
+          best = {pieceId:p.id, move:{...mv}, score, type:p.type};
+        }
+      }
+    }
+
+    if(!best || bestScore < 50) return null;
+
+    return () => {
+      ps.backRankDevelopUses = (ps.backRankDevelopUses || 0) + 1;
+      log(`${label(owner)} AI develops a real back-rank piece instead of stripping more rook-side pawns.`);
+      executeMove(best.pieceId, best.move, false);
+    };
+  }
+
+  function chooseAiCastleDevelopmentAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
+    if(ps.castlingUsed || state.turnNumber > 70) return null;
+
+    const sides = ['king','queen'];
+    let best = null;
+    let bestScore = -99999;
+
+    for(const side of sides){
+      const info = castleInfo(owner, side);
+      if(!info?.ok) continue;
+      let score = 45;
+      if(side === 'king') score += 4;
+      const kingLand = state.land?.[info.row]?.[info.kingTo];
+      const rookLand = state.land?.[info.row]?.[info.rookTo];
+      if(kingLand === owner) score += 10;
+      if(rookLand === owner) score += 7;
+      if(!kingLand) score += 4;
+      if(!rookLand) score += 3;
+      if(aiEnemyActiveXXIncome(owner) >= 5) score += 8;
+      score -= countEnemyAttacks(info.row,info.kingTo,owner) * 8;
+      score -= countEnemyAttacks(info.row,info.rookTo,owner) * 4;
+      if(score > bestScore){
+        bestScore = score;
+        best = {info, score, side};
+      }
+    }
+
+    if(!best || bestScore < 42) return null;
+
+    return () => {
+      log(`${label(owner)} AI castles to activate the rook and protect the back rank.`);
+      executeMove(best.info.king.id, best.info.move, false);
+    };
+  }
+
   function chooseAiOpeningBookAction(owner){
     const ps = state.players[owner];
     if(!ps || !hasActionSlot(owner) || ps.doubleMovesRemaining || !hasKing(owner)) return null;
@@ -6312,8 +6479,22 @@
       return chooseAiKnightStagingAction(owner) || chooseAiOpeningKingGambitAction(owner) || chooseAiOpeningVarietyAction(owner);
     }
 
-    if(plan === 'supportPawns' || plan === 'queenPawn' || plan === 'wildPawns'){
+    if(plan === 'supportPawns'){
+      if((ps.pawnSupportBookUses || 0) >= 1){
+        return chooseAiDevelopBackRankAction(owner) || chooseAiCastleDevelopmentAction(owner) || chooseAiOpeningVarietyAction(owner);
+      }
       return chooseAiOpeningVarietyAction(owner);
+    }
+
+    if(plan === 'wildPawns'){
+      if((ps.wildPawnBookUses || 0) >= 1 || (ps.pawnSupportBookUses || 0) >= 1){
+        return chooseAiDevelopBackRankAction(owner) || chooseAiCastleDevelopmentAction(owner) || chooseAiOpeningVarietyAction(owner);
+      }
+      return chooseAiOpeningVarietyAction(owner);
+    }
+
+    if(plan === 'queenPawn'){
+      return chooseAiOpeningVarietyAction(owner) || chooseAiDevelopBackRankAction(owner);
     }
 
     // Balanced still gets a little book variety instead of only d/e pawn expansion.
@@ -6501,11 +6682,14 @@
 
     const addSupportPawnDouble = () => {
       if(!voluntaryAffordable(owner,6) || ps.gold < 15 + Math.max(0, style.reserveShift || 0)) return;
+      if((ps.pawnSupportBookUses || 0) >= 1) return;
 
       for(const firstP of livingPieces(owner).filter(x => x.type === 'P')){
+        if(aiPawnMoveWeakensRookBank(owner, firstP, {capture:false, r:firstP.r, c:firstP.c})) continue;
         const firstMoves = legalMovesForPiece(firstP)
           .filter(mv => !mv.capture && (isDefaultGen(mv.r,mv.c) || Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c) <= 3))
-          .filter(mv => ['first double','paid 3-square pawn start','paid 2-square pawn move','pawn'].includes(mv.note));
+          .filter(mv => ['first double','paid 3-square pawn start','paid 2-square pawn move','pawn'].includes(mv.note))
+          .filter(mv => !aiPawnMoveWeakensRookBank(owner, firstP, mv));
 
         for(const first of firstMoves){
           const firstMoney = estimateMoveMoneyResult(firstP,first);
@@ -6516,6 +6700,7 @@
             for(const secondP of livingPieces(owner).filter(x => x.type === 'P' && x.id !== firstP.id)){
               for(const second of legalMovesForPiece(secondP)){
                 if(second.capture) continue;
+                if(aiPawnMoveWeakensRookBank(owner, secondP, second)) continue;
                 const money = estimateMoveMoneyResult(secondP,second);
                 if(money.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner,money,getPieceAt(second.r,second.c))) continue;
                 const defenders = withTemporaryMove(secondP,second,() => countOwnDefenders(first.r,first.c,owner,firstP.id));
@@ -6534,6 +6719,12 @@
           if(roughAfter <= reserve) continue;
 
           let score = 54;
+          const firstStartCol = aiPawnStartCol(firstP);
+          const secondStartCol = aiPawnStartCol(bestSupport.secondP);
+          if([3,4].includes(firstStartCol)) score += 12;
+          if([2,3,4,5].includes(secondStartCol)) score += 8;
+          if(aiIsRookShieldPawn(firstP) || aiIsRookShieldPawn(bestSupport.secondP)) score -= 70;
+          if((ps.backRankDevelopUses || 0) === 0 && state.turnNumber > 6) score -= 28;
           if(isDefaultGen(first.r,first.c)) score += 18;
           if(first.note === 'paid 3-square pawn start') score += 4;
           if(first.note === 'first double') score += 6;
@@ -6550,7 +6741,8 @@
               action:() => ({
                 aiSteps:[
                   () => {
-                    log(`${label(owner)} AI uses Double Move for a pawn push plus support pawn, not the instant chip combo.`);
+                    ps.pawnSupportBookUses = (ps.pawnSupportBookUses || 0) + 1;
+                    log(`${label(owner)} AI uses one planned pawn-support double move, then will develop back-rank pieces.`);
                     buyDoubleMove(owner);
                   },
                   () => executeMove(firstP.id,first,false),
@@ -6565,12 +6757,15 @@
 
     const addRareTwoThreeSquarePawns = () => {
       if(!voluntaryAffordable(owner,6) || ps.gold < 18 + Math.max(0, style.reserveShift || 0)) return;
-      if(Math.random() > .18) return;
+      if((ps.wildPawnBookUses || 0) >= 1) return;
+      const wildChance = plan === 'wildPawns' ? .82 : .12;
+      if(Math.random() > wildChance) return;
 
       const threes = [];
       for(const p of livingPieces(owner).filter(x => x.type === 'P')){
         for(const mv of legalMovesForPiece(p)){
           if(mv.note !== 'paid 3-square pawn start' || mv.capture) continue;
+          if(aiPawnMoveWeakensRookBank(owner,p,mv)) continue;
           if(!isDefaultGen(mv.r,mv.c) && Math.abs(3.5-mv.r)+Math.abs(3.5-mv.c) > 3) continue;
           const money = estimateMoveMoneyResult(p,mv);
           if(money.bankruptsSelf || aiMoveLeavesDangerousTurnTax(owner,money,getPieceAt(mv.r,mv.c))) continue;
@@ -6592,7 +6787,11 @@
           const roughAfter = ps.gold - 6 - (a.mv.cost || 0) - (b.mv.cost || 0);
           if(roughAfter <= reserve) continue;
 
+          const shieldCount = (aiIsRookShieldPawn(a.p) ? 1 : 0) + (aiIsRookShieldPawn(b.p) ? 1 : 0);
+          if(shieldCount > 0) continue;
+
           let score = 44;
+          if(plan === 'wildPawns') score += 26;
           if(isDefaultGen(a.mv.r,a.mv.c)) score += 13;
           if(isDefaultGen(b.mv.r,b.mv.c)) score += 13;
           if(a.p.c === 3 || b.p.c === 3) score += 5;
@@ -6611,7 +6810,8 @@
           action:() => ({
             aiSteps:[
               () => {
-                log(`${label(owner)} AI gambles on two aggressive 3-square pawn pushes for opening space.`);
+                ps.wildPawnBookUses = (ps.wildPawnBookUses || 0) + 1;
+                log(`${label(owner)} AI gambles on two aggressive central 3-square pawn pushes, while keeping rook-side shields intact.`);
                 buyDoubleMove(owner);
               },
               () => executeMove(best.a.p.id,best.a.mv,false),
@@ -8372,6 +8572,9 @@
     }
 
     if(p.type === 'P'){
+      if(aiPawnMoveWeakensRookBank(p.owner,p,mv)){
+        score -= 45;
+      }
       const end = pawnPromotionRow(p.owner);
       const progress = pawnProgressFor(p, mv.r);
       score += progress * .65;
