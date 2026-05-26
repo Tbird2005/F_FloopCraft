@@ -3,7 +3,7 @@
 <html lang="en" style="--app-scale: 1.0622222222222222;"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Capitalism Chess Online v82 Bishop Timing Fix</title>
+<title>Capitalism Chess Online v83</title>
 <style>
   :root{
     --bg:#101319;
@@ -477,7 +477,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v82 Bishop Timing Fix</div>
+    <div class="versionBadge">Version v83</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -2450,6 +2450,12 @@
       const kinglessXXAction = chooseAiKinglessXXSurvivalAction(owner);
       if(kinglessXXAction){
         runAiActionAndFinish(owner, kinglessXXAction);
+        return;
+      }
+
+      const ownedChipPawnCaptureAction = chooseAiOwnedChipPawnCaptureAction(owner);
+      if(ownedChipPawnCaptureAction){
+        runAiActionAndFinish(owner, ownedChipPawnCaptureAction);
         return;
       }
 
@@ -4515,6 +4521,85 @@
       const severe = risk >= (moved.type === 'Q' ? 62 : moved.type === 'R' ? 58 : 52);
       return {bad:risk >= 48, severe, risk, threats:threats.length, bestThreat, defenders, landOwned, economySquare};
     });
+  }
+
+  function chooseAiOwnedChipPawnCaptureAction(owner){
+    const ps = state.players[owner];
+    if(!ps || !hasActionSlot(owner) || !hasKing(owner)) return null;
+
+    const enemy = other(owner);
+    const style = getAiStyle(owner);
+    const status = aiGeneratorGoalStatus(owner);
+    let best = null;
+    let bestScore = -99999;
+
+    for(const m of allMoves(owner, style)){
+      const p = state.pieces[m.pieceId];
+      const target = getPieceAt(m.move.r, m.move.c);
+      if(!p || p.type !== 'P') continue;
+      if(!target || target.owner !== enemy || target.type === 'K' || target.type === 'P') continue;
+
+      const currentHasOwnedChip = state.genChip?.[p.r]?.[p.c] === owner;
+      const currentIsGenerator = hasGeneratorAt(p.r,p.c) || !!state.customGen?.[p.r]?.[p.c];
+      if(!currentHasOwnedChip || !currentIsGenerator) continue;
+
+      const targetValue = pieceValues[target.type] || 1;
+      if(targetValue < 3) continue;
+
+      const money = m.money || estimateMoveMoneyResult(p, m.move);
+      if(money?.bankruptsSelf && !money?.winsImmediately) continue;
+      if(aiMoveLeavesDangerousTurnTax(owner, money, target) && !money?.winsImmediately) continue;
+
+      const enemyAttacksDest = countEnemyAttacks(m.move.r,m.move.c,owner);
+      const ownDefDest = countOwnDefenders(m.move.r,m.move.c,owner,p.id);
+      const targetHitsOwnedChip = pseudoAttacks(target).some(a => a.r === p.r && a.c === p.c);
+      const targetNearCenter = isImportantMiddleSquare(target.r,target.c);
+      const destIsEnemyLand = state.land?.[m.move.r]?.[m.move.c] === enemy;
+      const opensOwnQueenFile = aiPawnStartCol(p) === 3 || aiPawnStartCol(p) === 4;
+
+      let score = 92;
+      score += targetValue * 24;
+      if(target.type === 'N' || target.type === 'B') score += 24;
+      if(target.type === 'R') score += 42;
+      if(target.type === 'Q') score += 78;
+      if(targetNearCenter) score += 20;
+      if(targetHitsOwnedChip) score += 18;
+      if(opensOwnQueenFile) score += 14;
+      if(status.incomeBehind) score += 14;
+      if(state.genChip?.[m.move.r]?.[m.move.c] === enemy) score += 12;
+      if(hasGeneratorAt(m.move.r,m.move.c)) score += 8;
+      if(destIsEnemyLand) score += 6; // paying 1 tax with a pawn is acceptable to remove a minor/major.
+      score += (money?.captureGain || 0) * 8;
+      score += (money?.genGain || 0) * 4;
+      score -= (money?.taxPaid || 0) * 4;
+      score -= (m.move.cost || 0) * 5;
+
+      // Pawn trades are allowed to be "ugly." A pawn leaving an owned chip does
+      // not stop the passive income, so removing a knight/bishop from the middle
+      // is usually worth the pawn even if the pawn dies later.
+      if(enemyAttacksDest > ownDefDest) score -= Math.min(18, (enemyAttacksDest-ownDefDest) * 6);
+      if(money?.futureTurnTax) score -= money.futureTurnTax * 3;
+
+      if(score > bestScore){
+        bestScore = score;
+        best = {
+          pieceId:p.id,
+          move:{...m.move},
+          targetType:target.type,
+          targetCoord:coord(target.r,target.c),
+          fromCoord:coord(p.r,p.c),
+          score
+        };
+      }
+    }
+
+    if(!best || bestScore < 98) return null;
+
+    return () => {
+      log(`${label(owner)} AI trades its chip-holder pawn from ${best.fromCoord} to remove the ${best.targetType} on ${best.targetCoord} because the generator chip keeps paying without the pawn.`);
+      executeMove(best.pieceId, best.move, false);
+      if(!state.gameOver) aiMaybeBuyLandUnderPiece(owner, best.pieceId, true);
+    };
   }
 
   function chooseAiFreeMaterialCaptureAction(owner){
