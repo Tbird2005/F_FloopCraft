@@ -3,7 +3,7 @@
 <html lang="en" style="--app-scale: 1.0622222222222222;"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Capitalism Chess Online v91</title>
+<title>Capitalism Chess Online v93</title>
 <style>
   :root{
     --bg:#101319;
@@ -475,7 +475,7 @@
 <div class="menuScreen" id="mainMenu">
   <div class="menuCard">
     <h2 class="menuTitle">Capitalism Chess</h2>
-    <div class="versionBadge">Version v91</div>
+    <div class="versionBadge">Version v93</div>
     <div class="menuSub">Pick how you want to play. Offline keeps everything on this computer. Multiplayer uses a 4 character room code so a friend can join.</div>
     <div class="menuActions">
       <button id="playOfflineBtn" class="bigPrimary">Play Offline</button>
@@ -705,6 +705,12 @@
   const key = (r,c) => `${r},${c}`;
   const isDefaultGen = (r,c) => defaultGenerators.has(key(r,c));
   const hasGeneratorAt = (r,c) => isDefaultGen(r,c) || !!(state?.customGen?.[r]?.[c]);
+  const xxIncomeAmountAt = (r,c) => isDefaultGen(r,c) ? 6 : 5;
+  const activeKingInState = (s, owner) => owner ? (s === state ? hasKing(owner) : hasKingQuiet(s, owner)) : false;
+  // v93: a generator chip is the ownership certificate for every generator on that square.
+  // If an XX generator is built on a square with a chip, the chip owner controls the XX income.
+  // If there is no chip, XX behaves like an unowned generator and pays the occupying piece.
+  const xxControllerAt = (r,c,s=state, occupantOwner=null) => s?.genChip?.[r]?.[c] || occupantOwner;
   const coord = (r,c) => files[c] + (8-r);
   const matrix = fill => Array.from({length:SIZE},()=>Array.from({length:SIZE},()=> typeof fill === 'function' ? fill() : fill));
   const deepClone = obj => JSON.parse(JSON.stringify(obj));
@@ -973,23 +979,32 @@
     }
 
     // All generator income pays every turn regardless of whose move it is.
+    // v93 rule: a generator chip controls every generator on that square, including XX.
     for(const owner of owners){
       const kings = countKings(owner);
 
-      // Unowned default generators and green XX generators pay pieces that are physically on them.
+      // Unowned default generators and unchipped XX generators pay the piece physically on them.
+      // If a chip exists on the square, the occupying piece does NOT get the XX money.
       for(const p of livingPieces(owner)){
-        if(isDefaultGen(p.r,p.c) && !state.genChip[p.r][p.c]){
+        const chipOwner = state.genChip[p.r][p.c];
+        if(isDefaultGen(p.r,p.c) && !chipOwner){
           gainGold(owner, 1, `from unowned generator at ${coord(p.r,p.c)}`);
         }
-        if(state.customGen[p.r][p.c]){
-          gainGold(owner, isDefaultGen(p.r,p.c) ? 6 : 5, `from green XX generator at ${coord(p.r,p.c)}`);
+        if(state.customGen[p.r][p.c] && !chipOwner){
+          gainGold(owner, xxIncomeAmountAt(p.r,p.c), `from unowned green XX generator at ${coord(p.r,p.c)}`);
         }
       }
 
       // Owned generator chips are passive income, but ineffective while kingless.
+      // A chip on an XX square controls that XX income too.
       if(kings > 0){
         for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
-          if(state.genChip[r][c] === owner) gainGold(owner, 1, `from generator ownership chip at ${coord(r,c)}`);
+          if(state.genChip[r][c] === owner){
+            gainGold(owner, 1, `from generator ownership chip at ${coord(r,c)}`);
+            if(state.customGen[r][c]){
+              gainGold(owner, xxIncomeAmountAt(r,c), `from green XX generator controlled by chip at ${coord(r,c)}`);
+            }
+          }
         }
       }
       if(state.gameOver) return;
@@ -1323,9 +1338,16 @@
       } else if(chipOwner === p.owner && hasKing(p.owner)){
         gainGold(p.owner, 1, `own generator landing at ${coord(p.r,p.c)}`);
       }
-    }
-    if(state.customGen[p.r][p.c]){
-      gainGold(p.owner, isDefaultGen(p.r,p.c) ? 6 : 5, `green XX generator landing at ${coord(p.r,p.c)}`);
+      if(state.customGen[p.r][p.c]){
+        const xxGain = xxIncomeAmountAt(p.r,p.c);
+        if(chipOwner){
+          if(hasKing(chipOwner)){
+            gainGold(chipOwner, xxGain, `green XX generator landing controlled by chip at ${coord(p.r,p.c)}`);
+          }
+        } else {
+          gainGold(p.owner, xxGain, `green XX generator landing at ${coord(p.r,p.c)}`);
+        }
+      }
     }
   }
 
@@ -1438,6 +1460,15 @@
     if(!hasGeneratorAt(p.r,p.c)) return false;
     const current = state.genChip[p.r][p.c];
     if(current === owner) return false;
+
+    // v92: the AI must not buy an enemy chip if the payment itself hands the
+    // opponent the gold-bar race. v91 could pay 8g to the human right before
+    // the human bought the 100g bar.
+    if(shouldAutoAct(owner) && current && current === other(owner) && aiShouldAvoidPayingEnemyNearGoldBar(owner, current ? 8 : 5)){
+      log(`${label(owner)} AI refuses to pay ${label(other(owner))} for a generator chip because it feeds the gold-bar win.`);
+      return false;
+    }
+
     if(ps.freeGenChip){
       ps.freeGenChip = false;
       state.genChip[p.r][p.c] = owner;
@@ -2918,7 +2949,7 @@
     safe.sort((a,b)=>b.score-a.score);
     const best = safe[0];
     return () => {
-      if(best.showLog !== false) log(`${label(owner)} AI v91 chooses: ${best.label}.`);
+      if(best.showLog !== false) log(`${label(owner)} AI v93 chooses: ${best.label}.`);
       return best.action();
     };
   }
@@ -3130,6 +3161,8 @@
       if(state.genChip?.[p.r]?.[p.c] === owner) continue;
       const current = state.genChip[p.r][p.c];
       const cost = current ? 8 : 5;
+      if(current === enemy && aiV92PaymentFeedsEnemyGoldBar(owner, cost)) continue;
+      if(current === enemy && aiShouldAvoidPayingEnemyNearGoldBar(owner, cost)) continue;
       if(!aiV85CanSpend(owner, cost, current === enemy)) continue;
       let score = base + 250 - cost * 9;
       if(current === enemy) score += 190;
@@ -3231,6 +3264,65 @@
     return false;
   }
 
+  function aiV92SafeXXBankPiece(owner, p){
+    if(!p || p.captured || p.owner !== owner) return false;
+    if(state.customGen?.[p.r]?.[p.c]) return false;
+    const enemy = other(owner);
+    const landOwner = state.land?.[p.r]?.[p.c];
+    const enemyChip = state.genChip?.[p.r]?.[p.c] === enemy;
+    const directThreats = enemyCaptureThreatsOnPiece(owner,p).length;
+    const dblThreat = enemyCanDoubleMoveCaptureSquare(owner,p.r,p.c);
+    const home = p.r === homeRank(owner);
+    const protectedOrHome = home || p.type === 'K' || landOwner === owner;
+
+    // A first XX is supposed to be a bank. Do not build the bank on a square the
+    // opponent already partially owns or can immediately turn into its own payday.
+    if(enemyChip) return false;
+    if(directThreats > 0) return false;
+    if(dblThreat && !home) return false;
+    if(landOwner === enemy) return false;
+    if(!protectedOrHome && !isDefaultGen(p.r,p.c)) return false;
+    if(home && p.type === 'P') return false;
+    return true;
+  }
+
+  function aiV92HasSafeXXBank(owner){
+    return livingPieces(owner).some(p => aiV92SafeXXBankPiece(owner,p));
+  }
+
+  function aiV92DangerousXXSquare(owner, p){
+    if(!p || p.captured) return true;
+    const enemy = other(owner);
+    const enemyChip = state.genChip?.[p.r]?.[p.c] === enemy;
+    const directThreats = enemyCaptureThreatsOnPiece(owner,p).length;
+    const dblThreat = enemyCanDoubleMoveCaptureSquare(owner,p.r,p.c);
+    const enemyLand = state.land?.[p.r]?.[p.c] === enemy;
+
+    // Building an XX on an enemy chip/default-generator fight is not a bank. It
+    // is a middle gift unless the piece is already very safe.
+    if(enemyChip && (directThreats > 0 || dblThreat || enemyLand || !aiV92SafeXXBankPiece(owner,p))) return true;
+    if(dblThreat && (enemyChip || isDefaultGen(p.r,p.c) || state.land?.[p.r]?.[p.c] !== owner)) return true;
+    if(directThreats >= 2) return true;
+    return false;
+  }
+
+  function aiV92OpponentEconomyRunaway(owner){
+    const enemy = other(owner);
+    const ownNet = aiV91NetStartTurnEconomy(owner);
+    const enemyNet = aiV91NetStartTurnEconomy(enemy);
+    return aiEnemyActiveXXIncome(owner) >= 5 || countKings(enemy) > countKings(owner) || enemyNet >= ownNet + 7;
+  }
+
+  function aiV92PaymentFeedsEnemyGoldBar(owner, amount){
+    const enemy = other(owner);
+    const enemyGold = state.players?.[enemy]?.gold || 0;
+    const enemyNet = Math.max(0, aiV91NetStartTurnEconomy(enemy));
+    if(enemyGold + amount >= 100) return true;
+    if(enemyGold + amount + enemyNet >= 100) return true;
+    if(projectedGoldAtNextTurnStart(state, enemy) + amount >= 100) return true;
+    return false;
+  }
+
   function aiV87XXCandidates(owner){
     const out = [];
     const ps = state.players[owner];
@@ -3241,6 +3333,8 @@
     const ownNet = aiV91NetStartTurnEconomy(owner);
     const enemyNet = aiV91NetStartTurnEconomy(enemy);
     const incomeBehind = ownNet < enemyNet - 4;
+    const safeBankAvailable = aiV92HasSafeXXBank(owner);
+    const opponentRunaway = aiV92OpponentEconomyRunaway(owner);
 
     for(const p of livingPieces(owner)){
       if(state.customGen?.[p.r]?.[p.c]) continue;
@@ -3250,28 +3344,46 @@
 
       const ownLand = state.land?.[p.r]?.[p.c] === owner;
       const enemyLand = state.land?.[p.r]?.[p.c] === enemy;
-      const risk = enemyCaptureThreatsOnPiece(owner,p).length;
+      const enemyChip = state.genChip?.[p.r]?.[p.c] === enemy;
+      const directThreats = enemyCaptureThreatsOnPiece(owner,p).length;
+      const dblThreat = enemyCanDoubleMoveCaptureSquare(owner,p.r,p.c);
       const income = isDefaultGen(p.r,p.c) ? 6 : 5;
       const center = aiV85CenterValue(p.r,p.c);
       const homeRankBuild = p.r === homeRank(owner);
+      const safeBank = aiV92SafeXXBankPiece(owner,p);
 
-      let score = base + income * 120 - 30 * 9;
+      // v92: first XX at 31g is good, but only if it is actually a bank. If a
+      // safe home/back-rank bank exists, do not choose a contested middle square
+      // just because it says +6 instead of +5.
+      if(xxCount === 0 && safeBankAvailable && !safeBank && (ps.gold <= 42 || opponentRunaway)) continue;
 
-      if(xxCount === 0 && ps.gold >= 31) score += 2800;
-      if(xxCount > 0) score -= xxCount * 420;
-      if(incomeBehind) score += 850 + Math.min(900, (enemyNet - ownNet) * 95);
+      // v92: never make the first XX on an enemy-owned chip/default square that
+      // the opponent can immediately capture or double-move onto. That was the
+      // d4 blunder from v91.
+      if(aiV92DangerousXXSquare(owner,p)) continue;
 
-      if(ownLand) score += 90;
-      if(!ownLand && !enemyLand) score += 40;
-      if(enemyLand) score -= taxBeforeIncome >= 6 ? 460 : 150;
-      if(hasGeneratorAt(p.r,p.c)) score += 150;
-      if(isDefaultGen(p.r,p.c)) score += 260;
-      if(center >= 18) score += 110;
-      if(homeRankBuild) score -= xxCount === 0 ? 30 : 360;
-      if(p.type === 'K') score -= 40;
-      if(p.type === 'Q' && center >= 18) score += 40;
-      score -= risk * (pieceValues[p.type] || 1) * 28;
-      if(risk === 0) score += 55;
+      let score = base + income * 125 - 30 * 9;
+
+      if(xxCount === 0 && ps.gold >= 31) score += 2850;
+      if(xxCount > 0) score -= xxCount * 430;
+      if(incomeBehind) score += 900 + Math.min(950, (enemyNet - ownNet) * 100);
+      if(opponentRunaway && xxCount === 0) score += 1200;
+
+      if(safeBank) score += 520;
+      if(ownLand) score += 100;
+      if(!ownLand && !enemyLand) score += 45;
+      if(enemyLand) score -= taxBeforeIncome >= 6 ? 520 : 180;
+      if(enemyChip) score -= 900;
+      if(hasGeneratorAt(p.r,p.c)) score += enemyChip ? 35 : 150;
+      if(isDefaultGen(p.r,p.c)) score += enemyChip ? 40 : 260;
+      if(center >= 18) score += safeBank ? 70 : 25;
+      if(homeRankBuild) score += safeBank ? 340 : -260;
+      if(p.type === 'R' && homeRankBuild) score += 260;
+      if(p.type === 'K') score -= 55;
+      if(p.type === 'Q' && !homeRankBuild && center >= 18) score += 25;
+      score -= directThreats * (pieceValues[p.type] || 1) * 36;
+      if(dblThreat) score -= enemyChip ? 1100 : 260;
+      if(directThreats === 0 && !dblThreat) score += 90;
 
       const goldAfterBuild = ps.gold - 30 - taxBeforeIncome;
       const projectedAfterBuildNextCycle = goldAfterBuild + Math.max(0, ownNet + income) * 2;
@@ -3280,11 +3392,11 @@
       if(projectedAfterBuildNextCycle < projectedIfSaveNextCycle && ps.gold >= 70) score -= 2200;
       if((state.players[enemy]?.gold || 0) + Math.max(0, enemyNet) >= 95) score -= 5000;
 
-      const minimum = xxCount === 0 ? base + 350 : base + (incomeBehind ? 520 : 900);
+      const minimum = xxCount === 0 ? base + (safeBankAvailable ? 700 : 430) : base + (incomeBehind ? 600 : 980);
       if(score < minimum) continue;
 
-      const reason = xxCount === 0 && ps.gold <= 35
-        ? `build first XX generator on ${coord(p.r,p.c)} because 31g can safely become income`
+      const reason = xxCount === 0 && ps.gold <= 42
+        ? `build first safe XX bank on ${coord(p.r,p.c)} instead of fighting a loose middle square`
         : `build XX generator on ${coord(p.r,p.c)} only because it beats saving for the gold bar`;
       out.push({kind:'xx',label:reason,score,action:()=>buildCustomGenerator(owner,p.id,false),showLog:true});
     }
@@ -3387,10 +3499,30 @@
       score += 400000;
       reason = 'draw a card while kingless because a king card can save the game';
     } else {
-      const materialBehind = aiMaterialValue(other(owner)) - aiMaterialValue(owner);
-      const incomeEdge = aiPassiveIncome(owner) - aiPassiveIncome(other(owner));
-      if(ps.gold < 28 && materialBehind < 8) return null;
-      score += Math.max(0, materialBehind) * 12 + Math.max(0, incomeEdge) * 8 + (70/6);
+      const enemy = other(owner);
+      const materialBehind = aiMaterialValue(enemy) - aiMaterialValue(owner);
+      const ownIncome = aiPassiveIncome(owner);
+      const enemyIncome = aiPassiveIncome(enemy);
+      const ownNet = aiV91NetStartTurnEconomy(owner);
+      const enemyNet = aiV91NetStartTurnEconomy(enemy);
+      const opponentRunaway = aiV92OpponentEconomyRunaway(owner);
+      const noOwnXX = aiV91XXCount(owner) === 0;
+
+      // v92: cards are not an economy answer. If the opponent has a running XX,
+      // extra king income, or a clear net-income lead, build a safe bank or make
+      // a concrete capture instead of spending 5g on lottery pieces.
+      if(noOwnXX && ps.gold >= 31 && (opponentRunaway || aiV92HasSafeXXBank(owner))) return null;
+      if(enemyNet > ownNet + 5 && materialBehind < 18) return null;
+      if(aiGoldBarRaceStatus(owner).enemyNear && ps.gold < 70) return null;
+
+      const economyStable = aiV91XXCount(owner) > 0 || ownIncome >= enemyIncome + 3 || ownNet >= enemyNet + 4;
+      const trulyRich = ps.gold >= 44 && economyStable;
+      const desperateMaterial = materialBehind >= 18 && ps.gold >= 34;
+      if(!trulyRich && !desperateMaterial) return null;
+
+      score += Math.max(0, materialBehind) * 10 + Math.max(0, ownIncome - enemyIncome) * 8 + (70/6);
+      if(trulyRich) score += 90;
+      if(desperateMaterial) score += 70;
     }
     return {kind:'card',label:reason,score,action:()=>drawCard(owner),showLog:true};
   }
@@ -3847,15 +3979,20 @@
   function aiPassiveIncome(owner){
     let income = 0;
     if(hasKing(owner)){
-      for(let r=0;r<8;r++) for(let c=0;c<8;c++) if(state.genChip[r][c] === owner) income += 1;
+      for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+        if(state.genChip[r][c] === owner){
+          income += 1;
+          if(state.customGen[r][c]) income += xxIncomeAmountAt(r,c);
+        }
+      }
     }
     income += Math.max(0, countKings(owner)-1) * 5;
     for(const p of livingPieces(owner)){
       // v82: unowned default generators are real turn income if a piece is
-      // physically sitting there. The old evaluator ignored this, so the AI
-      // thought income was equal while the human was farming d4/e4/d5/e5.
-      if(isDefaultGen(p.r,p.c) && !state.genChip?.[p.r]?.[p.c]) income += 1;
-      if(state.customGen[p.r]?.[p.c]) income += isDefaultGen(p.r,p.c) ? 6 : 5;
+      // physically sitting there. v93: chipped XX pays the chip owner, not the occupant.
+      const chipOwner = state.genChip?.[p.r]?.[p.c];
+      if(isDefaultGen(p.r,p.c) && !chipOwner) income += 1;
+      if(state.customGen[p.r]?.[p.c] && !chipOwner) income += xxIncomeAmountAt(p.r,p.c);
     }
     return income;
   }
@@ -4355,17 +4492,21 @@
       const kings = livingTemp(owner).filter(p => p.type === 'K').length;
 
       for(const p of livingTemp(owner)){
-        if(isDefaultGen(p.r,p.c) && !tempState.genChip?.[p.r]?.[p.c]){
+        const chipOwner = tempState.genChip?.[p.r]?.[p.c];
+        if(isDefaultGen(p.r,p.c) && !chipOwner){
           gainTemp(owner, 1);
         }
-        if(tempState.customGen?.[p.r]?.[p.c]){
-          gainTemp(owner, isDefaultGen(p.r,p.c) ? 6 : 5);
+        if(tempState.customGen?.[p.r]?.[p.c] && !chipOwner){
+          gainTemp(owner, xxIncomeAmountAt(p.r,p.c));
         }
       }
 
       if(kings > 0){
         for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
-          if(tempState.genChip?.[r]?.[c] === owner) gainTemp(owner, 1);
+          if(tempState.genChip?.[r]?.[c] === owner){
+            gainTemp(owner, 1);
+            if(tempState.customGen?.[r]?.[c]) gainTemp(owner, xxIncomeAmountAt(r,c));
+          }
         }
       }
     }
@@ -4456,11 +4597,18 @@
       if(ps.gold <= 0) return false;
     }
 
+    const chipOwner = tempState.genChip[r][c];
     if(isDefaultGen(r,c)){
-      const chipOwner = tempState.genChip[r][c];
-      if(!chipOwner || chipOwner === owner) ps.gold += 1;
+      if(!chipOwner || (chipOwner === owner && hasKingQuiet(tempState, owner))) ps.gold += 1;
     }
-    if(tempState.customGen[r][c]) ps.gold += isDefaultGen(r,c) ? 6 : 5;
+    if(tempState.customGen[r][c]){
+      const xxGain = xxIncomeAmountAt(r,c);
+      if(chipOwner){
+        if(hasKingQuiet(tempState, chipOwner) && tempState.players[chipOwner]) tempState.players[chipOwner].gold += xxGain;
+      } else {
+        ps.gold += xxGain;
+      }
+    }
 
     return ps.gold > 0;
   }
@@ -5242,9 +5390,14 @@
       } else if(chipOwner === owner && hasKingQuiet(tempState, owner)){
         ps.gold += 1;
       }
-    }
-    if(tempState.customGen[p.r][p.c]){
-      ps.gold += isDefaultGen(p.r,p.c) ? 6 : 5;
+      if(tempState.customGen[p.r][p.c]){
+        const xxGain = xxIncomeAmountAt(p.r,p.c);
+        if(chipOwner){
+          if(hasKingQuiet(tempState, chipOwner) && tempState.players[chipOwner]) tempState.players[chipOwner].gold += xxGain;
+        } else {
+          ps.gold += xxGain;
+        }
+      }
     }
 
     if(p.type === 'P'){
@@ -5962,7 +6115,12 @@
     // income. Hard-block only when the payment itself likely hands them the
     // 100g bar on their next action.
     if(status.enemyGold + amount >= 100) return true;
-    if(amount >= 8 && status.enemyProjected + amount >= 102 && status.ownProjected < 100) return true;
+    // v92: if the payment plus the enemy's already-visible start-turn income
+    // puts them at the bar, do not pay them. v91 only checked a loose 102
+    // threshold and could feed the final 8 gold.
+    const enemyNet = Math.max(0, aiV91NetStartTurnEconomy(status.enemy));
+    if(status.enemyGold + amount + enemyNet >= 100 && status.ownProjected < 100) return true;
+    if(amount >= 8 && status.enemyProjected + amount >= 100 && status.ownProjected < 100) return true;
     return false;
   }
 
@@ -6673,7 +6831,14 @@
         const ownDef = countOwnDefenders(p.r,p.c,owner,p.id);
         const chip = state.genChip?.[p.r]?.[p.c];
         const land = state.land?.[p.r]?.[p.c];
-        const income = (isDefaultGen(p.r,p.c) ? 1 : 0) + (state.customGen?.[p.r]?.[p.c] ? (isDefaultGen(p.r,p.c) ? 6 : 5) : 0);
+        const chipOwner = chip;
+        let income = 0;
+        if(isDefaultGen(p.r,p.c) && !chipOwner) income += 1;
+        if(isDefaultGen(p.r,p.c) && chipOwner === owner && hasKing(owner)) income += 1;
+        if(state.customGen?.[p.r]?.[p.c]){
+          if(!chipOwner) income += xxIncomeAmountAt(p.r,p.c);
+          else if(chipOwner === owner && hasKing(owner)) income += xxIncomeAmountAt(p.r,p.c);
+        }
         let score = 50 + income * 12;
         if(chip !== owner) score += chip === other(owner) ? 42 : 28;
         if(land !== owner) score += enemyAtk > ownDef ? 28 : 12;
@@ -7014,10 +7179,17 @@
       } else if(chipOwner === owner && hasKingAfter(owner, capturedId)){
         gold += 1; genGain += 1;
       }
-    }
-    if(state.customGen[r][c]){
-      const gain = isDefaultGen(r,c) ? 6 : 5;
-      gold += gain; genGain += gain;
+      if(state.customGen[r][c]){
+        const gain = xxIncomeAmountAt(r,c);
+        if(chipOwner){
+          // Landing on a chipped XX pays the chip controller, not the moving piece.
+          if(chipOwner === owner && hasKingAfter(owner, capturedId)){
+            gold += gain; genGain += gain;
+          }
+        } else {
+          gold += gain; genGain += gain;
+        }
+      }
     }
     return {gold, taxPaid, genGain, bankruptsSelf:false};
   }
@@ -8308,21 +8480,22 @@
     const out = [];
     for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
       if(!state.customGen?.[r]?.[c]) continue;
-      const builtByEnemy = state.customGen[r][c] === enemy;
-      const chipEnemy = state.genChip?.[r]?.[c] === enemy;
-      if(!builtByEnemy && !chipEnemy) continue;
-
+      const chipOwner = state.genChip?.[r]?.[c];
       const occ = getPieceAt(r,c);
+      const controlledByEnemy = chipOwner === enemy;
+      const unchippedEnemyOccupies = !chipOwner && occ && occ.owner === enemy;
+      if(!controlledByEnemy && !unchippedEnemyOccupies) continue;
+
       let score = 60;
-      if(builtByEnemy) score += 22;
-      if(chipEnemy) score += 26;
+      if(controlledByEnemy) score += 42;
+      if(unchippedEnemyOccupies) score += 24;
       if(occ && occ.owner === enemy) score += (pieceValues[occ.type] || 1) * 7 + 15;
       if(occ && occ.owner === owner) score += 32;
       if(state.land?.[r]?.[c] === enemy) score += 10;
       if(state.land?.[r]?.[c] === owner) score += 8;
       score += countEnemyAttacks(r,c,enemy) * 5; // our attacks on their XX
       score -= countOwnDefenders(r,c,enemy,occ?.id || null) * 2;
-      out.push({r,c,score,occ,builtByEnemy,chipEnemy});
+      out.push({r,c,score,occ,builtByEnemy:state.customGen[r][c] === enemy,chipEnemy:controlledByEnemy});
     }
     out.sort((a,b)=>b.score-a.score);
     return out;
@@ -8348,13 +8521,14 @@
     const out = [];
     for(const p of livingPieces(owner)){
       if(!state.customGen?.[p.r]?.[p.c]) continue;
-      const builtByOwner = state.customGen[p.r][p.c] === owner;
-      const chipOwner = state.genChip?.[p.r]?.[p.c] === owner;
-      if(!builtByOwner && !chipOwner) continue;
-      const income = isDefaultGen(p.r,p.c) ? 6 : 5;
+      const chipOwner = state.genChip?.[p.r]?.[p.c];
+      const controlledByOwner = chipOwner === owner && hasKing(owner);
+      const unchippedOccupied = !chipOwner;
+      if(!controlledByOwner && !unchippedOccupied) continue;
+      const income = xxIncomeAmountAt(p.r,p.c);
       const enemyAtk = countEnemyAttacks(p.r,p.c,owner);
       const ownDef = countOwnDefenders(p.r,p.c,owner,p.id);
-      out.push({p,r:p.r,c:p.c,income,builtByOwner,chipOwner,enemyAtk,ownDef});
+      out.push({p,r:p.r,c:p.c,income,builtByOwner:state.customGen[p.r][p.c] === owner,chipOwner:controlledByOwner,enemyAtk,ownDef});
     }
     out.sort((a,b)=>b.income-a.income || (b.ownDef-b.enemyAtk)-(a.ownDef-a.enemyAtk));
     return out;
@@ -9176,10 +9350,12 @@
         const ownDef = countOwnDefenders(p.r,p.c,owner,p.id);
         const enemyAtk = countEnemyAttacks(p.r,p.c,owner);
         let score = 0;
-        if(isDefaultGen(p.r,p.c)) score += 18;
-        if(state.customGen[p.r][p.c]) score += 26;
+        const chipOwner = state.genChip[p.r][p.c];
+        if(isDefaultGen(p.r,p.c) && chipOwner !== other(owner)) score += 18;
+        if(state.customGen[p.r][p.c] && chipOwner !== other(owner)) score += 26;
         if(state.land[p.r][p.c] === owner) score += 5;
-        if(state.genChip[p.r][p.c] === owner) score += 7;
+        if(chipOwner === owner) score += 7;
+        if(chipOwner === other(owner)) score -= 34;
         score += Math.max(0, enemyAtk - ownDef) * 12;
         score += (pieceValues[p.type] || 1) * 2;
         const pair = chooseTwoPawnPressurePair(owner, p.r, p.c);
@@ -9711,9 +9887,14 @@
     let total = 0;
     for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++){
       if(!state.customGen?.[r]?.[c]) continue;
+      const chipOwner = state.genChip?.[r]?.[c];
+      if(chipOwner){
+        if(chipOwner === owner && hasKing(owner)) total += xxIncomeAmountAt(r,c);
+        continue;
+      }
       const occ = getPieceAt(r,c);
       if(occ && occ.owner === owner){
-        total += isDefaultGen(r,c) ? 6 : 5;
+        total += xxIncomeAmountAt(r,c);
       }
     }
     return total;
@@ -9744,6 +9925,7 @@
     let score = 0;
     score += (ownGold - enemyGold) * 2.25;
     score += (ownIncome - enemyIncome) * 22;
+    score += (aiV91NetStartTurnEconomy(rootOwner) - aiV91NetStartTurnEconomy(enemy)) * 9;
     score += (ownMaterial - enemyMaterial) * 13;
     score += (ownKings - enemyKings) * 70;
     score += (ownChips - enemyChips) * 10;
@@ -10759,7 +10941,12 @@
     if(state.genChip[r][c]) lines.push(`Generator ownership chip: ${label(state.genChip[r][c])} (largest bottom chip)`);
     if(state.land[r][c]) lines.push(`Land tile: ${label(state.land[r][c])}`);
     if(isDefaultGen(r,c)) lines.push('Original 4 gold generator coin: pays pieces on it when unowned');
-    if(state.customGen[r][c]) lines.push(`Green XX generator chip: built by ${label(state.customGen[r][c])}; pays any piece that lands or starts on it`);
+    if(state.customGen[r][c]){
+      const chipOwner = state.genChip[r][c];
+      lines.push(chipOwner
+        ? `Green XX generator: built by ${label(state.customGen[r][c])}; controlled by ${label(chipOwner)} generator chip`
+        : `Green XX generator: built by ${label(state.customGen[r][c])}; unchipped, pays the occupying piece`);
+    }
     if(lines.length === 1) lines.push('No chips on this tile');
     return lines.join('\n');
   }
