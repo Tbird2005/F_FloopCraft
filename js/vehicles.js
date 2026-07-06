@@ -526,6 +526,10 @@ const Vehicles = {
           this.hurt(v, 1);
         }
       }
+      // and other players (multiplayer)
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.vehicleRunOver) {
+        Multiplayer.vehicleRunOver(v, Math.round(Math.abs(v.speed) * 1.1));
+      }
     }
   },
 

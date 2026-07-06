@@ -3229,5 +3229,9 @@ const World = {
     }
     Mobs.applyExplosion(ex, ey, ez, hurtRange, maxDmg, cover, src || null);
     Vehicles.applyExplosion(ex, ey, ez, hurtRange, maxDmg);
+    // remote players caught in the blast (host is authoritative for explosions)
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.applyExplosionToPeers) {
+      Multiplayer.applyExplosionToPeers(ex, ey, ez, hurtRange, maxDmg, cover);
+    }
   },
 };

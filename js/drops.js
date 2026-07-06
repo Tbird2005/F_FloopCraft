@@ -110,15 +110,27 @@ const Drops = {
           b.vz *= inSafeLava ? 0.86 : 0.9;
         }
         if (b.onGround) { b.vx *= 0.82; b.vz *= 0.82; }
-        // no magnet when the inventory can't take it (no more item entourage)
-        if (d.age >= d.pickupDelay && !Player.dead && Player.canAccept(d.id)) {
-          const dx = p.x - b.x, dy = (p.y + 0.6) - b.y, dz = p.z - b.z;
-          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (dist < 2.0 && dist > 0.01) {
-            const pull = 26 * dt / Math.max(dist, 0.4);
-            b.vx += dx * pull; b.vy += dy * pull; b.vz += dz * pull;
+        // magnet toward the NEAREST player — including remote clients in multiplayer,
+        // so items gravitate to whoever is closest, not only the local/host player.
+        // (host is authoritative: it pulls drops toward remote bodies and broadcasts the
+        // motion; the remote client still does the actual pickup via pickup_request)
+        if (d.age >= d.pickupDelay) {
+          const remotes = (typeof Multiplayer !== 'undefined' && Multiplayer.connected
+            && Multiplayer.role !== 'solo' && Multiplayer.remoteBodies) ? Multiplayer.remoteBodies() : [];
+          let tx = 0, ty = 0, tz = 0, best = Infinity, localBest = false;
+          if (!Player.dead && Player.canAccept(d.id)) {
+            const dd = Math.hypot(p.x - b.x, (p.y + 0.6) - b.y, p.z - b.z);
+            if (dd < best) { best = dd; tx = p.x; ty = p.y + 0.6; tz = p.z; localBest = true; }
           }
-          if (dist < 0.7) {
+          for (const rb of remotes) {
+            const dd = Math.hypot(rb.x - b.x, (rb.y + 0.6) - b.y, rb.z - b.z);
+            if (dd < best) { best = dd; tx = rb.x; ty = rb.y + 0.6; tz = rb.z; localBest = false; }
+          }
+          if (best < 2.0 && best > 0.01) {
+            const pull = 26 * dt / Math.max(best, 0.4);
+            b.vx += (tx - b.x) * pull; b.vy += (ty - b.y) * pull; b.vz += (tz - b.z) * pull;
+          }
+          if (localBest && best < 0.7) {
             let leftover;
             // Only real durability (a positive number) forces the 1-per-slot path.
             // A network-serialized dur of null/0 must NOT be treated as durable, or

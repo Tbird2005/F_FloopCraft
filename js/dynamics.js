@@ -208,6 +208,9 @@ const Dynamics = {
       else if (h.fire) Player.hurt(1, 0, 0, { pierce: true });
       else if (h.cactus) Player.hurt(1, 0, 0);
     }
+    // mobs are host-authoritative; a client must not damage them (it runs this only
+    // for its own player hazard damage)
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected) return;
     for (const m of Mobs.list) {
       if (m.dead) continue;
       const h = this.hazardCheck(m.body, false, m);

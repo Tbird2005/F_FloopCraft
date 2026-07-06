@@ -15,6 +15,8 @@ const Multiplayer = {
   connected: false,
   connecting: false,
   applyingRemote: false,
+  clientCommandsAllowed: false, // host toggles with /allowcommands; lets clients use commands
+  remoteBreaks: new Map(),      // pid -> {mesh, lastT}: other players' block-break crack overlays
   hostPending: false,
   lastSend: 0,
   lastTimeSend: 0,
@@ -24,7 +26,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v103',
+  versionTag: 'ffloopcraft-v105',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -187,6 +189,7 @@ const Multiplayer = {
         this.connections.set(conn._gameId, conn);
         this.sendTo(conn, { type: 'joined', id: this.id, snapshot: this.makeSnapshot() });
         this.sendTo(conn, { type: 'peer_state', id: this.id, state: this.playerState() });
+        this.sendTo(conn, { type: 'allow_commands', allowed: this.clientCommandsAllowed }); // sync current permission
         for (const [pid, existing] of this.peers.entries()) {
           if (pid !== conn._gameId && existing && existing.target) {
             this.sendTo(conn, { type: 'peer_state', id: pid, state: existing.target });
@@ -422,6 +425,28 @@ const Multiplayer = {
       if (this.role === 'client') this.applyHostTime(msg);
       return;
     }
+
+    if (msg.type === 'allow_commands') {
+      if (this.role === 'client') {
+        this.clientCommandsAllowed = !!msg.allowed;
+        if (typeof UI !== 'undefined') UI.chat(msg.allowed ? 'The host enabled commands for everyone.' : 'The host disabled client commands.', '#7df5ec');
+      }
+      return;
+    }
+
+    if (msg.type === 'break_progress') {
+      const pid = msg.id || fromId;
+      if (pid && pid !== this.id) this.applyBreakProgress(pid, msg);
+      if (this.role === 'host' && cameFromClient) this.broadcast(msg, pid); // relay to other players
+      return;
+    }
+  },
+
+  // host-only: toggle whether clients may run commands, and tell everyone
+  setClientCommandsAllowed(on) {
+    if (this.role !== 'host') return;
+    this.clientCommandsAllowed = !!on;
+    this.broadcast({ type: 'allow_commands', id: this.id, allowed: !!on });
   },
 
   makeSnapshot() {
@@ -475,6 +500,7 @@ const Multiplayer = {
       held: held ? held.id : 0,
       dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
       swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
+      sit: !!(typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating || p.boarding)),
     };
   },
 
@@ -605,6 +631,7 @@ const Multiplayer = {
     if (!p) return;
     this.removePeerObject(p);
     this.peers.delete(id);
+    if (this.clearRemoteBreak) this.clearRemoteBreak(id); // drop their break overlay too
   },
 
   updatePeers(dt) {
@@ -690,8 +717,9 @@ const Multiplayer = {
         UI.__mpCommandPatch = true;
         const oldRunChat = UI.runChat.bind(UI);
         UI.runChat = function(text) {
-          if (String(text || '').trim().startsWith('/') && typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client') {
-            this.chat('Only the host can use commands in multiplayer.', '#ff8080');
+          const t = String(text || '').trim();
+          if (t.startsWith('/') && typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && !Multiplayer.clientCommandsAllowed) {
+            this.chat('Commands are host-only. The host can run /allowcommands to enable them.', '#ff8080');
             return;
           }
           return oldRunChat(text);
@@ -712,7 +740,10 @@ const Multiplayer = {
         };
       };
       gateUpdate(typeof Mobs !== 'undefined' ? Mobs : null, 'update', function(dt){ MP.clientMobVisualTick(dt); });
-      gateUpdate(typeof Dynamics !== 'undefined' ? Dynamics : null, 'update', function(){});
+      // Clients still run their OWN player hazard damage (lava/fire/cactus). The rest of
+      // Dynamics (world mutation, mob hazards) stays host-authoritative. updateHazards
+      // guards its mob loop to host-only so clients don't damage host-owned mobs.
+      gateUpdate(typeof Dynamics !== 'undefined' ? Dynamics : null, 'update', function(dt){ if (this.updateHazards) this.updateHazards(dt || 0); });
       gateUpdate(typeof Water !== 'undefined' ? Water : null, 'update', function(){});
       gateUpdate(typeof Lava !== 'undefined' ? Lava : null, 'update', function(){});
       // NOTE: Vehicles.update / updateBoard are intentionally NOT gated here.
@@ -992,6 +1023,7 @@ const Multiplayer = {
         armor: (p.armor || []).map(s => s ? { id:s.id, dur:s.dur } : null),
         dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
         swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
+        sit: !!(typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating || p.boarding)),
       };
     },
 
@@ -1302,6 +1334,7 @@ const Multiplayer = {
       const kx = dx * (knock || 0), kz = dz * (knock || 0);
       this.send({ type:'pvp_hit', target:hit.id, dmg:+dmg || 1, kx, kz, kind:kind || 'hit', x:ox, y:oy, z:oz });
       if (this.role === 'host') this.hostHandlePvpHit(this.id, { target:hit.id, dmg:+dmg || 1, kx, kz });
+      this.flashPeer(hit.id); // local hit feedback (flash + sound) so we SEE our hit connect
       return true;
     },
 
@@ -1318,6 +1351,42 @@ const Multiplayer = {
     damageRemotePlayer(pid, dmg, kx, kz, source) {
       const conn = this.connections.get(pid);
       if (conn) this.sendTo(conn, { type:'pvp_damage', dmg:+dmg || 0, kx:+kx || 0, kz:+kz || 0, source:source || 'world' });
+    },
+
+    // Explosions damage remote players too (host-authoritative). Cover check uses the
+    // same line-of-sight helper so hiding behind blocks still reduces the blast.
+    applyExplosionToPeers(ex, ey, ez, hurtRange, maxDmg, cover) {
+      if (this.role !== 'host' || !this.connected || !this.peers) return;
+      for (const [pid, peer] of this.peers.entries()) {
+        const st = peer && (peer.target || peer.state);
+        if (!st || st.dead) continue;
+        const dx = st.x - ex, dy = (st.y + 0.9) - ey, dz = st.z - ez;
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d >= hurtRange) continue;
+        const cov = cover ? cover(st.x, st.y + 0.9, st.z) : 1;
+        const dmg = Math.round(maxDmg * (1 - d / hurtRange) * cov);
+        if (dmg > 0) this.damageRemotePlayer(pid, dmg, dx / (d + 0.01) * 9, dz / (d + 0.01) * 9, 'explosion');
+      }
+    },
+
+    // A fast vehicle plows through any OTHER player it overlaps. The driver (host OR client)
+    // detects the hit and routes damage through the pvp pipeline so authority + feedback work.
+    vehicleRunOver(v, dmg) {
+      if (!this.connected || this.role === 'solo' || !this.peers) return;
+      const b = v.body || v;
+      const speed = v.speed || 0, yaw = v.yaw || 0;
+      const kx = Math.sin(yaw + Math.PI) * -speed * 0.8, kz = Math.cos(yaw + Math.PI) * -speed * 0.8;
+      const myDim = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+      for (const [pid, peer] of this.peers.entries()) {
+        const st = peer && (peer.target || peer.state);
+        if (!st || st.dead) continue;
+        if ((st.dim || 'overworld') !== myDim) continue;
+        if (Math.abs(st.x - b.x) < 1.4 && Math.abs(st.z - b.z) < 1.7 && Math.abs(st.y - b.y) < 1.4) {
+          this.send({ type:'pvp_hit', target:pid, dmg:+dmg || 1, kx, kz, kind:'vehicle', x:b.x, y:b.y, z:b.z });
+          if (this.role === 'host') this.hostHandlePvpHit(this.id, { target:pid, dmg:+dmg || 1, kx, kz });
+          this.flashPeer(pid);
+        }
+      }
     },
 
     hostArrowPvp() {
@@ -1347,10 +1416,14 @@ const Multiplayer = {
       const matBody = mkMat(0x3c7bd6), matSkin = mkMat(0xd8a882), matDark = mkMat(0x1a1a1a);
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.28), matBody); body.position.y = 1.02;
       const head = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.46), matSkin); head.position.y = 1.55;
-      const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.012), matDark); const eyeR = eyeL.clone(); eyeL.position.set(-0.09, 1.60, -0.236); eyeR.position.set(0.09, 1.60, -0.236);
+      // eyes are CHILDREN of the head (head-relative positions) so they pitch and turn
+      // WITH it — previously they were on the group and stayed put when the head looked up/down
+      const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.012), matDark); const eyeR = eyeL.clone();
+      eyeL.position.set(-0.09, 0.05, -0.236); eyeR.position.set(0.09, 0.05, -0.236);
+      head.add(eyeL, eyeR);
       const armL = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.65, 0.17), matSkin); const armR = armL.clone(); armL.position.set(-0.39, 1.02, 0); armR.position.set(0.39, 1.02, 0);
       const legL = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.68, 0.20), matBody); const legR = legL.clone(); legL.position.set(-0.14, 0.34, 0); legR.position.set(0.14, 0.34, 0);
-      group.add(body, head, eyeL, eyeR, armL, armR, legL, legR);
+      group.add(body, head, armL, armR, legL, legR);
       Game.scene.add(group);
       return { id, group, state:null, target:null, lastSeen:performance.now(), body:{ x:0, y:0, z:0, w:0.3, h:1.8, dead:false }, parts:{ body, head, eyeL, eyeR, armL, armR, legL, legR }, heldMesh:null, armorMeshes:[] };
     },
@@ -1373,32 +1446,109 @@ const Multiplayer = {
         p.body.x = p.state.x; p.body.y = p.state.y; p.body.z = p.state.z; p.body.h = sneak ? 1.55 : (+p.target.h || 1.8); p.body.dead = !!p.state.dead;
         const moving = Math.abs(+p.target.vx || 0) + Math.abs(+p.target.vz || 0) > 0.3;
         const bob = moving ? Math.sin(now * 0.012) * 0.35 : 0;
+        if (p.hitFlashT > 0) p.hitFlashT -= dt;
         if (p.parts) {
-          p.parts.body.position.y = 1.02 - crouch * 0.55;
-          p.parts.head.position.y = 1.55 - crouch;
-          p.parts.eyeL.position.y = 1.60 - crouch; p.parts.eyeR.position.y = 1.60 - crouch;
-          p.parts.armL.position.y = 1.02 - crouch * 0.55; p.parts.armR.position.y = 1.02 - crouch * 0.55;
-          p.parts.legL.scale.y = sneak ? 0.78 : 1; p.parts.legR.scale.y = sneak ? 0.78 : 1;
-          p.parts.head.rotation.x = (p.state.pitch || 0) * 0.35;
-          p.parts.armL.rotation.x = bob; p.parts.armR.rotation.x = -bob; p.parts.legL.rotation.x = -bob; p.parts.legR.rotation.x = bob;
-          p.group.rotation.x = p.target.swim ? Math.PI / 2.8 : 0;
+          const sit = !!p.target.sit;
+          const pitch = (p.state.pitch || 0) * 0.35;
+          // model faces -z: forward tilt = NEGATIVE rot.x on the torso; limbs reaching
+          // FORWARD = POSITIVE rot.x (bottom of the limb swings toward -z).
+          if (sit) {
+            // seated: upright hips, thighs out horizontal, hands forward on the wheel
+            p.parts.body.position.set(0, 0.84, 0); p.parts.body.rotation.x = -0.06;
+            p.parts.head.position.set(0, 1.36, 0);
+            p.parts.armL.position.set(-0.39, 1.00, 0); p.parts.armR.position.set(0.39, 1.00, 0);
+            p.parts.armL.rotation.x = 1.3; p.parts.armR.rotation.x = 1.3;      // reach forward
+            p.parts.legL.position.set(-0.14, 0.54, -0.16); p.parts.legR.position.set(0.14, 0.54, -0.16);
+            p.parts.legL.rotation.x = 1.55; p.parts.legR.rotation.x = 1.55;    // thighs horizontal, forward
+            p.parts.legL.scale.y = 1; p.parts.legR.scale.y = 1;
+            p.parts.head.rotation.x = pitch;
+            p.group.rotation.x = 0;
+          } else {
+            // crouch: lower the torso/head and lean FORWARD like MC sneaking (negative rot.x)
+            p.parts.body.position.set(0, 1.02 - crouch * 0.5, 0); p.parts.body.rotation.x = crouch ? -0.38 : 0;
+            p.parts.head.position.set(0, 1.55 - crouch * 0.85, 0);
+            p.parts.armL.position.set(-0.39, 1.02 - crouch * 0.5, 0); p.parts.armR.position.set(0.39, 1.02 - crouch * 0.5, 0);
+            p.parts.armL.rotation.x = bob; p.parts.armR.rotation.x = -bob;
+            p.parts.legL.position.set(-0.14, 0.34, 0); p.parts.legR.position.set(0.14, 0.34, 0);
+            p.parts.legL.scale.y = sneak ? 0.82 : 1; p.parts.legR.scale.y = sneak ? 0.82 : 1;
+            p.parts.legL.rotation.x = -bob; p.parts.legR.rotation.x = bob;
+            p.parts.head.rotation.x = pitch;
+            p.group.rotation.x = p.target.swim ? Math.PI / 2.8 : 0;
+          }
         }
         this.updatePeerHeldAndArmor(p);
         this.tintPeer(p);
       }
+      this.expireRemoteBreaks();
     },
 
     tintPeer(p) {
       if (!p || !p.group || typeof World === 'undefined') return;
+      const flashing = p.hitFlashT > 0;
       const raw = World.getLightRaw(Math.floor(p.body.x), Math.floor(p.body.y + 1), Math.floor(p.body.z));
       const l = Math.max(0.10, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
       p.group.traverse(o => {
         const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
         for (const mat of mats) if (mat && mat.color) {
           if (!mat.userData.baseColor) mat.userData.baseColor = mat.color.clone();
-          mat.color.copy(mat.userData.baseColor).multiplyScalar(l);
+          if (flashing) mat.color.setRGB(1, 0.25, 0.25); // red hit flash so attackers SEE the hit land
+          else mat.color.copy(mat.userData.baseColor).multiplyScalar(l);
         }
       });
+    },
+
+    // flash a remote player red + play a hit sound on THIS screen when we land a hit on them
+    flashPeer(pid) {
+      const p = this.peers && this.peers.get(pid);
+      if (p) p.hitFlashT = 0.28;
+      if (typeof SFX !== 'undefined' && SFX.mobHurt) SFX.mobHurt();
+    },
+
+    // ---- shared block-breaking progress: everyone sees everyone's cracks ----
+    sendBreakProgress(x, y, z, stage) {
+      if (!this.connected || this.role === 'solo') return;
+      const now = performance.now();
+      const key = (x | 0) + ',' + (y | 0) + ',' + (z | 0);
+      if (this._breakKey === key && this._breakStage === (stage | 0) && now - (this._breakSentT || 0) < 220) return;
+      this._breakKey = key; this._breakStage = stage | 0; this._breakSentT = now; this._breakActive = true;
+      this.send({ type:'break_progress', x:x|0, y:y|0, z:z|0, stage:stage|0, dim:(typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld') });
+    },
+    sendBreakStop() {
+      if (!this._breakActive || !this.connected) return;
+      this._breakActive = false; this._breakKey = null; this._breakStage = -1;
+      this.send({ type:'break_progress', stage:-1 });
+    },
+    applyBreakProgress(pid, msg) {
+      if (!pid || typeof Game === 'undefined' || !Game.scene) return;
+      const stage = (msg && Number.isFinite(+msg.stage)) ? (msg.stage | 0) : -1;
+      const dim = (msg && msg.dim) || 'overworld';
+      const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+      if (stage < 0 || dim !== cur || !Player.crackTex || !Player.crackTex.length) { this.clearRemoteBreak(pid); return; }
+      let rb = this.remoteBreaks.get(pid);
+      if (!rb) {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(1.008, 1.008, 1.008),
+          new THREE.MeshBasicMaterial({ transparent:true, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-1, side:THREE.DoubleSide })
+        );
+        Game.scene.add(mesh);
+        rb = { mesh, lastT:0 };
+        this.remoteBreaks.set(pid, rb);
+      }
+      rb.mesh.position.set((msg.x | 0) + 0.5, (msg.y | 0) + 0.5, (msg.z | 0) + 0.5);
+      const tex = Player.crackTex[Math.max(0, Math.min(Player.crackTex.length - 1, stage))];
+      if (tex && rb.mesh.material.map !== tex) { rb.mesh.material.map = tex; rb.mesh.material.needsUpdate = true; }
+      rb.mesh.visible = true;
+      rb.lastT = performance.now();
+    },
+    clearRemoteBreak(pid) {
+      const rb = this.remoteBreaks.get(pid);
+      if (!rb) return;
+      if (rb.mesh) { Game.scene.remove(rb.mesh); rb.mesh.geometry.dispose(); rb.mesh.material.dispose(); }
+      this.remoteBreaks.delete(pid);
+    },
+    expireRemoteBreaks() {
+      const now = performance.now();
+      for (const [pid, rb] of [...this.remoteBreaks]) if (now - (rb.lastT || 0) > 600) this.clearRemoteBreak(pid);
     },
 
     updatePeerHeldAndArmor(p) {
@@ -5121,12 +5271,22 @@ const Multiplayer = {
   MP.onLocalBlockChange = function(x, y, z, id, opts, oldId) {
     if (this.connected && this.role !== 'solo' && !this.applyingRemote && World && World.ready) {
       const meta = metaForBlock(x, y, z);
-      if (meta) return this.send({ type:'block', x, y, z, block:id, old:oldId || 0, noUpdate:!!(opts && opts.noUpdate), skipPortalCheck:!!(opts && opts.skipPortalCheck), meta });
+      // tag every block change with the sender's dimension so it lands in the RIGHT
+      // world for players who are elsewhere (host in Christmas dim, client in overworld…)
+      const dim = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+      return this.send({ type:'block', x, y, z, block:id, old:oldId || 0, noUpdate:!!(opts && opts.noUpdate), skipPortalCheck:!!(opts && opts.skipPortalCheck), dim, ...(meta ? { meta } : {}) });
     }
     if (oldLocalBlockChange) return oldLocalBlockChange(x, y, z, id, opts, oldId);
   };
   const oldApplyRemoteBlock = MP.applyRemoteBlock ? MP.applyRemoteBlock.bind(MP) : null;
   MP.applyRemoteBlock = function(msg) {
+    const curDim = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+    const msgDim = (msg && msg.dim) || 'overworld';
+    if (typeof Dimensions !== 'undefined' && Dimensions.stashRemoteBlock && msgDim !== curDim) {
+      // change happened in a dimension we're not in — stash it there, don't touch our world
+      Dimensions.stashRemoteBlock(msgDim, msg.x | 0, msg.y | 0, msg.z | 0, msg.block | 0);
+      return;
+    }
     const ret = oldApplyRemoteBlock ? oldApplyRemoteBlock(msg) : undefined;
     if (msg && msg.meta) applyBlockMeta(msg.x, msg.y, msg.z, msg.meta);
     if (typeof World !== 'undefined' && World.dirty) World.dirty.add(World.key((msg.x|0) >> 4, (msg.z|0) >> 4));

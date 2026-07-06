@@ -1646,6 +1646,15 @@ const Player = {
     this.tickMineDamage(dt, canMine ? key : null);
 
     if (!canMine) {
+      // keep sharing the crack while it LINGERS and reverts (heals), not just while
+      // actively mining — otherwise other players see it snap back to fresh instantly
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.connected) {
+        const nb = this._netBreak;
+        const ne = nb ? this.mineDamage.get(nb.key) : null;
+        const nstage = ne ? this.crackStageForProgress(ne.progress) : -1;
+        if (nb && nstage >= 0) Multiplayer.sendBreakProgress(nb.x, nb.y, nb.z, nstage);
+        else { Multiplayer.sendBreakStop(); this._netBreak = null; }
+      }
       this.mineTarget = null;
       this.mineProgress = entry ? entry.progress : 0;
       if (hit && target && entry && entry.progress > 0) {
@@ -1694,6 +1703,11 @@ const Player = {
     this.mineProgress = entry.progress;
     this.showBreakDamage(target, entry.progress);
     this.renderStoredBreakDamage(key, target);
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.connected) {
+      // remember this block so we keep broadcasting its crack as it lingers/reverts later
+      this._netBreak = { x: hit.bx, y: hit.by, z: hit.bz, key };
+      Multiplayer.sendBreakProgress(hit.bx, hit.by, hit.bz, this.crackStageForProgress(entry.progress));
+    }
     if (Math.random() < 8 * dt) SFX.dig();
 
     if (entry.progress >= 1) {
@@ -1701,6 +1715,7 @@ const Player = {
       this.mineProgress = 0;
       this.mineTarget = null;
       this.breakOverlay.visible = false;
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.connected) { Multiplayer.sendBreakStop(); this._netBreak = null; }
       this.breakBlockAt(hit.bx, hit.by, hit.bz, hit.id, toolOk, hit);
       this.renderStoredBreakDamage(null);
     }

@@ -19,6 +19,21 @@ const Dimensions = {
     };
   },
 
+  // Multiplayer: apply a remote block change that belongs to a dimension we are NOT
+  // currently in. Store it in that dimension's packed diff list so it's present when
+  // anyone loads that dimension — without corrupting the dimension we're standing in.
+  stashRemoteBlock(dim, x, y, z, id) {
+    if (!dim || dim === this.current) return false;
+    if (!this.data) this.data = {};
+    if (!this.data[dim]) this.data[dim] = this.emptyState(dim);
+    const st = this.data[dim];
+    if (!Array.isArray(st.diffs)) st.diffs = [];
+    const key = World.pkey(x, y, z);
+    for (const e of st.diffs) { if (e[0] === key) { e[1] = id; return true; } }
+    st.diffs.push([key, id]);
+    return true;
+  },
+
   legacyState(data) {
     return {
       dim: 'overworld',

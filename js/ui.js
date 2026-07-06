@@ -421,6 +421,15 @@ const UI = {
       Player.hp = 20; Player.hunger = 20;
       this.updateStats();
       this.chat('Healed. Merry Christmas to your hitpoints.', '#7df5ec');
+    } else if (cmd === 'allowcommands' || cmd === 'allowcmds') {
+      if (typeof Multiplayer === 'undefined' || Multiplayer.role !== 'host' || !Multiplayer.connected) {
+        this.chat('Only a multiplayer host can use /allowcommands.', '#ff8080');
+      } else {
+        const on = (arg[0] || '').toLowerCase();
+        const enable = on === '' ? !Multiplayer.clientCommandsAllowed : (on === 'on' || on === 'true' || on === '1' || on === 'yes');
+        Multiplayer.setClientCommandsAllowed(enable);
+        this.chat(enable ? 'Client commands ENABLED — everyone can use /gamemode, etc.' : 'Client commands disabled.', '#7df5ec');
+      }
     } else if (cmd === 'seed') {
       this.chat('World seed: ' + World.seed, '#7df5ec');
     } else if (cmd === 'save') {
