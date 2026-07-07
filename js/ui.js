@@ -112,6 +112,36 @@ const UI = {
 
   hideTooltip() { this.el('tooltip').classList.add('hidden'); },
 
+  // M-key ping panel: shows every connected player's latency
+  togglePingList() {
+    let el = document.getElementById('pingList');
+    if (el && el.style.display !== 'none') {
+      el.style.display = 'none';
+      if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'pingList';
+      el.style.cssText = 'position:fixed;top:84px;right:18px;background:rgba(10,12,20,0.82);color:#fff;font:12px Consolas,monospace;padding:10px 14px;border-radius:6px;z-index:600;min-width:150px;pointer-events:none;line-height:1.5';
+      document.body.appendChild(el);
+    }
+    const render = () => {
+      if (typeof Multiplayer === 'undefined' || Multiplayer.role === 'solo' || !Multiplayer.connected) {
+        el.innerHTML = '<b>Ping</b><br><span style="color:#aaa">Not in multiplayer.</span>';
+        return;
+      }
+      const list = Multiplayer.getPingList ? Multiplayer.getPingList() : [];
+      el.innerHTML = '<b>Ping</b><br>' + (list.length ? list.map(p => {
+        const c = p.ping < 80 ? '#7CFC00' : p.ping < 180 ? '#ffd97a' : '#ff6060';
+        return p.name + ': <span style="color:' + c + '">' + p.ping + 'ms</span>';
+      }).join('<br>') : '<span style="color:#aaa">No other players.</span>');
+    };
+    render();
+    el.style.display = 'block';
+    this._pingTimer = setInterval(render, 1000);
+  },
+
   // ---------------- hotbar / stats / xp ----------------
   drawStack(cv, stack) {
     const c = cv.getContext('2d');
@@ -436,6 +466,7 @@ const UI = {
       this.chat(Save.saveCurrent() ? 'World saved.' : 'Save failed.', '#7df5ec');
     } else if (cmd === 'help') {
       this.chat('/gamemode c|s · /time day|night · /give <item> [n] · /tp x y z · /locate help · /locatetp <structure> · /heal · /seed · /save', '#ccc');
+      this.chat('Multiplayer (host): /allowcommands [on|off] — let all players use commands (cheats). Press M for ping.', '#ccc');
     } else {
       this.chat('Unknown command. Try /help', '#ff8080');
     }

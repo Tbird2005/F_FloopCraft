@@ -379,6 +379,7 @@ const Multiplayer = {
     if (msg.type === 'joined') {
       this.connected = true;
       this.connecting = false;
+      this.hostId = msg.id; // remember who the host is (for dimension checks + ping labels)
       this.setJoinBusy(false);
       this.setJoinError('Joined room ' + this.code + '.', true);
       const snap = msg.snapshot || {};
@@ -434,12 +435,120 @@ const Multiplayer = {
       return;
     }
 
-    if (msg.type === 'break_progress') {
+    if (msg.type === 'break_set') {
       const pid = msg.id || fromId;
-      if (pid && pid !== this.id) this.applyBreakProgress(pid, msg);
+      if (pid && pid !== this.id) this.applyBreakSet(pid, msg);
       if (this.role === 'host' && cameFromClient) this.broadcast(msg, pid); // relay to other players
       return;
     }
+
+    if (msg.type === 'player_hurt') {
+      const pid = msg.id || fromId;
+      if (pid && pid !== this.id) this.flashPeer(pid); // red flash + hurt sound on their model
+      if (this.role === 'host' && cameFromClient) this.broadcast(msg, pid);
+      return;
+    }
+
+    if (msg.type === 'gun_fire') {
+      const pid = msg.id || fromId;
+      if (pid && pid !== this.id) this.applyRemoteGunfire(msg);
+      if (this.role === 'host' && cameFromClient) this.broadcast(msg, pid);
+      return;
+    }
+
+    if (msg.type === 'ping') {
+      const pid = msg.id || fromId;
+      if (this.role === 'host') { const conn = this.connections && this.connections.get(pid); if (conn) this.sendTo(conn, { type:'pong', t: msg.t, id: this.id }); }
+      else if (this.hostConn) this.sendTo(this.hostConn, { type:'pong', t: msg.t, id: this.id });
+      return;
+    }
+    if (msg.type === 'pong') {
+      const rtt = Math.max(0, Math.round(performance.now() - (+msg.t || 0)));
+      if (this.role === 'client') { this.myPing = rtt; if (this.hostConn) this.sendTo(this.hostConn, { type:'ping_report', id: this.id, ping: rtt }); }
+      else if (this.role === 'host') { if (!this.pings) this.pings = new Map(); this.pings.set(msg.id || fromId, rtt); }
+      return;
+    }
+    if (msg.type === 'ping_report') {
+      if (this.role === 'host') { if (!this.pings) this.pings = new Map(); this.pings.set(msg.id || fromId, Math.max(0, +msg.ping || 0)); }
+      return;
+    }
+    if (msg.type === 'ping_table') {
+      if (this.role === 'client') { this.pingTable = new Map(msg.pings || []); this.pingTableHostId = msg.id; }
+      return;
+    }
+
+    if (msg.type === 'req_dim') {
+      if (this.role === 'host') {
+        const conn = this.connections && this.connections.get(msg.id || fromId);
+        if (conn) this.sendTo(conn, { type:'dim_state', dim:msg.dim, diffs:this.hostGetDimDiffs(msg.dim) });
+      }
+      return;
+    }
+    if (msg.type === 'dim_state') {
+      if (this.role === 'client') this.clientApplyDimState(msg);
+      return;
+    }
+  },
+
+  // list of {name, ping} for the M-key ping panel (host builds the table; clients read the broadcast)
+  getPingList() {
+    const isHost = this.role === 'host';
+    const table = isHost ? (this.pings || new Map()) : (this.pingTable || new Map());
+    const hostId = isHost ? this.id : this.pingTableHostId;
+    const out = [];
+    let n = 1;
+    for (const [pid, ms] of table) {
+      const me = pid === this.id, host = pid === hostId;
+      let name = host ? 'Host' : ('Player ' + (n++));
+      if (me) name += ' (You)';
+      out.push({ name, ping: Math.max(0, Math.round(+ms || 0)) });
+    }
+    return out;
+  },
+
+  // the dimension the HOST is currently in (from its peer state). A client only defers
+  // world generation / entity sync to the host when they share a dimension; otherwise it
+  // simulates its own dimension locally (the host can't be authoritative for a dim it isn't in).
+  hostDim() {
+    if (this.role !== 'client') return (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+    const hp = this.hostId && this.peers ? this.peers.get(this.hostId) : null;
+    const st = hp && (hp.target || hp.state);
+    if (st && st.dim) return st.dim;
+    return (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+  },
+  sameDimAsHost() {
+    const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+    return this.role !== 'client' || this.hostDim() === cur;
+  },
+
+  // Host is the persistent EDIT authority for every dimension. This returns a dimension's
+  // full authoritative block-edit set — live World.diffs if the host is standing in it,
+  // otherwise the stored diffs it has been accumulating from players who were there.
+  hostGetDimDiffs(dim) {
+    const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+    if (dim === cur && typeof World !== 'undefined') return [...World.diffs.entries()];
+    const st = (typeof Dimensions !== 'undefined' && Dimensions.data) ? Dimensions.data[dim] : null;
+    return (st && Array.isArray(st.diffs)) ? st.diffs : [];
+  },
+
+  // client just entered a dimension: apply the host's authoritative edits on top of the
+  // deterministic local terrain, so we see everything anyone edited there before us.
+  clientApplyDimState(msg) {
+    if (!msg || typeof World === 'undefined') return;
+    const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+    if (msg.dim !== cur) return; // stale (we changed dim again) — ignore
+    this.applyingRemote = true;
+    try {
+      for (const [key, id] of (msg.diffs || [])) {
+        World.diffs.set(key, id);
+        const parts = String(key).split(',');
+        const x = +parts[0] | 0, y = +parts[1] | 0, z = +parts[2] | 0;
+        const ck = World.key(x >> 4, z >> 4);
+        if (!World.diffIndex.has(ck)) World.diffIndex.set(ck, new Map());
+        World.diffIndex.get(ck).set(key, id);
+        if (World.hasChunk(x, z)) World.setBlock(x, y, z, id, { remote: true });
+      }
+    } finally { this.applyingRemote = false; }
   },
 
   // host-only: toggle whether clients may run commands, and tell everyone
@@ -501,6 +610,8 @@ const Multiplayer = {
       dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
       swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
       sit: !!(typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating || p.boarding)),
+      board: !!p.boarding,
+      inv: p.gamemode === 'creative',
     };
   },
 
@@ -519,6 +630,16 @@ const Multiplayer = {
         time: Game.time, dayCount: Game.dayCount, humbugAnnounced: Game.humbugAnnounced,
         stocks: Game.stocks,
       });
+    }
+    // ping: client measures RTT to host every 2s; host aggregates + broadcasts a table
+    if (this.connected && now - (this._lastPing || 0) > 2000) {
+      this._lastPing = now;
+      if (this.role === 'client') this.sendTo(this.hostConn, { type:'ping', t: now, id: this.id });
+      else if (this.role === 'host') {
+        if (!this.pings) this.pings = new Map();
+        this.pings.set(this.id, 0); // host is 0ms to itself
+        this.broadcast({ type:'ping_table', id: this.id, pings: [...this.pings.entries()] });
+      }
     }
     this.updatePeers(dt);
   },
@@ -915,12 +1036,37 @@ const Multiplayer = {
         };
       }
 
-      // Damage from remote host/mobs/players.
+      // Broadcast a hurt flash whenever we take damage from ANY source (fall, mob, lava,
+      // explosion, pvp) so every other player sees our model flash red + hear it.
       if (typeof Player !== 'undefined' && Player.hurt && !Player.__mpDamageBroadcastPatch) {
         Player.__mpDamageBroadcastPatch = true;
         const oldPlayerHurt = Player.hurt.bind(Player);
         Player.hurt = function(dmg, kx, kz, opts) {
-          return oldPlayerHurt(dmg, kx, kz, opts);
+          const before = this.hp;
+          const ret = oldPlayerHurt(dmg, kx, kz, opts);
+          if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role !== 'solo'
+              && this.hp < before && this.gamemode !== 'creative') {
+            Multiplayer.send({ type:'player_hurt', id:Multiplayer.id });
+          }
+          return ret;
+        };
+      }
+
+      // Broadcast gunfire so other players hear the shot and see the tracer.
+      if (typeof Guns !== 'undefined' && Guns.tryFire && !Guns.__mpFireBroadcast) {
+        Guns.__mpFireBroadcast = true;
+        const oldTryFire = Guns.tryFire.bind(Guns);
+        Guns.tryFire = function(gunId, isHeld) {
+          const fired = oldTryFire(gunId, isHeld);
+          if (fired && typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role !== 'solo') {
+            const eye = { x: Player.body.x, y: Player.eyeY(), z: Player.body.z };
+            const look = Player.lookDir();
+            Multiplayer.send({ type:'gun_fire', id:Multiplayer.id, gun:gunId|0,
+              fx:+eye.x.toFixed(2), fy:+eye.y.toFixed(2), fz:+eye.z.toFixed(2),
+              dx:+look.x.toFixed(3), dy:+look.y.toFixed(3), dz:+look.z.toFixed(3),
+              dim:(typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld') });
+          }
+          return fired;
         };
       }
 
@@ -1024,6 +1170,8 @@ const Multiplayer = {
         dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
         swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
         sit: !!(typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating || p.boarding)),
+        board: !!p.boarding,
+        inv: p.gamemode === 'creative',
       };
     },
 
@@ -1331,10 +1479,14 @@ const Multiplayer = {
     tryPvpHit(ox, oy, oz, dx, dy, dz, range, dmg, knock, kind) {
       const hit = this.rayPeer(ox, oy, oz, dx, dy, dz, range);
       if (!hit) return false;
+      const peer = this.peers && this.peers.get(hit.id);
+      const st = peer && (peer.target || peer.state);
+      // invincible / creative target: blue "sheen" flash + shielded sound, no damage
+      if (st && st.inv) { this.flashPeer(hit.id, true); return true; }
       const kx = dx * (knock || 0), kz = dz * (knock || 0);
       this.send({ type:'pvp_hit', target:hit.id, dmg:+dmg || 1, kx, kz, kind:kind || 'hit', x:ox, y:oy, z:oz });
       if (this.role === 'host') this.hostHandlePvpHit(this.id, { target:hit.id, dmg:+dmg || 1, kx, kz });
-      this.flashPeer(hit.id); // local hit feedback (flash + sound) so we SEE our hit connect
+      this.flashPeer(hit.id); // local red hit feedback (flash + sound) so we SEE our hit connect
       return true;
     },
 
@@ -1448,12 +1600,34 @@ const Multiplayer = {
         const bob = moving ? Math.sin(now * 0.012) * 0.35 : 0;
         if (p.hitFlashT > 0) p.hitFlashT -= dt;
         if (p.parts) {
-          const sit = !!p.target.sit;
+          const board = !!p.target.board;
+          const sit = !!p.target.sit && !board;
           const pitch = (p.state.pitch || 0) * 0.35;
+          if (!board && p.boardMesh) p.boardMesh.visible = false; // hide the board when not riding
           // model faces -z: forward tilt = NEGATIVE rot.x on the torso; limbs reaching
           // FORWARD = POSITIVE rot.x (bottom of the limb swings toward -z).
-          if (sit) {
+          if (board) {
+            // skateboarding: STAND with a slight forward crouch, knees bent, arms out to balance
+            p.parts.body.position.set(0, 0.98, 0); p.parts.body.rotation.x = -0.18;
+            p.parts.head.position.set(0, 1.5, 0);
+            p.parts.armL.position.set(-0.42, 1.02, 0); p.parts.armR.position.set(0.42, 1.02, 0);
+            p.parts.armL.rotation.z = -0.5; p.parts.armR.rotation.z = 0.5;     // arms out sideways for balance
+            p.parts.armL.rotation.x = 0.2; p.parts.armR.rotation.x = 0.2;
+            p.parts.legL.position.set(-0.16, 0.32, 0.02); p.parts.legR.position.set(0.16, 0.32, -0.06);
+            p.parts.legL.rotation.x = 0.12; p.parts.legR.rotation.x = -0.12;   // slight stance stagger
+            p.parts.legL.scale.y = 0.9; p.parts.legR.scale.y = 0.9;
+            p.parts.head.rotation.x = pitch;
+            p.group.rotation.x = 0;
+            p.group.rotation.y = (p.state.yaw || 0) + Math.PI / 2; // stand SIDEWAYS on the board
+            // give them a visible board so they're not "riding an invisible car"
+            if (!p.boardMesh && typeof Vehicles !== 'undefined' && Vehicles.buildBoardMesh) {
+              p.boardMesh = Vehicles.buildBoardMesh();
+              p.group.add(p.boardMesh);
+            }
+            if (p.boardMesh) { p.boardMesh.visible = true; p.boardMesh.position.set(0, 0.05, 0); p.boardMesh.rotation.y = -Math.PI / 2; }
+          } else if (sit) {
             // seated: upright hips, thighs out horizontal, hands forward on the wheel
+            p.parts.armL.rotation.z = 0; p.parts.armR.rotation.z = 0;
             p.parts.body.position.set(0, 0.84, 0); p.parts.body.rotation.x = -0.06;
             p.parts.head.position.set(0, 1.36, 0);
             p.parts.armL.position.set(-0.39, 1.00, 0); p.parts.armR.position.set(0.39, 1.00, 0);
@@ -1465,6 +1639,7 @@ const Multiplayer = {
             p.group.rotation.x = 0;
           } else {
             // crouch: lower the torso/head and lean FORWARD like MC sneaking (negative rot.x)
+            p.parts.armL.rotation.z = 0; p.parts.armR.rotation.z = 0;
             p.parts.body.position.set(0, 1.02 - crouch * 0.5, 0); p.parts.body.rotation.x = crouch ? -0.38 : 0;
             p.parts.head.position.set(0, 1.55 - crouch * 0.85, 0);
             p.parts.armL.position.set(-0.39, 1.02 - crouch * 0.5, 0); p.parts.armR.position.set(0.39, 1.02 - crouch * 0.5, 0);
@@ -1472,7 +1647,10 @@ const Multiplayer = {
             p.parts.legL.position.set(-0.14, 0.34, 0); p.parts.legR.position.set(0.14, 0.34, 0);
             p.parts.legL.scale.y = sneak ? 0.82 : 1; p.parts.legR.scale.y = sneak ? 0.82 : 1;
             p.parts.legL.rotation.x = -bob; p.parts.legR.rotation.x = bob;
-            p.parts.head.rotation.x = pitch;
+            // head leans forward WITH the torso when sneaking: tilt it (negative rot.x) AND
+            // shift it forward in -z so it sits on the leaned torso instead of floating upright
+            p.parts.head.position.set(0, 1.55 - crouch * 0.85, -crouch * 1.4);
+            p.parts.head.rotation.x = pitch - (crouch ? 0.5 : 0);
             p.group.rotation.x = p.target.swim ? Math.PI / 2.8 : 0;
           }
         }
@@ -1491,64 +1669,95 @@ const Multiplayer = {
         const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
         for (const mat of mats) if (mat && mat.color) {
           if (!mat.userData.baseColor) mat.userData.baseColor = mat.color.clone();
-          if (flashing) mat.color.setRGB(1, 0.25, 0.25); // red hit flash so attackers SEE the hit land
+          if (flashing) { if (p.hitFlashBlue) mat.color.setRGB(0.35, 0.6, 1); else mat.color.setRGB(1, 0.25, 0.25); }
           else mat.color.copy(mat.userData.baseColor).multiplyScalar(l);
         }
       });
     },
 
-    // flash a remote player red + play a hit sound on THIS screen when we land a hit on them
-    flashPeer(pid) {
+    // flash a remote player on THIS screen: red for a real hit, blue "sheen" for an
+    // invincible/creative target. Plays the matching sound at their position.
+    flashPeer(pid, blue) {
       const p = this.peers && this.peers.get(pid);
-      if (p) p.hitFlashT = 0.28;
-      if (typeof SFX !== 'undefined' && SFX.mobHurt) SFX.mobHurt();
+      const pos = p && p.body ? [p.body.x, p.body.y + 1, p.body.z] : null;
+      if (p) { p.hitFlashT = 0.28; p.hitFlashBlue = !!blue; }
+      if (typeof SFX !== 'undefined') {
+        if (blue) { if (SFX.shielded) SFX.shielded(pos); }
+        else if (SFX.mobHurt) SFX.mobHurt(pos);
+      }
     },
 
-    // ---- shared block-breaking progress: everyone sees everyone's cracks ----
-    sendBreakProgress(x, y, z, stage) {
+    // play another player's gunshot + draw its tracer on our screen
+    applyRemoteGunfire(msg) {
+      if (typeof Guns === 'undefined' || !msg) return;
+      const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+      if ((msg.dim || 'overworld') !== cur) return; // different dimension: don't render here
+      const gun = msg.gun | 0;
+      const from = { x:+msg.fx || 0, y:+msg.fy || 0, z:+msg.fz || 0 };
+      const dir = { x:+msg.dx || 0, y:+msg.dy || 0, z:+msg.dz || 0 };
+      if (typeof SFX !== 'undefined' && SFX.gunshot) SFX.gunshot(gun, from);
+      const d = Guns.defs && Guns.defs[gun];
+      if (!d || d.bow || d.rocket) return; // arrows/rockets are separate synced entities
+      const range = d.range || 40;
+      const bh = (typeof World !== 'undefined') ? World.raycast(from.x, from.y, from.z, dir.x, dir.y, dir.z, range) : null;
+      const dist = bh ? bh.dist : range;
+      const ex = from.x + dir.x * dist, ey = from.y + dir.y * dist, ez = from.z + dir.z * dist;
+      if (Guns.tracer) Guns.tracer(from.x, from.y - 0.12, from.z, ex, ey, ez, d.color, !!d.laser);
+    },
+
+    // ---- shared block-breaking progress: everyone sees everyone's cracks, on EVERY
+    // block they're actively cracking (multiple blocks + 3x3/multiblock at once) ----
+    sendBreakSet(blocks) {
       if (!this.connected || this.role === 'solo') return;
+      const arr = Array.isArray(blocks) ? blocks : [];
+      const sig = arr.map(b => b[0] + ',' + b[1] + ',' + b[2] + ':' + b[3]).sort().join('|');
       const now = performance.now();
-      const key = (x | 0) + ',' + (y | 0) + ',' + (z | 0);
-      if (this._breakKey === key && this._breakStage === (stage | 0) && now - (this._breakSentT || 0) < 220) return;
-      this._breakKey = key; this._breakStage = stage | 0; this._breakSentT = now; this._breakActive = true;
-      this.send({ type:'break_progress', x:x|0, y:y|0, z:z|0, stage:stage|0, dim:(typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld') });
+      // resend an unchanged non-empty set every 200ms to keep the receiver's overlays alive
+      if (sig === this._breakSig && (sig === '' || now - (this._breakSentT || 0) < 200)) return;
+      this._breakSig = sig; this._breakSentT = now;
+      this.send({ type:'break_set', blocks:arr, dim:(typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld') });
     },
-    sendBreakStop() {
-      if (!this._breakActive || !this.connected) return;
-      this._breakActive = false; this._breakKey = null; this._breakStage = -1;
-      this.send({ type:'break_progress', stage:-1 });
-    },
-    applyBreakProgress(pid, msg) {
+    applyBreakSet(pid, msg) {
       if (!pid || typeof Game === 'undefined' || !Game.scene) return;
-      const stage = (msg && Number.isFinite(+msg.stage)) ? (msg.stage | 0) : -1;
       const dim = (msg && msg.dim) || 'overworld';
       const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
-      if (stage < 0 || dim !== cur || !Player.crackTex || !Player.crackTex.length) { this.clearRemoteBreak(pid); return; }
-      let rb = this.remoteBreaks.get(pid);
-      if (!rb) {
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(1.008, 1.008, 1.008),
-          new THREE.MeshBasicMaterial({ transparent:true, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-1, side:THREE.DoubleSide })
-        );
-        Game.scene.add(mesh);
-        rb = { mesh, lastT:0 };
-        this.remoteBreaks.set(pid, rb);
+      const blocks = (msg && Array.isArray(msg.blocks)) ? msg.blocks : [];
+      if (dim !== cur || !blocks.length || !Player.crackTex || !Player.crackTex.length) { this.clearRemoteBreak(pid); return; }
+      let rec = this.remoteBreaks.get(pid);
+      if (!rec || !rec.meshes) { rec = { meshes:new Map(), lastT:0 }; this.remoteBreaks.set(pid, rec); }
+      const seen = new Set();
+      for (const b of blocks) {
+        const bx = b[0] | 0, by = b[1] | 0, bz = b[2] | 0;
+        const stage = Math.max(0, Math.min(Player.crackTex.length - 1, b[3] | 0));
+        const bk = bx + ',' + by + ',' + bz;
+        seen.add(bk);
+        let mesh = rec.meshes.get(bk);
+        if (!mesh) {
+          mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(1.008, 1.008, 1.008),
+            new THREE.MeshBasicMaterial({ transparent:true, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-1, side:THREE.DoubleSide })
+          );
+          mesh.position.set(bx + 0.5, by + 0.5, bz + 0.5);
+          Game.scene.add(mesh);
+          rec.meshes.set(bk, mesh);
+        }
+        const tex = Player.crackTex[stage];
+        if (tex && mesh.material.map !== tex) { mesh.material.map = tex; mesh.material.needsUpdate = true; }
+        mesh.visible = true;
       }
-      rb.mesh.position.set((msg.x | 0) + 0.5, (msg.y | 0) + 0.5, (msg.z | 0) + 0.5);
-      const tex = Player.crackTex[Math.max(0, Math.min(Player.crackTex.length - 1, stage))];
-      if (tex && rb.mesh.material.map !== tex) { rb.mesh.material.map = tex; rb.mesh.material.needsUpdate = true; }
-      rb.mesh.visible = true;
-      rb.lastT = performance.now();
+      // drop overlays for blocks that finished cracking / are no longer in the set
+      for (const [bk, mesh] of [...rec.meshes]) if (!seen.has(bk)) { Game.scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); rec.meshes.delete(bk); }
+      rec.lastT = performance.now();
     },
     clearRemoteBreak(pid) {
-      const rb = this.remoteBreaks.get(pid);
-      if (!rb) return;
-      if (rb.mesh) { Game.scene.remove(rb.mesh); rb.mesh.geometry.dispose(); rb.mesh.material.dispose(); }
+      const rec = this.remoteBreaks.get(pid);
+      if (!rec) return;
+      if (rec.meshes) for (const mesh of rec.meshes.values()) { Game.scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); }
       this.remoteBreaks.delete(pid);
     },
     expireRemoteBreaks() {
       const now = performance.now();
-      for (const [pid, rb] of [...this.remoteBreaks]) if (now - (rb.lastT || 0) > 600) this.clearRemoteBreak(pid);
+      for (const [pid, rec] of [...this.remoteBreaks]) if (now - (rec.lastT || 0) > 700) this.clearRemoteBreak(pid);
     },
 
     updatePeerHeldAndArmor(p) {
@@ -1979,10 +2188,30 @@ const Multiplayer = {
       for (const other of this.allVehicles()) if (other && other.mpRider === pid) other.mpRider = '';
       v.mpRider = pid;
       this.vehicleInputs.set(pid, { keys:{}, t:performance.now(), vid:v.mpId });
+      // Boards are ridden client-side (the rider IS the position). Remove the placed board
+      // entity so it doesn't linger as a duplicate; re-placed on dismount at the exit spot.
+      if (v.kind === 'board') {
+        if (!this.boardRiders) this.boardRiders = new Set();
+        this.boardRiders.add(pid);
+        if (Vehicles.remove) Vehicles.remove(v);
+      }
     },
 
     hostHandleVehicleDismount(pid, msg) {
       if (!pid) return;
+      // Board rider dismounting: their position is already correct locally (no teleport);
+      // just drop a fresh board where they are so it can be picked up again.
+      if (this.boardRiders && this.boardRiders.has(pid)) {
+        this.boardRiders.delete(pid);
+        this.vehicleInputs.delete(pid);
+        const peer = this.peers && this.peers.get(pid);
+        const st = peer && (peer.target || peer.state);
+        if (st && Vehicles.placeBoard) {
+          const b = Vehicles.placeBoard(finite(st.x, 0), finite(st.y, 0), finite(st.z, 0), finite(st.yaw, 0));
+          if (b && this.ensureVehicleId) this.ensureVehicleId(b);
+        }
+        return;
+      }
       const v = msg && msg.vid ? this.findVehicleById(msg.vid) : this.allVehicles().find(x => x && x.mpRider === pid);
       if (!v || v.mpRider !== pid) return;
       v.mpRider = '';
@@ -2239,6 +2468,15 @@ const Multiplayer = {
       Vehicles.enter = function(v){
         if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client' && !Multiplayer.applyingRemoteState) {
           if (!v || v.mpRider) { if (typeof UI !== 'undefined') UI.chat('That vehicle is already occupied.', '#ffb347'); return; }
+          if (v.kind === 'board') {
+            // Boards have no shared physics body — the rider IS the position (streamed via
+            // player_state). So board LOCALLY right now and just tell the host to remove the
+            // placed board for everyone; don't wait for a grant that never comes for boards.
+            Multiplayer.clientMountedVehicleId = v.mpId;
+            v.mpRider = Multiplayer.id;
+            Multiplayer.send({ type:'vehicle_mount_request', vid:v.mpId });
+            return oldEnter(v); // sets Player.boarding = true, removes the local board entity
+          }
           Multiplayer.clientMountPending = v.mpId;
           Multiplayer.send({ type:'vehicle_mount_request', vid:v.mpId });
           if (typeof UI !== 'undefined') UI.chat('Entering vehicle...', '#ffd97a');
@@ -3671,14 +3909,33 @@ const Multiplayer = {
   // Clients should not independently decide procedural dungeon/surface structure
   // layouts. Unknown multiplayer structure cells return empty until the host sends
   // the canonical data, preventing duplicate/wrong dungeons from being carved.
+  // When a CLIENT changes dimension, ask the host for that dimension's authoritative
+  // edit-set so it's applied on top of the locally-generated terrain (and it also
+  // re-requests worldgen deferral state via sameDimAsHost()).
+  if (typeof Dimensions !== 'undefined' && Dimensions.switchTo && !Dimensions.__mpSwitchPatch) {
+    Dimensions.__mpSwitchPatch = true;
+    const oldSwitch = Dimensions.switchTo.bind(Dimensions);
+    Dimensions.switchTo = function(dim, pos) {
+      const ret = oldSwitch(dim, pos);
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client') {
+        Multiplayer.send({ type:'req_dim', id:Multiplayer.id, dim:Dimensions.current });
+      }
+      return ret;
+    };
+  }
+
   if (typeof World !== 'undefined' && !World.__mpHostWorldgenPatch) {
     World.__mpHostWorldgenPatch = true;
     const oldStructCell = World.structCell ? World.structCell.bind(World) : null;
     const oldDungeonFor = World.dungeonFor ? World.dungeonFor.bind(World) : null;
     const oldGenChunk = World.genChunk ? World.genChunk.bind(World) : null;
+    // Only defer worldgen to the host when we share the host's dimension. In a DIFFERENT
+    // dimension the host can't supply data (its World is elsewhere), so generate locally.
+    const deferToHost = () => (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client'
+      && Multiplayer.connected && Multiplayer.sameDimAsHost && Multiplayer.sameDimAsHost());
     if (oldStructCell) World.structCell = function(scx, scz){
       const k = (scx|0) + '|' + (scz|0);
-      if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected) {
+      if (deferToHost()) {
         if (this.structCellCache.has(k)) return this.structCellCache.get(k);
         Multiplayer.clientRequestWorldgen('struct', scx|0, scz|0);
         return null;
@@ -3687,7 +3944,7 @@ const Multiplayer = {
     };
     if (oldDungeonFor) World.dungeonFor = function(dscx, dscz){
       const k = (dscx|0) + '|' + (dscz|0);
-      if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected) {
+      if (deferToHost()) {
         if (this.dungeonCache.has(k)) return this.dungeonCache.get(k);
         Multiplayer.clientRequestWorldgen('dungeon', dscx|0, dscz|0);
         return null;
@@ -3696,7 +3953,7 @@ const Multiplayer = {
     };
     if (oldGenChunk) World.genChunk = function(cx, cz){
       const ch = oldGenChunk(cx, cz);
-      if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected) Multiplayer.clientRequestWorldgen('chunk', cx|0, cz|0);
+      if (deferToHost()) Multiplayer.clientRequestWorldgen('chunk', cx|0, cz|0);
       return ch;
     };
   }
@@ -4842,7 +5099,21 @@ const Multiplayer = {
     const msg = prevMakeHostLiveState ? prevMakeHostLiveState() : { type:'host_state', id:this.id };
     msg.falling = this.serializeFallingLiveReliable();
     if (typeof Dynamics !== 'undefined' && Dynamics.serialize) msg.dynamics = Dynamics.serialize();
+    msg.dim = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'); // host's dimension
     return msg;
+  };
+  // Host live entities (mobs/drops/dynamics) belong to the host's dimension only. A client
+  // in a DIFFERENT dimension must ignore them and clear any it already has, or it hallucinates
+  // the host's mobs/items in the wrong world.
+  const prevApplyHLS2 = MP.applyHostLiveState ? MP.applyHostLiveState.bind(MP) : null;
+  MP.applyHostLiveState = function(msg) {
+    if (this.role === 'client' && msg && msg.dim) {
+      const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+      // don't apply the host's mobs/drops when we're in a different dimension (the dim
+      // switch already cleared local entities; this stops them repopulating as ghosts)
+      if (msg.dim !== cur) return;
+    }
+    if (prevApplyHLS2) return prevApplyHLS2(msg);
   };
   const prevApplyHostLiveState = MP.applyHostLiveState ? MP.applyHostLiveState.bind(MP) : null;
   MP.applyHostLiveState = function(msg) {
@@ -4916,7 +5187,7 @@ const Multiplayer = {
             const sx = hit.bx + dx, sz = hit.bz + dz;
             const feet = World.getBlock(sx, hit.by, sz), head = World.getBlock(sx, hit.by + 1, sz);
             const floor = Physics.blockBoxes(World.getBlock(sx, hit.by - 1, sz), sx, hit.by - 1, sz);
-            if (!Physics.blockBoxes(feet, sx, hit.by, sz) && !Physics.blockBoxes(head, sx, hit.by + 1, sz) && floor) { Player.spawn = { x:sx + 0.5, y:hit.by + 0.02, z:sz + 0.5 }; break; }
+            if (!Physics.blockBoxes(feet, sx, hit.by, sz) && !Physics.blockBoxes(head, sx, hit.by + 1, sz) && floor) { Player.spawn = { x:sx + 0.5, y:hit.by + 0.02, z:sz + 0.5, dim:(typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld') }; break; }
           }
         }
         Multiplayer.send({ type:'sleep_request', toNight:!!toNight, hit: hit ? { bx:hit.bx|0, by:hit.by|0, bz:hit.bz|0 } : null });

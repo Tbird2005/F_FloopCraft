@@ -622,6 +622,10 @@ const Game = {
 
   trySleep(toNight, hit) {
     if (this.sleepLock > 0 || this.cinematicPlaying) return;
+    // Multiplayer: only the host can sleep to skip the night (keeps it simple for now).
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client') {
+      UI.chat('Only the host can sleep in multiplayer.', '#ff8080'); return;
+    }
     if (!toNight && !this.isNight) { UI.chat('You can only sleep at night. The sun disapproves.', '#ff8080'); return; }
     if (toNight && this.isNight) { UI.chat('The SunBed only works in daylight. It runs on sun. Obviously.', '#ff8080'); return; }
     this.sleepLock = 3;
@@ -633,7 +637,7 @@ const Game = {
       const head = World.getBlock(sx, hit.by + 1, sz);
       const floor = Physics.blockBoxes(World.getBlock(sx, hit.by - 1, sz), sx, hit.by - 1, sz);
       if (!Physics.blockBoxes(feet, sx, hit.by, sz) && !Physics.blockBoxes(head, sx, hit.by + 1, sz) && floor) {
-        Player.spawn = { x: sx + 0.5, y: hit.by + 0.02, z: sz + 0.5 };
+        Player.spawn = { x: sx + 0.5, y: hit.by + 0.02, z: sz + 0.5, dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld') };
         spawnSet = true;
         break;
       }

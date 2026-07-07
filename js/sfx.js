@@ -154,6 +154,8 @@ const SFX = (() => {
       }
     },
     rocketLaunch(pos) { noise(0.4, 800, 0.3, 2500, pos, 75); },
+    // bright metallic "sheen" for hitting an invincible/creative player
+    shielded(pos) { tone(1200, 0.14, 'sine', 0.12, 900, pos, 30); setTimeout(() => tone(1900, 0.10, 'triangle', 0.08, 600, pos, 30), 55); },
     doorSound(pos){ noise(0.09, 500, 0.2, null, pos, 18); tone(140, 0.1, 'square', 0.08, 40, pos, 18); },
     sleep()    { [520, 390, 260].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'sine', 0.08), i * 250)); },
     furnace()  { noise(0.15, 400, 0.12); },

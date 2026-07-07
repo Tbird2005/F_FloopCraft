@@ -348,6 +348,7 @@ const Player = {
       if (e.code === 'KeyE') UI.open(this.gamemode === 'creative' ? 'creative' : 'inventory');
       if (e.code === 'KeyQ') this.dropHeld(e.ctrlKey);
       if (e.code === 'KeyT') UI.openChat('');
+      if (e.code === 'KeyM') UI.togglePingList();
       if (e.code === 'Slash') UI.openChat('/');
       if (e.code.startsWith('Digit')) {
         const n = +e.code.slice(5);
@@ -1455,6 +1456,23 @@ const Player = {
     return Math.max(0, Math.min(4, Math.floor(Math.min(0.999, progress) * 5)));
   },
 
+  // Multiplayer: report EVERY block we're currently cracking (each mineDamage entry may
+  // cover several cells for 3x3/multiblock tools). Others render the whole set + revert.
+  syncBreakDamageToNet() {
+    if (typeof Multiplayer === 'undefined' || !Multiplayer.connected || Multiplayer.role === 'solo') return;
+    if (!(this.mineDamage instanceof Map)) { Multiplayer.sendBreakSet([]); return; }
+    const prefix = this.currentMineDamagePrefix();
+    const blocks = [];
+    for (const [key, entry] of this.mineDamage.entries()) {
+      if (!key.startsWith(prefix) || !entry) continue;
+      const stage = this.crackStageForProgress(entry.progress || 0);
+      if (stage < 0) continue;
+      const cells = (entry.cells && entry.cells.length) ? entry.cells : null;
+      if (cells) for (const c of cells) blocks.push([c[0] | 0, c[1] | 0, c[2] | 0, stage]);
+    }
+    Multiplayer.sendBreakSet(blocks);
+  },
+
   tickMineDamage(dt, activeKey) {
     if (!(this.mineDamage instanceof Map)) this.mineDamage = new Map();
     for (const [key, entry] of [...this.mineDamage.entries()]) {
@@ -1644,17 +1662,11 @@ const Player = {
     }
 
     this.tickMineDamage(dt, canMine ? key : null);
+    // broadcast the FULL set of blocks we're currently cracking (active + lingering,
+    // single + 3x3/multiblock) so every other player sees all of them revert naturally
+    this.syncBreakDamageToNet();
 
     if (!canMine) {
-      // keep sharing the crack while it LINGERS and reverts (heals), not just while
-      // actively mining — otherwise other players see it snap back to fresh instantly
-      if (typeof Multiplayer !== 'undefined' && Multiplayer.connected) {
-        const nb = this._netBreak;
-        const ne = nb ? this.mineDamage.get(nb.key) : null;
-        const nstage = ne ? this.crackStageForProgress(ne.progress) : -1;
-        if (nb && nstage >= 0) Multiplayer.sendBreakProgress(nb.x, nb.y, nb.z, nstage);
-        else { Multiplayer.sendBreakStop(); this._netBreak = null; }
-      }
       this.mineTarget = null;
       this.mineProgress = entry ? entry.progress : 0;
       if (hit && target && entry && entry.progress > 0) {
@@ -1703,11 +1715,6 @@ const Player = {
     this.mineProgress = entry.progress;
     this.showBreakDamage(target, entry.progress);
     this.renderStoredBreakDamage(key, target);
-    if (typeof Multiplayer !== 'undefined' && Multiplayer.connected) {
-      // remember this block so we keep broadcasting its crack as it lingers/reverts later
-      this._netBreak = { x: hit.bx, y: hit.by, z: hit.bz, key };
-      Multiplayer.sendBreakProgress(hit.bx, hit.by, hit.bz, this.crackStageForProgress(entry.progress));
-    }
     if (Math.random() < 8 * dt) SFX.dig();
 
     if (entry.progress >= 1) {
@@ -1715,7 +1722,6 @@ const Player = {
       this.mineProgress = 0;
       this.mineTarget = null;
       this.breakOverlay.visible = false;
-      if (typeof Multiplayer !== 'undefined' && Multiplayer.connected) { Multiplayer.sendBreakStop(); this._netBreak = null; }
       this.breakBlockAt(hit.bx, hit.by, hit.bz, hit.id, toolOk, hit);
       this.renderStoredBreakDamage(null);
     }
@@ -1904,7 +1910,15 @@ const Player = {
     this.fallDist = 0;
     this.swimming = false;
     this.body.h = 1.8;
-    this.body.x = this.spawn.x; this.body.y = this.spawn.y; this.body.z = this.spawn.z;
+    // respawn in the spawn point's OWN dimension — dying in another dimension must send
+    // you home, not drop you at your home coordinates in the wrong world (void fall).
+    const spawnDim = this.spawn.dim || 'overworld';
+    if (typeof Dimensions !== 'undefined' && Dimensions.current !== spawnDim && Dimensions.switchTo) {
+      Dimensions.travelCooldown = 0;
+      Dimensions.switchTo(spawnDim, { x: this.spawn.x, y: this.spawn.y, z: this.spawn.z });
+    } else {
+      this.body.x = this.spawn.x; this.body.y = this.spawn.y; this.body.z = this.spawn.z;
+    }
     this.body.vx = this.body.vy = this.body.vz = 0;
     UI.updateStats();
     UI.updateHotbar();
