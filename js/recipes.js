@@ -24,8 +24,10 @@ const Recipes = (() => {
 
   const _ = 0;
   const P = B.PLANKS, S = I.STICK, Fe = I.IRON_INGOT, Au = I.GOLD_INGOT, Di = I.DIAMOND, Em = I.EMERALD, OP = B.OASIS_PLANKS;
-  const Gp = I.GUNPOWDER, Fl = I.FLOOPIUM, Xg = I.XMAS_GEM, Df = I.DARK_FLOOPIUM;
-  const AP = T_PLANKS, AW = T_WOOL;
+  const Gp = I.GUNPOWDER, Fl = I.FLOOPIUM, St = I.STAR, Df = I.DARK_FLOOPIUM;
+  const AP = T_PLANKS, AW = T_WOOL, AJ = T_JELLY;
+  const Jp = I.JELLY_GLOB_PINK, Jc = I.JELLY_GLOB_CYAN, Jl = I.JELLY_GLOB_LIME;
+  const Jg = I.JELLY_GLOB_GRAPE, Jo = I.JELLY_GLOB_ORANGE, Jy = I.JELLY_GLOB_YELLOW, Ps = I.PATAPIM_SHARD;
 
   // --- basics ---
   add(B.PLANKS, 4, [[B.LOG]]);
@@ -60,7 +62,7 @@ const Recipes = (() => {
   add(I.DIAMOND_EXCAVATOR, 1, [[Di, Di, Di], [Di, I.DIAMOND_SHOVEL, Di], [_, Di, _]]);
 
   // --- bow & arrows ---
-  add(I.BOW, 1, [[_, S, I.STRING], [S, _, I.STRING], [_, S, I.STRING]]);
+  add(I.BOW, 1, [[_, S, AW], [S, _, AW], [_, S, AW]]);
   add(I.ARROW, 4, [[I.FLINT], [S], [I.FEATHER]]);
 
   // --- armor ---
@@ -81,15 +83,15 @@ const Recipes = (() => {
   ], { keep: [I.WATER_BUCKET] });
 
   // --- festive ---
-  add(B.PRESENT, 2, [[AP, AP, AP], [AP, Xg, AP], [AP, AP, AP]]);
-  add(I.COOKIE, 4, [[Xg], [I.APPLE]]);
+  add(B.PRESENT, 2, [[AP, AP, AP], [AP, St, AP], [AP, AP, AP]]);
+  add(I.COOKIE, 4, [[I.SNOWBALL], [I.APPLE]]);
   add(B.CASINO, 1, [[Au, Au, Au], [Au, Di, Au], [AP, AP, AP]]);
   add(B.STOCKS, 1, [[Au, Di, Au], [Au, Di, Au], [AP, AP, AP]]);
   add(B.BONE_BLOCK, 1, [[I.BONE, I.BONE], [I.BONE, I.BONE]]);
   add(I.BONEMEAL, 3, [[I.BONE]]);
   add(B.FLOOP_LAMP, 2, [[Fl], [B.TORCH]]);
   add(B.FLOOP_METAL, 1, [[Fl, Fl], [Fl, Fl]]);
-  add(B.SNOW, 1, [[Xg, B.DIRT]]);
+  add(B.SNOW, 1, [[I.SNOWBALL, B.DIRT]]);
 
   // --- emerald test content ---
   add(B.EMERALD_BLOCK, 1, [[Em, Em, Em], [Em, Em, Em], [Em, Em, Em]]);
@@ -102,12 +104,39 @@ const Recipes = (() => {
   add(I.SPRUCE_DOOR, 3, [[B.SPRUCE_PLANKS, B.SPRUCE_PLANKS], [B.SPRUCE_PLANKS, B.SPRUCE_PLANKS], [B.SPRUCE_PLANKS, B.SPRUCE_PLANKS]]);
   add(I.OASIS_DOOR, 3, [[OP, OP], [OP, OP], [OP, OP]]);
   add(B.SIGN, 3, [[AP, AP, AP], [AP, AP, AP], [_, S, _]]);
-  add(B.WOOL, 1, [[I.STRING, I.STRING], [I.STRING, I.STRING]]);
   add(B.BED, 1, [[AW, AW, AW], [AP, AP, AP]]);
   add(I.SUN, 1, [[B.TORCH, Au, B.TORCH], [Au, B.FLOOP_LAMP, Au], [B.TORCH, Au, B.TORCH]]);
   add(B.SUNBED, 1, [[I.SUN], [B.BED]]);
   add(B.MEGA_TORCH, 1, [[I.STAR, I.SUN, I.STAR], [I.SUN, B.TORCH, I.SUN], [I.STAR, I.SUN, I.STAR]]);
   add(I.STAR, 1, [[B.STARDUST, B.STARDUST], [B.STARDUST, B.STARDUST]]);
+  add(I.DUNGEON_KEY_GREEN, 1, [
+    [_, B.STONE_BRICKS, I.EMERALD, B.STONE_BRICKS, _],
+    [B.STONE_BRICKS, Fe, St, Fe, B.STONE_BRICKS],
+    [I.EMERALD, I.GOLD_INGOT, B.FLOOP_METAL, I.GOLD_INGOT, I.EMERALD],
+    [B.STONE_BRICKS, Fe, St, Fe, B.STONE_BRICKS],
+    [_, B.STONE_BRICKS, I.EMERALD, B.STONE_BRICKS, _],
+  ]);
+  add(I.DUNGEON_KEY_BLUE, 1, [
+    [B.FLOOP_METAL, I.DIAMOND, St, I.DIAMOND, B.FLOOP_METAL],
+    [I.DIAMOND, I.CHARGE_CELL, B.EMERALD_BLOCK, I.CHARGE_CELL, I.DIAMOND],
+    [St, B.EMERALD_BLOCK, I.DUNGEON_KEY_GREEN, B.EMERALD_BLOCK, St],
+    [I.DIAMOND, I.CHARGE_CELL, B.EMERALD_BLOCK, I.CHARGE_CELL, I.DIAMOND],
+    [B.FLOOP_METAL, I.DIAMOND, St, I.DIAMOND, B.FLOOP_METAL],
+  ]);
+  add(I.DUNGEON_KEY_GOLD, 1, [
+    [B.FLOOP_METAL, I.GOLD_INGOT, St, I.GOLD_INGOT, B.FLOOP_METAL],
+    [I.GOLD_INGOT, Df, B.EMERALD_BLOCK, Df, I.GOLD_INGOT],
+    [St, B.EMERALD_BLOCK, I.DUNGEON_KEY_BLUE, B.EMERALD_BLOCK, St],
+    [I.GOLD_INGOT, Df, B.EMERALD_BLOCK, Df, I.GOLD_INGOT],
+    [B.FLOOP_METAL, I.GOLD_INGOT, St, I.GOLD_INGOT, B.FLOOP_METAL],
+  ]);
+  add(I.DUNGEON_KEY_DIAMOND, 1, [
+    [Df, I.DIAMOND, St, I.DIAMOND, Df],
+    [I.DIAMOND, B.FLOOP_METAL, I.CHARGE_CORE, B.FLOOP_METAL, I.DIAMOND],
+    [St, I.CHARGE_CORE, I.DUNGEON_KEY_GOLD, I.CHARGE_CORE, St],
+    [I.DIAMOND, B.FLOOP_METAL, I.CHARGE_CORE, B.FLOOP_METAL, I.DIAMOND],
+    [Df, I.DIAMOND, St, I.DIAMOND, Df],
+  ]);
 
   // --- dyes ---
   add(I.DYE_RED, 2, [[B.ROSE]]);
@@ -149,6 +178,63 @@ const Recipes = (() => {
     [I.BONE, I.COOKED_CHICKEN, I.BONE],
     [_, I.COAL, _]]);
 
+
+
+  // --- jelly village loot/crafts ---
+  for (const [color, globId] of Object.entries(JELLY_GLOB_BY_COLOR)) {
+    add(JELLY_BLOCK_BY_COLOR[color], 1, [[globId, globId], [globId, globId]]);
+  }
+  // Reversible jelly block recipe: the block gives back the same 4 globs it costs.
+  for (const [color, blockId] of Object.entries(JELLY_BLOCK_BY_COLOR)) {
+    const globId = JELLY_GLOB_BY_COLOR[color];
+    if (globId) add(globId, 4, [[blockId]]);
+  }
+  for (const [color, blockId] of Object.entries(JELLY_BLOCK_BY_COLOR)) {
+    add(JELLY_LAMP_BY_COLOR[color], 1, [[blockId, blockId, blockId], [blockId, B.TORCH, blockId], [blockId, blockId, blockId]]);
+  }
+  add(B.JELLY_LAMP, 1, [[AJ, AJ, AJ], [AJ, B.TORCH, AJ], [AJ, AJ, AJ]]);
+  add(I.JELLY_BOOTS, 1, [[AJ, _, AJ], [AJ, _, AJ]]);
+  // Patapim diamond-infused jelly armor: every recipe uses all six jelly colors.
+  add(I.PATAPIM_DIAMOND_JELLY_HELMET, 1, [
+    [Jp, Jc, Ps, Jl, Jg],
+    [Jo, Di, Di, Di, Jy],
+    [Jp, Di, _, Di, Jc],
+  ]);
+  add(I.PATAPIM_DIAMOND_JELLY_CHEST, 1, [
+    [Jp, _, Ps, _, Jc],
+    [Jl, Di, Ps, Di, Jg],
+    [Jo, Di, Di, Di, Jy],
+    [Jp, Di, Ps, Di, Jc],
+    [Jl, Jo, Jy, Jg, Jp],
+  ]);
+  add(I.PATAPIM_DIAMOND_JELLY_LEGS, 1, [
+    [Jp, Jc, Ps, Jl, Jg],
+    [Jo, Di, Di, Di, Jy],
+    [Jp, Di, _, Di, Jc],
+    [Jl, Di, _, Di, Jg],
+    [Jo, Ps, _, Ps, Jy],
+  ]);
+  add(I.PATAPIM_DIAMOND_JELLY_BOOTS, 1, [
+    [Jp, _, _, _, Jc],
+    [Jl, Di, _, Di, Jg],
+    [Jo, Di, _, Di, Jy],
+    [Jp, Ps, _, Ps, Jc],
+    [Jl, Jo, _, Jy, Jg],
+  ]);
+  // Extreme Crafting Table only: 5×5 recipe makes an actual placeable Jelly Person item, not a spawn egg.
+  for (const [color, personId] of Object.entries(JELLY_PERSON_ITEM_BY_COLOR)) {
+    const globId = JELLY_GLOB_BY_COLOR[color];
+    const blockId = JELLY_BLOCK_BY_COLOR[color];
+    if (!globId || !blockId || !personId) continue;
+    add(personId, 1, [
+      [_, _, globId, _, _],
+      [_, globId, _, globId, _],
+      [globId, _, blockId, _, globId],
+      [_, globId, _, globId, _],
+      [_, _, globId, _, _],
+    ]);
+  }
+
   // --- snow ---
   add(B.SNOW_SHEET_1, 1, [[I.SNOWBALL]]);
   add(I.SNOWBALL, 4, [[B.SNOW]]);
@@ -164,8 +250,8 @@ const Recipes = (() => {
   add(I.SHELLS, 4, [[Gp, Fe], [B.SAND, _]]);
   add(I.ROCKET, 2, [[Gp], [Gp], [Fe]]);
   add(I.CHARGE_CELL, 6, [[Fl], [Gp]]);
-  add(I.CHARGE_CORE, 1, [[Fl, Di, Fl], [Gp, Xg, Gp], [Fl, Di, Fl]]);
-  add(I.FLOOP_RAY, 1, [[B.FLOOP_METAL, I.CHARGE_CORE, B.FLOOP_METAL], [Xg, I.RIFLE, Xg], [_, Df, _]]);
+  add(I.CHARGE_CORE, 1, [[Fl, Di, Fl], [Gp, St, Gp], [Fl, Di, Fl]]);
+  add(I.FLOOP_RAY, 1, [[B.FLOOP_METAL, I.CHARGE_CORE, B.FLOOP_METAL], [St, I.RIFLE, St], [_, Df, _]]);
   add(I.PATAPIM_BEAM, 1, [[Df, I.CHARGE_CORE, Df], [I.PATAPIM_SHARD, I.BAZOOKA, I.PATAPIM_SHARD], [Df, I.CHARGE_CORE, Df]]);
 
   // --- vehicles ---
@@ -176,6 +262,48 @@ const Recipes = (() => {
     [I.DIAMOND, I.CAR, I.FLOOP_RAY, I.CAR, I.DIAMOND],
     [B.FLOOP_METAL, I.GOLD_INGOT, I.ROCKET, I.GOLD_INGOT, B.FLOOP_METAL],
     [B.EMERALD_BLOCK, I.DIAMOND, B.FLOOP_METAL, I.DIAMOND, B.EMERALD_BLOCK],
+  ]);
+  add(I.PLANE_WHEEL, 2, [
+    [B.OBSIDIAN, Fe, B.FLOOP_METAL, Fe, B.OBSIDIAN],
+    [Fe, Df, I.COAL, Df, Fe],
+    [B.FLOOP_METAL, I.COAL, Fl, I.COAL, B.FLOOP_METAL],
+    [Fe, Df, I.COAL, Df, Fe],
+    [B.OBSIDIAN, Fe, B.FLOOP_METAL, Fe, B.OBSIDIAN],
+  ]);
+  add(I.PLANE_WING, 2, [
+    [B.FLOOP_METAL, Fe, B.GLASS, Fe, B.FLOOP_METAL],
+    [I.FEATHER, B.FLOOP_METAL, Fl, B.FLOOP_METAL, I.FEATHER],
+    [Fe, B.FLOOP_METAL, I.CHARGE_CELL, B.FLOOP_METAL, Fe],
+    [I.FEATHER, B.FLOOP_METAL, Fl, B.FLOOP_METAL, I.FEATHER],
+    [B.FLOOP_METAL, Fe, B.GLASS, Fe, B.FLOOP_METAL],
+  ]);
+  add(I.PLANE_BODY, 1, [
+    [B.FLOOP_METAL, Fe, B.GLASS, Fe, B.FLOOP_METAL],
+    [Fe, B.GLASS, Di, B.GLASS, Fe],
+    [B.FLOOP_METAL, I.CHARGE_CORE, B.FLOOP_METAL, I.CHARGE_CORE, B.FLOOP_METAL],
+    [Fe, B.GLASS, Di, B.GLASS, Fe],
+    [B.FLOOP_METAL, Fe, B.GLASS, Fe, B.FLOOP_METAL],
+  ]);
+  add(I.PLANE_ENGINE, 1, [
+    [Df, B.FLOOP_METAL, I.ROCKET, B.FLOOP_METAL, Df],
+    [B.FLOOP_METAL, I.CHARGE_CELL, I.CHARGE_CORE, I.CHARGE_CELL, B.FLOOP_METAL],
+    [I.ROCKET, I.FLOOP_RAY, Ps, I.FLOOP_RAY, I.ROCKET],
+    [B.FLOOP_METAL, I.CHARGE_CELL, I.CHARGE_CORE, I.CHARGE_CELL, B.FLOOP_METAL],
+    [Df, B.FLOOP_METAL, I.ROCKET, B.FLOOP_METAL, Df],
+  ]);
+  add(I.PLANE_TAIL, 1, [
+    [Fe, B.FLOOP_METAL, Fe, B.FLOOP_METAL, Fe],
+    [I.FEATHER, Fe, Fl, Fe, I.FEATHER],
+    [B.FLOOP_METAL, I.PLANE_WING, I.CHARGE_CELL, I.PLANE_WING, B.FLOOP_METAL],
+    [I.FEATHER, Fe, Fl, Fe, I.FEATHER],
+    [Fe, B.FLOOP_METAL, Fe, B.FLOOP_METAL, Fe],
+  ]);
+  add(I.PLANE, 1, [
+    [B.FLOOP_METAL, I.PLANE_WING, I.PLANE_TAIL, I.PLANE_WING, B.FLOOP_METAL],
+    [I.PLANE_WHEEL, I.PLANE_BODY, B.GLASS, I.PLANE_ENGINE, I.PLANE_WHEEL],
+    [Au, I.CHARGE_CORE, I.SUPER_CAR, I.FLOOP_RAY, Au],
+    [I.PLANE_WHEEL, B.FLOOP_METAL, I.PLANE_BODY, B.FLOOP_METAL, I.PLANE_WHEEL],
+    [B.FLOOP_METAL, Di, B.FLOOP_METAL, Di, B.FLOOP_METAL],
   ]);
   add(I.SKATEBOARD, 1, [[AP, AP, AP], [S, _, S]]);
   add(I.BOAT, 1, [[AP, _, AP], [AP, AP, AP]]);

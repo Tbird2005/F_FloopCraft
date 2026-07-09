@@ -63,6 +63,13 @@ const B = {
   MERRY_PORTAL: 378, MR_FLOOP_DRINKING_WATER: 379,
   GLASS_SLAB_B: 380, GLASS_SLAB_T: 381,
   GLASS_STAIRS_PX: 382, // +4 = top set
+  JELLY_BLOCK: 390, JELLY_LAMP: 391,
+  JELLY_BLOCK_CYAN: 392, JELLY_BLOCK_LIME: 393, JELLY_BLOCK_GRAPE: 394, JELLY_BLOCK_ORANGE: 395, JELLY_BLOCK_YELLOW: 396,
+  JELLY_HOUSE: 397,
+  JELLY_LAMP_CYAN: 424, JELLY_LAMP_LIME: 425, JELLY_LAMP_GRAPE: 426, JELLY_LAMP_ORANGE: 427, JELLY_LAMP_YELLOW: 428,
+  JELLY_CHEST: 429,
+  DUNGEON_BRICK: 447, DUNGEON_BRICK_INACTIVE: 448, DUNGEON_CORE: 449,
+  DUNGEON_DOOR_GREEN: 450, DUNGEON_DOOR_BLUE: 451, DUNGEON_DOOR_GOLD: 452, DUNGEON_DOOR_DIAMOND: 453,
   // dynamic mixed double slabs: exact bottom/top slab IDs are encoded from here upward
   DSLAB_MIX_C0: 500,
   // dynamic vertical slab variants + two-piece slab combos
@@ -104,18 +111,71 @@ const I = {
   EMERALD_HELMET: 406, EMERALD_CHEST: 407, EMERALD_LEGS: 408, EMERALD_BOOTS: 409,
   BONEMEAL: 410, OASIS_DOOR: 411, FLOOPFRUIT_SEEDS: 412, FLOOPFRUIT: 413, SUPER_CAR: 414,
   OBSIDIAN_BOAT: 415,
+  EGG_JELLY: 416,
+  JELLY_GLOB_PINK: 417, JELLY_GLOB_CYAN: 418, JELLY_GLOB_LIME: 419, JELLY_GLOB_GRAPE: 420, JELLY_GLOB_ORANGE: 421, JELLY_GLOB_YELLOW: 422,
+  JELLY_BOOTS: 423,
+  EGG_BIG_JELLY: 430,
+  JELLY_PERSON_PINK: 431, JELLY_PERSON_CYAN: 432, JELLY_PERSON_LIME: 433,
+  JELLY_PERSON_GRAPE: 434, JELLY_PERSON_ORANGE: 435, JELLY_PERSON_YELLOW: 436,
+  PATAPIM_DIAMOND_JELLY_HELMET: 437, PATAPIM_DIAMOND_JELLY_CHEST: 438,
+  PATAPIM_DIAMOND_JELLY_LEGS: 439, PATAPIM_DIAMOND_JELLY_BOOTS: 440,
+  PLANE_WHEEL: 441, PLANE_BODY: 442, PLANE_WING: 443,
+  PLANE_ENGINE: 444, PLANE_TAIL: 445, PLANE: 446,
+  DUNGEON_KEY_GREEN: 454, DUNGEON_KEY_BLUE: 455, DUNGEON_KEY_GOLD: 456, DUNGEON_KEY_DIAMOND: 457,
+  DUNGEON_CORE_SHARD: 458,
 };
 I.IRON_CHUNK = I.IRON_INGOT;
 I.GOLD_CHUNK = I.GOLD_INGOT;
 
 // recipe tag ids (negative numbers in recipe grids)
-const T_PLANKS = -1, T_WOOL = -2, T_LOG = -3;
+const T_PLANKS = -1, T_WOOL = -2, T_LOG = -3, T_JELLY = -4;
 const TAGS = {
   [T_PLANKS]: [B.PLANKS, B.BIRCH_PLANKS, B.SPRUCE_PLANKS, B.OASIS_PLANKS],
   [T_WOOL]: [B.WOOL, B.WOOL_RED, B.WOOL_GREEN, B.WOOL_BLUE, B.WOOL_YELLOW, B.WOOL_PURPLE, B.WOOL_BLACK],
   [T_LOG]: [B.LOG, B.BIRCH_LOG, B.SPRUCE_LOG, B.OASIS_LOG],
+  [T_JELLY]: [I.JELLY_GLOB_PINK, I.JELLY_GLOB_CYAN, I.JELLY_GLOB_LIME, I.JELLY_GLOB_GRAPE, I.JELLY_GLOB_ORANGE, I.JELLY_GLOB_YELLOW],
 };
-const TAG_NAMES = { [T_PLANKS]: 'Any Planks', [T_WOOL]: 'Any Wool', [T_LOG]: 'Any Log' };
+const TAG_NAMES = { [T_PLANKS]: 'Any Planks', [T_WOOL]: 'Any Wool', [T_LOG]: 'Any Log', [T_JELLY]: 'Any Jelly Glob' };
+
+const JELLY_COLORS_ALL = ['pink', 'cyan', 'lime', 'grape', 'orange', 'yellow'];
+const JELLY_BLOCK_BY_COLOR = {
+  pink: B.JELLY_BLOCK, cyan: B.JELLY_BLOCK_CYAN, lime: B.JELLY_BLOCK_LIME, grape: B.JELLY_BLOCK_GRAPE, orange: B.JELLY_BLOCK_ORANGE, yellow: B.JELLY_BLOCK_YELLOW,
+};
+const JELLY_LAMP_BY_COLOR = {
+  pink: B.JELLY_LAMP, cyan: B.JELLY_LAMP_CYAN, lime: B.JELLY_LAMP_LIME, grape: B.JELLY_LAMP_GRAPE, orange: B.JELLY_LAMP_ORANGE, yellow: B.JELLY_LAMP_YELLOW,
+};
+const JELLY_GLOB_BY_COLOR = {
+  pink: I.JELLY_GLOB_PINK, cyan: I.JELLY_GLOB_CYAN, lime: I.JELLY_GLOB_LIME, grape: I.JELLY_GLOB_GRAPE, orange: I.JELLY_GLOB_ORANGE, yellow: I.JELLY_GLOB_YELLOW,
+};
+const JELLY_PERSON_ITEM_BY_COLOR = {
+  pink: I.JELLY_PERSON_PINK, cyan: I.JELLY_PERSON_CYAN, lime: I.JELLY_PERSON_LIME,
+  grape: I.JELLY_PERSON_GRAPE, orange: I.JELLY_PERSON_ORANGE, yellow: I.JELLY_PERSON_YELLOW,
+};
+const DUNGEON_RANKS = [
+  { rank: 'green', name: 'Green', door: B.DUNGEON_DOOR_GREEN, key: I.DUNGEON_KEY_GREEN, color: '#35c96f', dark: '#176b3c', mobBonus: 0, richBonus: 0.10 },
+  { rank: 'blue', name: 'Blue', door: B.DUNGEON_DOOR_BLUE, key: I.DUNGEON_KEY_BLUE, color: '#3195ff', dark: '#174a9b', mobBonus: 1, richBonus: 0.20 },
+  { rank: 'gold', name: 'Gold', door: B.DUNGEON_DOOR_GOLD, key: I.DUNGEON_KEY_GOLD, color: '#f2c037', dark: '#8d6417', mobBonus: 2, richBonus: 0.34 },
+  { rank: 'diamond', name: 'Diamond', door: B.DUNGEON_DOOR_DIAMOND, key: I.DUNGEON_KEY_DIAMOND, color: '#5ee9ff', dark: '#227e96', mobBonus: 3, richBonus: 0.50 },
+];
+function dungeonRankInfo(value) {
+  if (typeof value === 'string') return DUNGEON_RANKS.find(r => r.rank === value) || DUNGEON_RANKS[0];
+  return DUNGEON_RANKS.find(r => r.door === value || r.key === value) || null;
+}
+function isDungeonDoor(id) { return !!dungeonRankInfo(id); }
+function dungeonDoorAxisAt(id, x, y, z) {
+  if (!isDungeonDoor(id)) return 'z';
+  if (typeof World !== 'undefined' && World && typeof World.getBlock === 'function') {
+    const spansX = World.getBlock(x - 1, y, z) === id || World.getBlock(x + 1, y, z) === id;
+    const spansZ = World.getBlock(x, y, z - 1) === id || World.getBlock(x, y, z + 1) === id;
+    if (spansZ && !spansX) return 'x';
+  }
+  return 'z';
+}
+function dungeonDoorKeyForId(id) { const r = dungeonRankInfo(id); return r ? r.key : 0; }
+function dungeonDoorNameForId(id) { const r = dungeonRankInfo(id); return r ? r.name : 'Unknown'; }
+function isActiveDungeonBlock(id) { return id === B.DUNGEON_BRICK || isDungeonDoor(id); }
+function isDungeonGeneratedBlock(id) { return isActiveDungeonBlock(id) || id === B.DUNGEON_CORE; }
+function isRetiredStackId(id) { return id === B.MERRY_PORTAL || id === I.XMAS_GEM; }
 
 // ============================================================
 // Embedded full-resolution photo block texture support
@@ -14453,9 +14513,10 @@ const DYE_COLOR = { [I.DYE_RED]: 'red', [I.DYE_YELLOW]: 'yellow', [I.DYE_BLUE]: 
 const COLOR_HEX = { white: 0xe8e8e8, red: 0xc0392b, green: 0x27ae60, blue: 0x2980d9, yellow: 0xf1c40f, purple: 0x8e44ad, black: 0x2c2c34 };
 
 const EGG_TYPE = {
-  [I.EGG_FROG]: 'creeper', [I.EGG_SKELETON]: 'skeleton', [I.EGG_SPIDER]: 'spider',
+  [I.EGG_FROG]: 'creeper', [I.EGG_SKELETON]: 'skeleton',
   [I.EGG_SHEEP]: 'sheep', [I.EGG_HUMBUG]: 'humbug', [I.EGG_FLOOP]: 'floop',
   [I.EGG_CHICKEN]: 'chicken', [I.EGG_CAMEL]: 'camel', [I.EGG_TUNG]: 'tung',
+  [I.EGG_JELLY]: 'jelly', [I.EGG_BIG_JELLY]: 'big_jelly',
 };
 
 // ---------------------------------------------------------------
@@ -14492,7 +14553,7 @@ defBlock(B.IRON_ORE, 'Iron Ore', { hard: 6, tool: 'pickaxe', reqTier: 1, drop: {
 defBlock(B.GOLD_ORE, 'Gold Ore', { hard: 6, tool: 'pickaxe', reqTier: 2, drop: { id: I.RAW_GOLD }, xp: 3, tex: { all: 'gold_ore' } });
 defBlock(B.DIAMOND_ORE, 'Diamond Ore', { hard: 7, tool: 'pickaxe', reqTier: 2, drop: { id: I.DIAMOND }, xp: 6, tex: { all: 'diamond_ore' } });
 defBlock(B.EMERALD_ORE, 'Emerald Ore', { hard: 7, tool: 'pickaxe', reqTier: 2, drop: { id: I.EMERALD }, xp: 6, tex: { all: 'emerald_ore' } });
-defBlock(B.XMAS_ORE, 'Merry Christmas Ore', { hard: 6.5, tool: 'pickaxe', reqTier: 2, drop: { id: I.XMAS_GEM, min: 1, max: 2 }, xp: 4, tex: { all: 'xmas_ore' } });
+defBlock(B.XMAS_ORE, 'Frost Star Ore', { hard: 6.5, tool: 'pickaxe', reqTier: 2, drop: { id: I.STAR, min: 1, max: 1, chance: 0.45 }, xp: 4, tex: { all: 'xmas_ore' } });
 defBlock(B.FLOOPIUM_ORE, 'Floopium Ore', { hard: 7, tool: 'pickaxe', reqTier: 2, drop: { id: I.FLOOPIUM }, xp: 4, tex: { all: 'floopium_ore' } });
 defBlock(B.PATAPIM_ORE, 'Patapim Ore', { hard: 8, tool: 'pickaxe', reqTier: 2, drop: { id: I.PATAPIM_SHARD }, xp: 8, tex: { all: 'patapim_ore' } });
 defBlock(B.CRAFT, 'Crafting Table', { hard: 2.2, tool: 'axe', flammable: true, interact: 'craft', tex: { top: 'craft_top', side: 'craft_side', bottom: 'planks' } });
@@ -14541,6 +14602,7 @@ defBlock(B.SUNBED, 'SunBed', { hard: 0.9, opaque: false, flammable: true, intera
 defBlock(B.BED_HEAD, 'Bed', { hard: 0.9, opaque: false, flammable: true, interact: 'bed', shape: 'bed', drop: null, tex: { top: 'bed_top', side: 'bed_side', bottom: 'planks' } });
 defBlock(B.SUNBED_HEAD, 'SunBed', { hard: 0.9, opaque: false, flammable: true, interact: 'sunbed', shape: 'bed', drop: null, lightLevel: 6, tex: { top: 'sunbed_top', side: 'sunbed_side', bottom: 'planks' } });
 defBlock(B.CHEST, 'Chest', { hard: 2.2, tool: 'axe', flammable: true, interact: 'chest', tex: { top: 'chest_top', side: 'chest_front', bottom: 'chest_top' } });
+defBlock(B.JELLY_CHEST, 'Jelly Chest', { hard: 1.4, tool: 'axe', flammable: false, opaque: false, cutout: true, force3dIcon: true, interact: 'chest', tex: { top: 'jelly_chest_top', side: 'jelly_chest_front', bottom: 'jelly_chest_bottom' }, tip: 'A squishy village chest with double storage.' });
 defBlock(B.WOOL, 'White Wool', { hard: 0.9, flammable: true, tex: { all: 'wool' } });
 defBlock(B.GUNPOWDER_ORE, 'Gunpowder Ore', { hard: 6, tool: 'pickaxe', reqTier: 1, drop: { id: I.GUNPOWDER, min: 1, max: 2 }, xp: 2, tex: { all: 'gunpowder_ore' } });
 defBlock(B.BIRCH_LOG, 'Birch Log', { hard: 2.2, tool: 'axe', flammable: true, tex: { top: 'log_top', side: 'birch_log_side', bottom: 'log_top' } });
@@ -14627,6 +14689,23 @@ for (const [id, parts] of Object.entries(SLAB_COMBO_PIECES)) {
 defBlock(B.LOOT_CRATE, 'Floop Loot Crate', { hard: 2, tool: 'axe', flammable: true, xp: 0, interact: 'chest', tex: { all: 'loot_crate' } });
 defBlock(B.STOCKS, 'Floop Exchange', { hard: 7, tool: 'pickaxe', reqTier: 0, interact: 'stocks', lightLevel: 6, tex: { top: 'stocks_top', side: 'stocks_side', bottom: 'stocks_top' } });
 defBlock(B.STONE_BRICKS, 'Stone Bricks', { hard: 5.5, tool: 'pickaxe', reqTier: 0, tex: { all: 'stone_bricks' } });
+defBlock(B.DUNGEON_BRICK, 'Active Dungeon Brick', {
+  hard: Infinity, drop: null, tex: { all: 'dungeon_brick' },
+  tip: 'Protected dungeon stone. Break the dungeon core to deactivate it.'
+});
+defBlock(B.DUNGEON_BRICK_INACTIVE, 'Deactivated Dungeon Brick', {
+  hard: 5.8, tool: 'pickaxe', reqTier: 0, tex: { all: 'dungeon_brick_inactive' }
+});
+defBlock(B.DUNGEON_CORE, 'Dungeon Core', {
+  hard: 7.5, tool: 'pickaxe', reqTier: 1, drop: null, light: true, lightLevel: 10, tex: { all: 'dungeon_core' },
+  tip: 'Break this to conquer the dungeon and make its active blocks mineable.'
+});
+for (const rank of DUNGEON_RANKS) {
+  defBlock(rank.door, rank.name + ' Dungeon Door', {
+    hard: Infinity, drop: null, interact: 'dungeonDoor', opaque: false, cutout: true, shape: 'dungeonDoor', tex: { all: 'dungeon_door_' + rank.rank },
+    tip: 'Part of a 3x3 ranked dungeon gate. Requires a ' + rank.name + ' Dungeon Key.'
+  });
+}
 defBlock(B.SNOWY_GRASS, 'Snowy Grass', { hard: 0.7, tool: 'shovel', drop: { id: B.DIRT }, tex: { top: 'snow', side: 'snowy_grass_side', bottom: 'dirt' } });
 defBlock(B.GRAVEL, 'Gravel', { hard: 0.6, tool: 'shovel', gravity: true, drop: { table: [[B.GRAVEL, 1, 1, 0.85], [I.FLINT, 1, 1, 0.15]] }, tex: { all: 'gravel' } });
 for (const lid of [B.LADDER_PX, B.LADDER_NX, B.LADDER_PZ, B.LADDER_NZ]) {
@@ -14639,8 +14718,21 @@ defBlock(B.OBSIDIAN, 'Obsidian', { hard: 25, tool: 'pickaxe', reqTier: 3, tex: {
 defBlock(B.EMERALD_BLOCK, 'Emerald Block', { hard: 6, tool: 'pickaxe', reqTier: 2, tex: { all: 'emerald_block' } });
 defBlock(B.CACTUS, 'Cactus', { hard: 0.5, opaque: false, shape: 'cactus', tex: { top: 'cactus_top', side: 'cactus_side', bottom: 'cactus_top' } });
 defBlock(B.STARDUST, 'Stardust Block', { hard: 2, tool: 'pickaxe', light: true, lightLevel: 9, xp: 3, tex: { all: 'stardust' } });
-defBlock(B.MERRY_PORTAL, 'Merry Christmas Portal', { hard: Infinity, solid: false, opaque: false, cutout: true, hidden: true, drop: null, light: true, lightLevel: 12, shape: 'portalH', tex: { all: 'merry_portal' } });
+defBlock(B.MERRY_PORTAL, 'Retired Portal Block', { hard: Infinity, solid: false, opaque: false, cutout: true, hidden: true, drop: null, light: false, lightLevel: 0, shape: 'portalH', tex: { all: 'merry_portal' } });
 defBlock(B.MR_FLOOP_DRINKING_WATER, 'Mr Floop Drinking Water', { hard: 0.8, tex: { all: 'mr_floop_drinking_water' } });
+defBlock(B.JELLY_BLOCK, 'Pink Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_pink' } });
+defBlock(B.JELLY_BLOCK_CYAN, 'Cyan Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_cyan' } });
+defBlock(B.JELLY_BLOCK_LIME, 'Lime Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_lime' } });
+defBlock(B.JELLY_BLOCK_GRAPE, 'Grape Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_grape' } });
+defBlock(B.JELLY_BLOCK_ORANGE, 'Orange Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_orange' } });
+defBlock(B.JELLY_BLOCK_YELLOW, 'Yellow Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_yellow' } });
+defBlock(B.JELLY_LAMP, 'Pink Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_pink' } });
+defBlock(B.JELLY_LAMP_CYAN, 'Cyan Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_cyan' } });
+defBlock(B.JELLY_LAMP_LIME, 'Lime Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_lime' } });
+defBlock(B.JELLY_LAMP_GRAPE, 'Grape Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_grape' } });
+defBlock(B.JELLY_LAMP_ORANGE, 'Orange Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_orange' } });
+defBlock(B.JELLY_LAMP_YELLOW, 'Yellow Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_yellow' } });
+defBlock(B.JELLY_HOUSE, 'Jelly House', { stack: 1, hard: 1.2, opaque: false, cutout: true, weak: true, force3dIcon: true, interact: 'jellyHouse', light: true, lightLevel: 7, tex: { top: 'jelly_house_top', side: 'jelly_house_side', bottom: 'jelly_house_bottom' }, tip: 'Tiny jelly barracks. Stores a limited group of Jelly People.' });
 defBlock(B.MEGA_TORCH, 'Mega Star Sun Torch', {
   hard: 3, light: true, lightLevel: 15, shape: 'mega', opaque: false, cutout: true,
   tip: 'Prevents mobs from spawning within a 100 block radius, except for mob spawners.',
@@ -14708,7 +14800,7 @@ defItem(I.IRON_INGOT, 'Iron Ingot');
 defItem(I.GOLD_INGOT, 'Gold Ingot');
 defItem(I.DIAMOND, 'Diamond');
 defItem(I.EMERALD, 'Emerald');
-defItem(I.XMAS_GEM, 'Christmas Gem');
+defItem(I.XMAS_GEM, 'Retired Christmas Gem', { hidden: true, deprecated: true });
 defItem(I.FLOOPIUM, 'Floopium');
 defItem(I.PATAPIM_SHARD, 'Patapim Shard');
 defItem(I.BONE, 'Bone (white dye)');
@@ -14750,6 +14842,7 @@ const ARMOR_DEFS = [
   ['DIAMOND', 'Diamond', [3, 8, 6, 3]],
   ['EMERALD', 'Emerald', [3, 8, 6, 3]],
   ['PATAPIM', 'Patapim', [4, 9, 7, 4]],
+  ['PATAPIM_DIAMOND_JELLY', 'Patapim Diamond-Infused Jelly', [4, 10, 8, 4]],
 ];
 const ARMOR_SLOTS = ['HELMET', 'CHEST', 'LEGS', 'BOOTS'];
 const ARMOR_NAMES = ['Helmet', 'Chestplate', 'Leggings', 'Boots'];
@@ -14758,12 +14851,34 @@ for (const [key, nm, pts] of ARMOR_DEFS) {
     defItem(I[key + '_' + ARMOR_SLOTS[s]], nm + ' ' + ARMOR_NAMES[s], { stack: 1, armor: { slot: s, points: pts[s] } });
   }
 }
+const PATAPIM_DIAMOND_JELLY_ARMOR_IDS = [
+  I.PATAPIM_DIAMOND_JELLY_HELMET,
+  I.PATAPIM_DIAMOND_JELLY_CHEST,
+  I.PATAPIM_DIAMOND_JELLY_LEGS,
+  I.PATAPIM_DIAMOND_JELLY_BOOTS,
+];
+for (const id of PATAPIM_DIAMOND_JELLY_ARMOR_IDS) {
+  if (Reg[id]) Reg[id].tip = 'All six jelly colors fused through diamond and Patapim shards.';
+}
+if (Reg[I.PATAPIM_DIAMOND_JELLY_BOOTS]) {
+  Reg[I.PATAPIM_DIAMOND_JELLY_BOOTS].armor.fallFactor = 0.22;
+}
 defItem(I.DOOR, 'Oak Door', { stack: 16, placesDoor: B.DOOR_XB });
 defItem(I.BIRCH_DOOR, 'Birch Door', { stack: 16, placesDoor: B.BDOOR_XB });
 defItem(I.SPRUCE_DOOR, 'Spruce Door', { stack: 16, placesDoor: B.SDOOR_XB });
 defItem(I.OASIS_DOOR, 'Oasis Door', { stack: 16, placesDoor: B.ODOOR_XB });
 defItem(I.CAR, 'Floopmobile', { stack: 1, vehicle: 'car' });
 defItem(I.SUPER_CAR, 'Blue Super Car', { stack: 1, vehicle: 'supercar', tip: '2x Floopmobile speed, 60 HP, shreds leaves without clank damage.' });
+defItem(I.PLANE_WHEEL, 'Plane Wheel', { stack: 16, tip: 'A reinforced landing wheel for the Floop Plane.' });
+defItem(I.PLANE_BODY, 'Plane Body', { stack: 16, tip: 'The armored fuselage core of a Floop Plane.' });
+defItem(I.PLANE_WING, 'Plane Wing', { stack: 16, tip: 'A broad lift wing built for extreme speed.' });
+defItem(I.PLANE_ENGINE, 'Plane Engine', { stack: 16, tip: 'A compact high-thrust plane engine.' });
+defItem(I.PLANE_TAIL, 'Plane Tail', { stack: 16, tip: 'Tail assembly for stable flight.' });
+defItem(I.PLANE, 'Floop Plane', { stack: 1, vehicle: 'plane', tip: '10 HP. 2x Blue Super Car speed after wind-up. Hold W to build speed, Space to climb after takeoff speed, S to descend.' });
+for (const rank of DUNGEON_RANKS) {
+  defItem(rank.key, rank.name + ' Dungeon Key', { stack: 16, tip: 'Opens ' + rank.name.toLowerCase() + ' ranked dungeon doors.' });
+}
+defItem(I.DUNGEON_CORE_SHARD, 'Dungeon Core Shard', { stack: 16, tip: 'A dormant heart shard from a conquered dungeon.' });
 defItem(I.SKATEBOARD, 'Skateboard', { stack: 1, vehicle: 'skateboard' });
 defItem(I.BOAT, 'Boat', { stack: 1, vehicle: 'boat' });
 defItem(I.OBSIDIAN_BOAT, 'Obsidian Boat', { stack: 1, vehicle: 'obsidian_boat', tip: 'Rides on lava, but sinks in water.' });
@@ -14784,6 +14899,21 @@ for (const [eid, type] of Object.entries(EGG_TYPE)) {
   defItem(+eid, type[0].toUpperCase() + type.slice(1) + ' Spawn Egg', { stack: 16, spawnEgg: type });
 }
 Reg[I.EGG_FROG].name = 'Frog Spawn Egg'; // they were never creepers. not really.
+Reg[I.EGG_JELLY].name = 'Jelly Person Spawn Egg';
+Reg[I.EGG_BIG_JELLY].name = 'Big Jelly Person Spawn Egg';
+defItem(I.JELLY_GLOB_PINK, 'Pink Jelly Glob');
+defItem(I.JELLY_GLOB_CYAN, 'Cyan Jelly Glob');
+defItem(I.JELLY_GLOB_LIME, 'Lime Jelly Glob');
+defItem(I.JELLY_GLOB_GRAPE, 'Grape Jelly Glob');
+defItem(I.JELLY_GLOB_ORANGE, 'Orange Jelly Glob');
+defItem(I.JELLY_GLOB_YELLOW, 'Yellow Jelly Glob');
+defItem(I.JELLY_BOOTS, 'Jelly Boots', { stack: 1, maxDur: 220, armor: { slot: 3, points: 1, fallFactor: 0.35 }, tip: 'Squishy boots that reduce fall damage.' });
+defItem(I.JELLY_PERSON_PINK, 'Pink Jelly Person', { stack: 16, placeJelly: 'pink', tip: 'Right-click a block to place a tiny pink Jelly Person.' });
+defItem(I.JELLY_PERSON_CYAN, 'Cyan Jelly Person', { stack: 16, placeJelly: 'cyan', tip: 'Right-click a block to place a tiny cyan Jelly Person.' });
+defItem(I.JELLY_PERSON_LIME, 'Lime Jelly Person', { stack: 16, placeJelly: 'lime', tip: 'Right-click a block to place a tiny lime Jelly Person.' });
+defItem(I.JELLY_PERSON_GRAPE, 'Grape Jelly Person', { stack: 16, placeJelly: 'grape', tip: 'Right-click a block to place a tiny grape Jelly Person.' });
+defItem(I.JELLY_PERSON_ORANGE, 'Orange Jelly Person', { stack: 16, placeJelly: 'orange', tip: 'Right-click a block to place a tiny orange Jelly Person.' });
+defItem(I.JELLY_PERSON_YELLOW, 'Yellow Jelly Person', { stack: 16, placeJelly: 'yellow', tip: 'Right-click a block to place a tiny yellow Jelly Person.' });
 
 // ============================================================
 // Procedural texture atlas (16px tiles on one canvas)
@@ -15043,6 +15173,67 @@ const Atlas = {
       px(c, x, y, 3, 4, '#dff2fa'); px(c, x, y, 4, 3, '#dff2fa'); px(c, x, y, 5, 2, '#dff2fa');
       px(c, x, y, 3, 8, '#dff2fa'); px(c, x, y, 4, 7, '#dff2fa');
     });
+    const jellyPalette = {
+      pink: ['#ff7fd4', '#ffb8ea', '#ff5cc7', '#b83b99'],
+      cyan: ['#6ee8ff', '#bcf6ff', '#30c9e8', '#268ba8'],
+      lime: ['#9cff6e', '#d5ffc1', '#66df3f', '#459a31'],
+      grape: ['#c77dff', '#e2bfff', '#a14fee', '#7430b0'],
+      orange: ['#ff9d4a', '#ffd0a0', '#e66e25', '#a74b19'],
+      yellow: ['#ffe86e', '#fff6b8', '#e6c93b', '#aa8f1f'],
+    };
+    const jellyTex = (name, key) => reg(name, (c, x, y) => {
+      const p = jellyPalette[key] || jellyPalette.pink;
+      fill(c, x, y, p[0]);
+      speck(c, x, y, [p[1], p[2], p[0], '#ffffff'], 28);
+      c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillRect(x + 2, y + 2, 5, 2); c.fillRect(x + 3, y + 4, 2, 1);
+      c.fillStyle = 'rgba(255,255,255,0.20)'; c.fillRect(x + 10, y + 3, 2, 8);
+      c.fillStyle = 'rgba(0,0,0,0.12)'; c.fillRect(x, y + 12, T, 4);
+      c.strokeStyle = p[3]; c.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+      c.strokeStyle = p[1]; c.strokeRect(x + 2.5, y + 2.5, T - 5, T - 5);
+    });
+    jellyTex('jelly_block_pink', 'pink');
+    jellyTex('jelly_block_cyan', 'cyan');
+    jellyTex('jelly_block_lime', 'lime');
+    jellyTex('jelly_block_grape', 'grape');
+    jellyTex('jelly_block_orange', 'orange');
+    jellyTex('jelly_block_yellow', 'yellow');
+    const jellyLampTex = (name, key) => reg(name, (c, x, y) => {
+      const p = jellyPalette[key] || jellyPalette.pink;
+      fill(c, x, y, p[1]);
+      speck(c, x, y, ['#ffffff', p[0], p[1], p[2]], 42);
+      c.fillStyle = '#fff7cc'; c.fillRect(x + 5, y + 5, 6, 6);
+      c.fillStyle = 'rgba(255,255,255,0.78)'; c.fillRect(x + 2, y + 2, 5, 2);
+      c.fillStyle = 'rgba(255,255,255,0.35)'; c.fillRect(x + 10, y + 3, 2, 8);
+      c.strokeStyle = p[2]; c.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+    });
+    jellyLampTex('jelly_lamp_pink', 'pink');
+    jellyLampTex('jelly_lamp_cyan', 'cyan');
+    jellyLampTex('jelly_lamp_lime', 'lime');
+    jellyLampTex('jelly_lamp_grape', 'grape');
+    jellyLampTex('jelly_lamp_orange', 'orange');
+    jellyLampTex('jelly_lamp_yellow', 'yellow');
+    reg('jelly_house_side', (c, x, y) => {
+      fill(c, x, y, '#ffb8ea');
+      speck(c, x, y, ['#6ee8ff', '#9cff6e', '#c77dff', '#ffe86e', '#ffffff'], 32);
+      // Door belongs only on the vertical sides/front, not the roof/floor.
+      c.fillStyle = '#b83b99'; c.fillRect(x + 2, y + 10, 12, 5);
+      c.fillStyle = '#5a2451'; c.fillRect(x + 6, y + 8, 4, 7);
+      c.fillStyle = '#fff7cc'; c.fillRect(x + 3, y + 4, 3, 3); c.fillRect(x + 10, y + 4, 3, 3);
+      c.fillStyle = 'rgba(255,255,255,0.70)'; c.fillRect(x + 2, y + 2, 5, 2);
+      c.strokeStyle = '#7430b0'; c.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+    });
+    reg('jelly_house_top', (c, x, y) => {
+      fill(c, x, y, '#ffc7f1');
+      speck(c, x, y, ['#6ee8ff', '#9cff6e', '#c77dff', '#ffe86e', '#ffffff'], 38);
+      c.fillStyle = 'rgba(255,255,255,0.70)'; c.fillRect(x + 2, y + 2, 5, 2); c.fillRect(x + 9, y + 4, 3, 1);
+      c.strokeStyle = '#c77dff'; c.strokeRect(x + 2.5, y + 2.5, T - 5, T - 5);
+      c.strokeStyle = '#7430b0'; c.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+    });
+    reg('jelly_house_bottom', (c, x, y) => {
+      fill(c, x, y, '#d88bd0');
+      speck(c, x, y, ['#b83b99', '#7430b0', '#ffb8ea'], 28);
+      c.strokeStyle = '#7430b0'; c.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+    });
     reg('lore_stone', (c, x, y) => {
       fill(c, x, y, '#3a3f4a'); speck(c, x, y, ['#2e323b', '#464c59'], 50);
       c.fillStyle = '#6fe8e8';
@@ -15202,6 +15393,24 @@ const Atlas = {
       c.fillStyle = '#c9c9c9'; c.fillRect(x + 7, y + 5, 2, 4);
       c.fillStyle = '#8a8a8a'; c.fillRect(x + 7, y + 8, 2, 1);
     });
+    reg('jelly_chest_top', (c, x, y) => {
+      fill(c, x, y, '#ffc7f1'); speck(c, x, y, ['#ff7fd4', '#6ee8ff', '#9cff6e', '#ffffff'], 40);
+      c.fillStyle = 'rgba(255,255,255,0.70)'; c.fillRect(x + 2, y + 2, 6, 2); c.fillRect(x + 10, y + 4, 3, 1);
+      c.strokeStyle = '#b83b99'; c.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+      c.strokeStyle = '#fff6ff'; c.strokeRect(x + 2.5, y + 2.5, T - 5, T - 5);
+    });
+    reg('jelly_chest_bottom', (c, x, y) => {
+      fill(c, x, y, '#d88bd0'); speck(c, x, y, ['#b83b99', '#7430b0', '#ffb8ea'], 28);
+      c.strokeStyle = '#7430b0'; c.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+    });
+    reg('jelly_chest_front', (c, x, y) => {
+      fill(c, x, y, '#ffb8ea'); speck(c, x, y, ['#ff7fd4', '#6ee8ff', '#9cff6e', '#ffffff'], 34);
+      c.fillStyle = '#b83b99'; c.fillRect(x, y, T, 1); c.fillRect(x, y + 15, T, 1); c.fillRect(x, y, 1, T); c.fillRect(x + 15, y, 1, T);
+      c.fillRect(x + 1, y + 7, 14, 1);
+      c.fillStyle = '#fff7cc'; c.fillRect(x + 7, y + 5, 2, 4);
+      c.fillStyle = '#7430b0'; c.fillRect(x + 7, y + 8, 2, 1);
+      c.fillStyle = 'rgba(255,255,255,0.70)'; c.fillRect(x + 2, y + 2, 5, 2);
+    });
     reg('wool', (c, x, y) => woolTile(c, x, y, '#e8e8e8', '#d8d8d8', '#f5f5f5'));
     reg('wool_red', (c, x, y) => woolTile(c, x, y, '#c0392b', '#a02a1e', '#d4493a'));
     reg('wool_green', (c, x, y) => woolTile(c, x, y, '#27ae60', '#1d8a4a', '#35c273'));
@@ -15310,6 +15519,42 @@ const Atlas = {
       }
       speck(c, x, y, ['#7f7f7f', '#959595'], 30);
     });
+    reg('dungeon_brick', (c, x, y) => {
+      fill(c, x, y, '#323042');
+      for (let row = 0; row < 4; row++) {
+        c.fillStyle = '#171722'; c.fillRect(x, y + row * 4, T, 1);
+        const off = (row % 2) * 4;
+        c.fillRect(x + ((off + 2) % 16), y + row * 4, 1, 4); c.fillRect(x + ((off + 10) % 16), y + row * 4, 1, 4);
+      }
+      speck(c, x, y, ['#3e3b52', '#262434', '#5a476b'], 34);
+      c.fillStyle = '#7b4dff'; c.fillRect(x + 7, y + 7, 2, 2);
+    });
+    reg('dungeon_brick_inactive', (c, x, y) => {
+      fill(c, x, y, '#5b5865');
+      for (let row = 0; row < 4; row++) {
+        c.fillStyle = '#34323d'; c.fillRect(x, y + row * 4, T, 1);
+        const off = (row % 2) * 4;
+        c.fillRect(x + ((off + 2) % 16), y + row * 4, 1, 4); c.fillRect(x + ((off + 10) % 16), y + row * 4, 1, 4);
+      }
+      speck(c, x, y, ['#6b6774', '#4a4654', '#77707c'], 34);
+      c.fillStyle = '#2d2a35'; c.fillRect(x + 7, y + 7, 2, 2);
+    });
+    reg('dungeon_core', (c, x, y) => {
+      fill(c, x, y, '#171722');
+      c.fillStyle = '#4a2a66'; c.fillRect(x + 2, y + 2, 12, 12);
+      c.fillStyle = '#9b30ff'; c.fillRect(x + 4, y + 4, 8, 8);
+      c.fillStyle = '#ffffff'; c.fillRect(x + 7, y + 6, 2, 4); c.fillRect(x + 6, y + 7, 4, 2);
+      c.fillStyle = '#1b0d2f'; c.fillRect(x + 2, y + 2, 12, 1); c.fillRect(x + 2, y + 13, 12, 1); c.fillRect(x + 2, y + 2, 1, 12); c.fillRect(x + 13, y + 2, 1, 12);
+    });
+    const dungeonDoorTile = (c, x, y, main, dark) => {
+      fill(c, x, y, '#1b1a24');
+      c.fillStyle = dark; c.fillRect(x + 1, y + 1, 14, 14);
+      c.fillStyle = main; c.fillRect(x + 3, y + 2, 10, 12);
+      c.fillStyle = '#0b0b12'; c.fillRect(x + 7, y + 2, 2, 12); c.fillRect(x + 3, y + 7, 10, 2);
+      c.fillStyle = '#f7f1c8'; c.fillRect(x + 11, y + 7, 2, 2);
+      c.fillStyle = '#ffffff'; c.fillRect(x + 4, y + 3, 2, 1); c.fillRect(x + 9, y + 3, 2, 1);
+    };
+    for (const rank of DUNGEON_RANKS) reg('dungeon_door_' + rank.rank, (c, x, y) => dungeonDoorTile(c, x, y, rank.color, rank.dark));
     reg('loot_crate', (c, x, y) => {
       fill(c, x, y, '#a8814d'); speck(c, x, y, ['#9a7544', '#b58c55'], 30);
       c.fillStyle = '#4a3a20';
@@ -15509,7 +15754,7 @@ const Icons = {
     const [sx, sy] = Atlas.tileXY(Atlas.texName(id, 'side'));
     const [tx, ty] = Atlas.tileXY(Atlas.texName(id, 'top'));
 
-    if (def.shape !== 'cube' || def.cutout || !def.opaque || isWater(id) || isLava(id)) {
+    if (!def.force3dIcon && (def.shape !== 'cube' || def.cutout || !def.opaque || isWater(id) || isLava(id))) {
       if (def.shape === 'slabB' || def.shape === 'slabT') {
         c.drawImage(src, sx, sy, T, T, 2, 10, 28, 14);
         c.strokeStyle = 'rgba(0,0,0,0.4)'; c.strokeRect(2.5, 10.5, 27, 13);
@@ -15567,6 +15812,7 @@ const Icons = {
       DIAMOND: { main: '#58e0d8', dark: '#2fa8a0' },
       EMERALD: { main: '#2ecc71', dark: '#168f48' },
       PATAPIM: { main: '#b06cff', dark: '#7a3fd0' },
+      PATAPIM_DIAMOND_JELLY: { main: '#6ee8ff', dark: '#7a3fd0' },
     };
     for (const [key] of ARMOR_DEFS) {
       for (const s of ARMOR_SLOTS) if (I[key + '_' + s] === id) mat = ARMOR_COLORS[key];
@@ -15583,10 +15829,21 @@ const Icons = {
       [I.DIAMOND]: { m: '#4be0d8', M: '#2fa8a0' },
       [I.EMERALD]: { m: '#2ecc71', M: '#168f48' },
       [I.SUPER_CAR]: { u: '#1488ff', U: '#073a9e', c: '#9eeeff', C: '#28a8ff', m: '#ffd700', M: '#b8931e' },
+      [I.PLANE_WHEEL]: { m: '#1b1b22', M: '#08080c', i: '#d8d8d8', I: '#8a8a8a' },
+      [I.PLANE_BODY]: { m: '#dfe8f2', M: '#6d7f94', u: '#2f75ff', U: '#174aaf', c: '#9eeeff', C: '#28a8ff' },
+      [I.PLANE_WING]: { m: '#dfe8f2', M: '#6d7f94', u: '#2f75ff', U: '#174aaf' },
+      [I.PLANE_ENGINE]: { m: '#c9c9c9', M: '#4a4a55', o: '#ff9d2e', u: '#2f75ff' },
+      [I.PLANE_TAIL]: { m: '#dfe8f2', M: '#6d7f94', u: '#2f75ff', U: '#174aaf' },
+      [I.PLANE]: { m: '#dfe8f2', M: '#6d7f94', u: '#2f75ff', U: '#174aaf', c: '#9eeeff', C: '#28a8ff', o: '#ff9d2e' },
       [I.BONEMEAL]: { m: '#efe9d4', M: '#c2ba9a' },
       [I.FLOOPFRUIT_SEEDS]: { m: '#d9f27b', M: '#4d9b35' },
       [I.FLOOPFRUIT]: { m: '#ff4fd8', M: '#9d4cff' },
-      [I.XMAS_GEM]: { m: '#d92626', M: '#1f9e33' },
+      [I.DUNGEON_KEY_GREEN]: { m: '#35c96f', M: '#176b3c', y: '#f7f1c8', Y: '#b8931e' },
+      [I.DUNGEON_KEY_BLUE]: { m: '#3195ff', M: '#174a9b', y: '#f7f1c8', Y: '#b8931e' },
+      [I.DUNGEON_KEY_GOLD]: { m: '#f2c037', M: '#8d6417', y: '#f7f1c8', Y: '#b8931e' },
+      [I.DUNGEON_KEY_DIAMOND]: { m: '#5ee9ff', M: '#227e96', y: '#f7f1c8', Y: '#b8931e' },
+      [I.DUNGEON_CORE_SHARD]: { m: '#c77dff', M: '#4b1f72', y: '#35c96f', Y: '#176b3c', w: '#f7f1c8' },
+      [I.XMAS_GEM]: { m: '#7a7a7a', M: '#454545' },
       [I.FLOOPIUM]: { m: '#6ee814', M: '#3f9e00' },
       [I.DARK_FLOOPIUM]: { m: '#3a1f4d', M: '#150a20' },
       [I.GUNPOWDER]: { m: '#4a4a55', M: '#2a2a33' },
@@ -15611,6 +15868,25 @@ const Icons = {
       [I.EGG_CHICKEN]: { m: '#f5f5f5', M: '#ff9d2e' },
       [I.EGG_CAMEL]: { m: '#d2a24c', M: '#8a6a30' },
       [I.EGG_TUNG]: { m: '#6b502e', M: '#3a2a17' },
+      [I.EGG_JELLY]: { m: '#ff7fd4', M: '#6ee8ff' },
+      [I.EGG_BIG_JELLY]: { m: '#c77dff', M: '#ff7fd4' },
+      [I.JELLY_GLOB_PINK]: { m: '#ff7fd4', M: '#b83b99' },
+      [I.JELLY_GLOB_CYAN]: { m: '#6ee8ff', M: '#268ba8' },
+      [I.JELLY_GLOB_LIME]: { m: '#9cff6e', M: '#459a31' },
+      [I.JELLY_GLOB_GRAPE]: { m: '#c77dff', M: '#7430b0' },
+      [I.JELLY_GLOB_ORANGE]: { m: '#ff9d4a', M: '#a74b19' },
+      [I.JELLY_GLOB_YELLOW]: { m: '#ffe86e', M: '#aa8f1f' },
+      [I.JELLY_BOOTS]: { m: '#ff7fd4', M: '#b83b99' },
+      [I.PATAPIM_DIAMOND_JELLY_HELMET]: { m: '#6ee8ff', M: '#7a3fd0' },
+      [I.PATAPIM_DIAMOND_JELLY_CHEST]: { m: '#6ee8ff', M: '#7a3fd0' },
+      [I.PATAPIM_DIAMOND_JELLY_LEGS]: { m: '#6ee8ff', M: '#7a3fd0' },
+      [I.PATAPIM_DIAMOND_JELLY_BOOTS]: { m: '#6ee8ff', M: '#7a3fd0' },
+      [I.JELLY_PERSON_PINK]: { m: '#ff7fd4', M: '#b83b99', w: '#ffd8f2' },
+      [I.JELLY_PERSON_CYAN]: { m: '#6ee8ff', M: '#268ba8', w: '#d7fbff' },
+      [I.JELLY_PERSON_LIME]: { m: '#9cff6e', M: '#459a31', w: '#e5ffd8' },
+      [I.JELLY_PERSON_GRAPE]: { m: '#c77dff', M: '#7430b0', w: '#f0dcff' },
+      [I.JELLY_PERSON_ORANGE]: { m: '#ff9d4a', M: '#a74b19', w: '#ffe0c4' },
+      [I.JELLY_PERSON_YELLOW]: { m: '#ffe86e', M: '#aa8f1f', w: '#fff7c9' },
     };
     if (overrides[id]) Object.assign(base, overrides[id]);
     return base;
@@ -15730,6 +16006,58 @@ const Icons = {
       }
       return -1;
     };
+    const pdjArmorSlot = (aid) => {
+      if (aid === I.PATAPIM_DIAMOND_JELLY_HELMET) return 0;
+      if (aid === I.PATAPIM_DIAMOND_JELLY_CHEST) return 1;
+      if (aid === I.PATAPIM_DIAMOND_JELLY_LEGS) return 2;
+      if (aid === I.PATAPIM_DIAMOND_JELLY_BOOTS) return 3;
+      return -1;
+    };
+    const pdj = pdjArmorSlot(id);
+    if (pdj === 0) return pad([
+      '................',
+      '....pcylgomr....',
+      '...mmppccmmmy...',
+      '..mmpcylgommmm..',
+      '..mpMmmmmmmMpm..',
+      '..mmP......Cmm..',
+      '..mmP..ww..Cmm..',
+      '..mmP......Cmm..',
+      '..MMM......MMM..']);
+    if (pdj === 1) return pad([
+      '................',
+      '..pmm......cmm..',
+      '..pmmp....cmmp..',
+      '..pmmpcylgommp..',
+      '..mMmmmmmmmmMm..',
+      '..pMmcylgomcMp..',
+      '...MmmmmmmmmM...',
+      '...mmpcylgomm...',
+      '...mmmmmmmmmm...',
+      '...pcylgomrmm...',
+      '...MMMMMMMMMM...']);
+    if (pdj === 2) return pad([
+      '................',
+      '...pcylgomrmm...',
+      '...mmmmmmmmmm...',
+      '...mmp.MM.pmm...',
+      '...pmm....cmm...',
+      '...lmm....gmm...',
+      '...omm....ymm...',
+      '...pMm....cMm...',
+      '...mMm....mMm...',
+      '...MMM....MMM...']);
+    if (pdj === 3) return pad([
+      '................',
+      '................',
+      '................',
+      '................',
+      '...pmm....cmm...',
+      '...lmm....gmm...',
+      '...omm....ymm...',
+      '...pMmm...cMmm..',
+      '...mMMm...mMMm..',
+      '...MMMM...MMMM..']);
     const as = armorSlot(id);
     if (as === 0) return pad([
       '................',
@@ -15774,6 +16102,18 @@ const Icons = {
       '...mmm....mmm...',
       '...mmm....mmm...',
       '...mmmm...mmmm..',
+      '...MMMM...MMMM..']);
+
+    if (id === I.JELLY_BOOTS) return pad([
+      '................',
+      '................',
+      '................',
+      '................',
+      '...mmw....mmw...',
+      '...mmmm...mmmm..',
+      '...mMmm...mMmm..',
+      '...mmmm...mmmm..',
+      '...mMMm...mMMm..',
       '...MMMM...MMMM..']);
 
     // spawn eggs
@@ -15855,6 +16195,33 @@ const Icons = {
       '..mmmmmmmmMM....',
       '..MMMMMMMMM.....',
       '................']);
+    const dungeonKey = () => pad([
+      '................',
+      '.....mmmmmm.....',
+      '....mmYYYYmm....',
+      '....mYmmmmYm....',
+      '....mYmmmmYm....',
+      '....mmYYYYmm....',
+      '......mmmm......',
+      '.......mm.......',
+      '.......mmmmm....',
+      '.......mm.Mm....',
+      '.......mmmmm....',
+      '.......MM.......']);
+    const dungeonCoreShard = () => pad([
+      '................',
+      '................',
+      '......mmmm......',
+      '.....mmYYmm.....',
+      '....mmYwwYmm....',
+      '....mYwyywYm....',
+      '....mYwyywYm....',
+      '....mmYwwYmm....',
+      '.....mmYYmm.....',
+      '......mmmm......',
+      '.......MM.......',
+      '......MMMM......',
+      '.....MM..MM.....']);
 
     const P = {
       [I.STICK]: pad([
@@ -15941,6 +16308,11 @@ const Icons = {
         '....mMMMMm......',
         '.....MMMM.......',
         '................']),
+      [I.DUNGEON_KEY_GREEN]: dungeonKey(),
+      [I.DUNGEON_KEY_BLUE]: dungeonKey(),
+      [I.DUNGEON_KEY_GOLD]: dungeonKey(),
+      [I.DUNGEON_KEY_DIAMOND]: dungeonKey(),
+      [I.DUNGEON_CORE_SHARD]: dungeonCoreShard(),
       [I.APPLE]: pad([
         '................',
         '.......HH.......',
@@ -16220,6 +16592,65 @@ const Icons = {
         '...HtbttbttH...',
         '...HtttttttH...',
         '...HHHHHHHHHH...']),
+      [I.PLANE_WHEEL]: pad([
+        '................',
+        '.....mmmmmm.....',
+        '....mmMMMMmm....',
+        '...mmMiiiiMmm...',
+        '...mMiIIIIiMm...',
+        '...mmMiiiiMmm...',
+        '....mmMMMMmm....',
+        '.....mmmmmm.....']),
+      [I.PLANE_BODY]: pad([
+        '.......m........',
+        '......mmm.......',
+        '.....mmcmm......',
+        '....mmmmmmm.....',
+        '...uummmmmuu....',
+        '..uummmmmmmmuu..',
+        '..uummmCCmmmuu..',
+        '...uummmmmmuu...',
+        '....MMmmmmMM....',
+        '.....MMMMMM.....']),
+      [I.PLANE_WING]: pad([
+        '................',
+        '..mmmmmmmmmmmm..',
+        '.mmmmmmmmmmmmmm.',
+        'ummmmmmmmmmmmmmu',
+        'UUUmmmmmmmmmmUUU',
+        '...UUmmmmmmUU...',
+        '...UU......UU...']),
+      [I.PLANE_ENGINE]: pad([
+        '................',
+        '.....MMMMMM.....',
+        '....MmmmmM......',
+        '...MMmoomMM.....',
+        '..MMmoooomMM....',
+        '...MMmoomMM.....',
+        '....MmmmmM......',
+        '.....MMuMM......']),
+      [I.PLANE_TAIL]: pad([
+        '................',
+        '.......m........',
+        '......mmm.......',
+        '.....mmumm......',
+        '....mmuuumm.....',
+        '...MMmuuuMmm....',
+        '..UUUmmmmmUUU...',
+        '.....MMMMMM.....']),
+      [I.PLANE]: pad([
+        '.......m........',
+        '......mmm.......',
+        '.....mcccM......',
+        '....mmmmmmm.....',
+        '.uuuummmmmmuuuu.',
+        'uuuuummmmmmmuuuu',
+        '.UUUummmmmmuUUU.',
+        '.....mMMMMm.....',
+        '.....mmomm......',
+        '....mmmoomm.....',
+        '...mmM....Mmm...',
+        '..mmM......Mmm..']),
       [I.CAR]: pad([
         '................',
         '................',
@@ -16487,6 +16918,34 @@ const Icons = {
         '......PP........']),
     };
     if (P[id]) return P[id];
+
+    if (Reg[id] && Reg[id].placeJelly) return pad([
+      '................',
+      '.....mmmmmm.....',
+      '....mmmmmmmm....',
+      '....mmwmmwmm....',
+      '....mmmmmmmm....',
+      '.....mMMMMm.....',
+      '....mmmmmmmm....',
+      '...mmmmmmmmmm...',
+      '...mmm.mmmm.m...',
+      '...MMm.MMMm.M...',
+      '....mM....Mm....',
+      '....MM....MM....']);
+
+    if (id >= I.JELLY_GLOB_PINK && id <= I.JELLY_GLOB_YELLOW) return pad([
+      '................',
+      '................',
+      '.....mmmm.......',
+      '....mmmmmm......',
+      '...mmmwwmmm.....',
+      '...mmmmmmmm.....',
+      '..mmMmmmmmmm....',
+      '..mmmmmmmMmm....',
+      '...mmmmmmmm.....',
+      '....mMMMMm......',
+      '.....MMMM.......',
+      '................']);
     // dyes get a blob
     if (id >= I.DYE_RED && id <= I.DYE_GREEN) return pad([
       '................',

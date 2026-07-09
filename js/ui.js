@@ -16,6 +16,21 @@ const UI = {
 
   el(id) { return document.getElementById(id); },
 
+  cloneStack(s, count) {
+    if (!s) return null;
+    const out = { id: s.id, count: count === undefined ? s.count : count };
+    if (s.dur !== undefined) out.dur = s.dur;
+    if (s.data !== undefined) out.data = JSON.parse(JSON.stringify(s.data));
+    return out;
+  },
+
+  sameStack(a, b) {
+    if (!a || !b || a.id !== b.id) return false;
+    const ad = a.data === undefined ? '' : JSON.stringify(a.data);
+    const bd = b.data === undefined ? '' : JSON.stringify(b.data);
+    return ad === bd;
+  },
+
   init() {
     const hb = this.el('hotbar');
     this.hotbarEls = [];
@@ -56,7 +71,7 @@ const UI = {
       const dir = Player.lookDir();
       const n = e.button === 2 ? 1 : this.cursor.count;
       Drops.spawn(Player.body.x + dir.x * 0.6, Player.body.y + 1.4, Player.body.z + dir.z * 0.6,
-        this.cursor.id, n, [dir.x * 5.5, 1.8, dir.z * 5.5], this.cursor.dur);
+        this.cursor.id, n, [dir.x * 5.5, 1.8, dir.z * 5.5], this.cursor.dur, this.cursor.data);
       this.cursor.count -= n;
       if (this.cursor.count <= 0) this.cursor = null;
       SFX.pop();
@@ -94,6 +109,7 @@ const UI = {
     else if (def.armor) extra = '\n+' + def.armor.points + ' armor';
     else if (def.gun) extra = '\nDMG ' + def.gun.dmg + (def.gun.pellets > 1 ? '×' + def.gun.pellets : '') + ' · uses ' + Reg[def.gun.ammo].name;
     else if (def.block && def.xp) extra = '\n+' + def.xp + ' XP when mined';
+    if (stack && stack.data && typeof Jelly !== 'undefined') { const jh = Jelly.readHouseItemData(stack.data); if (jh) extra += '\nJelly People inside: ' + jh.stored.length; }
     if (def.maxDur) {
       const cur = stack && stack.dur !== undefined ? stack.dur : def.maxDur;
       const fmtDur = (v, decimals = 1) => Number.isFinite(Number(v)) ? Number(v).toFixed(decimals) : String(v);
@@ -401,7 +417,7 @@ const UI = {
     } else if (cmd === 'time') {
       const t = (arg[0] || '').toLowerCase();
       const frac = Game.time / Game.dayLen;
-      if (t === 'day') { Game.time = (Math.floor(frac) + 1) * Game.dayLen + Game.dayLen * 0.05; this.chat('Sun: deployed.', '#ffd97a'); }
+      if (t === 'day') { Game.time = (Math.floor(frac) + 1) * Game.dayLen + Game.dayLen * 0.05; if (typeof Dynamics !== 'undefined' && Dynamics.clearStarfall) Dynamics.clearStarfall(false); this.chat('Sun: deployed.', '#ffd97a'); }
       else if (t === 'night') { Game.time = Math.floor(frac) * Game.dayLen + Game.dayLen * 0.55; this.chat('Moon: deployed.', '#aac6ff'); }
       else this.chat('Usage: /time day|night', '#ff8080');
     } else if (cmd === 'give') {
@@ -437,7 +453,7 @@ const UI = {
       if (found.error === 'unknown') { this.chat('Unknown structure. Use /locate help', '#ff8080'); return; }
       if (found.error === 'dimension') { this.chat('That structure type belongs to the overworld. Use a return portal first.', '#ff8080'); return; }
       if (found.error) { this.chat('No ' + found.type + ' found nearby.', '#ff8080'); return; }
-      World.update(found.x, found.z, 8);
+      World.update(found.x, found.z, 8, found.y);
       Player.body.x = found.x; Player.body.y = found.y; Player.body.z = found.z;
       Player.body.vx = Player.body.vy = Player.body.vz = 0;
       this.chat('Teleported to ' + found.type + ' at x ' + Math.floor(found.x) + ', y ' + Math.floor(found.y) + ', z ' + Math.floor(found.z) + '.', '#7df5ec');
@@ -463,7 +479,7 @@ const UI = {
     } else if (cmd === 'seed') {
       this.chat('World seed: ' + World.seed, '#7df5ec');
     } else if (cmd === 'save') {
-      this.chat(Save.saveCurrent() ? 'World saved.' : 'Save failed.', '#7df5ec');
+      this.chat(Save.saveCurrent({ force: true }) ? 'World saved.' : 'Save failed.', '#7df5ec');
     } else if (cmd === 'help') {
       this.chat('/gamemode c|s · /time day|night · /give <item> [n] · /tp x y z · /locate help · /locatetp <structure> · /heal · /seed · /save', '#ccc');
       this.chat('Multiplayer (host): /allowcommands [on|off] — let all players use commands (cheats). Press M for ping.', '#ccc');
@@ -552,7 +568,7 @@ const UI = {
         this.slotClick(get, set, e.button, e.shiftKey, opts);
         this.refreshAll();
         const s = get();
-        if (s) this.showTooltip(s.id); else this.hideTooltip();
+        if (s) this.showTooltip(s.id, s); else this.hideTooltip();
       });
       d.addEventListener('mouseup', e => {
         if (e.button !== 0 && e.button !== 2) return;
@@ -580,8 +596,8 @@ const UI = {
     }
     if (!this.slotAccepts(this.cursor, opts)) return;
     const s = get();
-    if (!s) { set({ id: this.cursor.id, count: 1 }); this.cursor.count--; }
-    else if (s.id === this.cursor.id && s.count < Reg[s.id].stack) { s.count++; set(s); this.cursor.count--; }
+    if (!s) { set(this.cloneStack(this.cursor, 1)); this.cursor.count--; }
+    else if (this.sameStack(s, this.cursor) && s.count < Reg[s.id].stack) { s.count++; set(s); this.cursor.count--; }
     else return;
     if (opts && opts.armorSlot !== undefined) this.updateStats();
     SFX.click();
@@ -602,8 +618,8 @@ const UI = {
     if (shift) {
       if (!s) return;
       if (opts.shiftTo === 'inv') {
-        const left = Player.addItem(s.id, s.count);
-        set(left > 0 ? { id: s.id, count: left } : null);
+        const left = Player.addItem(s.id, s.count, s.dur, s.data);
+        set(left > 0 ? this.cloneStack(s, left) : null);
       } else if (opts.invIndex !== undefined) {
         const def = Reg[s.id];
         // with a furnace open, shift-click routes smeltables/fuel into it
@@ -627,22 +643,22 @@ const UI = {
         // with a chest open, shift-click moves into the chest
         if (this.screen === 'chest' && this.activeChest) {
           let left = s.count;
-          for (let i = 0; i < 27 && left > 0; i++) {
+          for (let i = 0; i < this.activeChest.length && left > 0; i++) {
             const t = this.activeChest[i];
-            if (t && t.id === s.id && t.count < def.stack) {
+            if (this.sameStack(t, s) && t.count < def.stack) {
               const take = Math.min(def.stack - t.count, left);
               t.count += take; left -= take;
             }
           }
-          for (let i = 0; i < 27 && left > 0; i++) {
-            if (!this.activeChest[i]) { this.activeChest[i] = { id: s.id, count: left }; left = 0; }
+          for (let i = 0; i < this.activeChest.length && left > 0; i++) {
+            if (!this.activeChest[i]) { this.activeChest[i] = this.cloneStack(s, left); left = 0; }
           }
-          set(left > 0 ? { id: s.id, count: left } : null);
+          set(left > 0 ? this.cloneStack(s, left) : null);
           return;
         }
         // try armor auto-equip first
         if (def.armor && !Player.armor[def.armor.slot]) {
-          Player.armor[def.armor.slot] = { id: s.id, count: 1 };
+          Player.armor[def.armor.slot] = this.cloneStack(s, 1);
           s.count--;
           set(s.count > 0 ? s : null);
           this.updateStats();
@@ -653,18 +669,18 @@ const UI = {
         let left = s.count;
         for (let i = target[0]; i < target[1] && left > 0; i++) {
           const t = Player.inv[i];
-          if (t && t.id === s.id && t.count < def.stack) {
+          if (this.sameStack(t, s) && t.count < def.stack) {
             const take = Math.min(def.stack - t.count, left);
             t.count += take; left -= take;
           }
         }
         for (let i = target[0]; i < target[1] && left > 0; i++) {
-          if (!Player.inv[i]) { Player.inv[i] = { id: s.id, count: left }; left = 0; }
+          if (!Player.inv[i]) { Player.inv[i] = this.cloneStack(s, left); left = 0; }
         }
-        set(left > 0 ? { id: s.id, count: left } : null);
+        set(left > 0 ? this.cloneStack(s, left) : null);
       } else if (opts.armorSlot !== undefined) {
-        const left = Player.addItem(s.id, s.count);
-        set(left > 0 ? { id: s.id, count: left } : null);
+        const left = Player.addItem(s.id, s.count, s.dur, s.data);
+        set(left > 0 ? this.cloneStack(s, left) : null);
         this.updateStats();
       }
       return;
@@ -677,7 +693,7 @@ const UI = {
       }
       else if (this.cursor && s) {
         if (!accepts(this.cursor)) return;
-        if (s.id === this.cursor.id) {
+        if (this.sameStack(s, this.cursor)) {
           const def = Reg[s.id];
           const take = Math.min(def.stack - s.count, this.cursor.count);
           s.count += take; this.cursor.count -= take;
@@ -688,15 +704,15 @@ const UI = {
     } else if (button === 2) {
       if (!this.cursor && s) {
         const half = Math.ceil(s.count / 2);
-        this.cursor = { id: s.id, count: half };
+        this.cursor = this.cloneStack(s, half);
         s.count -= half;
         set(s.count > 0 ? s : null);
       } else if (this.cursor) {
         if (!accepts(this.cursor)) return;
         if (!s) {
-          set({ id: this.cursor.id, count: 1 });
+          set(this.cloneStack(this.cursor, 1));
           this.cursor.count--;
-        } else if (s.id === this.cursor.id && s.count < Reg[s.id].stack) {
+        } else if (this.sameStack(s, this.cursor) && s.count < Reg[s.id].stack) {
           s.count++; this.cursor.count--;
           set(s);
         }
@@ -804,16 +820,16 @@ const UI = {
       for (let i = 0; i < this.craftCells.length; i++) {
         const s = this.craftCells[i];
         if (s) {
-          const left = Player.addItem(s.id, s.count);
-          if (left > 0) Drops.spawn(Player.body.x, Player.body.y + 1, Player.body.z, s.id, left);
+          const left = Player.addItem(s.id, s.count, s.dur, s.data);
+          if (left > 0) Drops.spawn(Player.body.x, Player.body.y + 1, Player.body.z, s.id, left, null, s.dur, s.data);
           this.craftCells[i] = null;
         }
       }
     }
     if (this.cursor) {
       if (this.screen !== 'creative') {
-        const left = Player.addItem(this.cursor.id, this.cursor.count);
-        if (left > 0) Drops.spawn(Player.body.x, Player.body.y + 1, Player.body.z, this.cursor.id, left);
+        const left = Player.addItem(this.cursor.id, this.cursor.count, this.cursor.dur, this.cursor.data);
+        if (left > 0) Drops.spawn(Player.body.x, Player.body.y + 1, Player.body.z, this.cursor.id, left, null, this.cursor.dur, this.cursor.data);
       }
       this.cursor = null;
     }
@@ -1138,7 +1154,10 @@ const UI = {
       B.COBBLE, B.STONE_BRICKS, B.OBSIDIAN, B.GLASS,
       B.WOOL, ...woolColorBlocks,
       B.BONE_BLOCK, B.FLOOP_METAL, B.FLOOP_LAMP, B.PRESENT, B.STARDUST, B.EMERALD_BLOCK,
-      B.LORE, B.MERRY_PORTAL, B.MR_FLOOP_DRINKING_WATER, B.BEDROCK,
+      ...Object.values(JELLY_BLOCK_BY_COLOR), ...Object.values(JELLY_LAMP_BY_COLOR), B.JELLY_HOUSE,
+      B.DUNGEON_BRICK, B.DUNGEON_BRICK_INACTIVE, B.DUNGEON_CORE,
+      B.DUNGEON_DOOR_GREEN, B.DUNGEON_DOOR_BLUE, B.DUNGEON_DOOR_GOLD, B.DUNGEON_DOOR_DIAMOND,
+      B.LORE, B.MR_FLOOP_DRINKING_WATER, B.BEDROCK,
     ]);
 
     // Shape variants are now in one place, ordered by material family.
@@ -1165,15 +1184,16 @@ const UI = {
       B.XMAS_ORE, B.FLOOPIUM_ORE, B.PATAPIM_ORE, B.GUNPOWDER_ORE,
     ]);
     putMany('Utility', [
-      B.CRAFT, B.EXTREME_CRAFT, B.FURNACE, B.CHEST, B.LOOT_CRATE, B.CASINO, B.STOCKS,
+      B.CRAFT, B.EXTREME_CRAFT, B.FURNACE, B.CHEST, B.JELLY_CHEST, B.LOOT_CRATE, B.CASINO, B.STOCKS,
       B.TORCH, B.MEGA_TORCH, B.LADDER_PX, B.SIGN, B.BED, B.SUNBED, B.PLANTATION_POT, B.SPAWNER,
       I.DOOR, I.BIRCH_DOOR, I.SPRUCE_DOOR, I.OASIS_DOOR,
       I.FLINT_STEEL, I.BUCKET, I.WATER_BUCKET, I.LAVA_BUCKET,
     ]);
     putMany('Materials', [
       I.STICK, I.COAL, I.CHARCOAL, I.RAW_IRON, I.IRON_INGOT, I.RAW_GOLD, I.GOLD_INGOT,
-      I.DIAMOND, I.EMERALD, I.XMAS_GEM, I.FLOOPIUM, I.DARK_FLOOPIUM, I.PATAPIM_SHARD,
-      I.BONE, I.GUNPOWDER, I.STRING, I.FEATHER, I.FLINT, I.CHARGE_CORE,
+      I.DIAMOND, I.EMERALD, I.FLOOPIUM, I.DARK_FLOOPIUM, I.PATAPIM_SHARD,
+      I.DUNGEON_KEY_GREEN, I.DUNGEON_KEY_BLUE, I.DUNGEON_KEY_GOLD, I.DUNGEON_KEY_DIAMOND, I.DUNGEON_CORE_SHARD,
+      I.BONE, I.GUNPOWDER, I.FEATHER, I.FLINT, I.CHARGE_CORE,
       I.DYE_RED, I.DYE_YELLOW, I.DYE_BLUE, I.DYE_PURPLE, I.DYE_GREEN,
     ]);
     putMany('Tools', [
@@ -1190,22 +1210,25 @@ const UI = {
       I.DIAMOND_HELMET, I.DIAMOND_CHEST, I.DIAMOND_LEGS, I.DIAMOND_BOOTS,
       I.EMERALD_HELMET, I.EMERALD_CHEST, I.EMERALD_LEGS, I.EMERALD_BOOTS,
       I.PATAPIM_HELMET, I.PATAPIM_CHEST, I.PATAPIM_LEGS, I.PATAPIM_BOOTS,
+      I.PATAPIM_DIAMOND_JELLY_HELMET, I.PATAPIM_DIAMOND_JELLY_CHEST,
+      I.PATAPIM_DIAMOND_JELLY_LEGS, I.PATAPIM_DIAMOND_JELLY_BOOTS,
     ]);
     putMany('Food/Farm', [
       I.APPLE, I.COOKIE, I.BERRY, I.FLOOPFRUIT, I.FLOOPFRUIT_SEEDS, I.BONEMEAL,
       I.RAW_MUTTON, I.COOKED_MUTTON, I.RAW_CHICKEN, I.COOKED_CHICKEN, I.SMOOTHIE, I.SNOWBALL, I.STAR,
     ]);
-    putMany('Vehicles/Fun', [I.CAR, I.SUPER_CAR, I.SKATEBOARD, I.BOAT, I.OBSIDIAN_BOAT, I.SUN]);
+    putMany('Vehicles/Fun', [I.CAR, I.SUPER_CAR, I.PLANE_WHEEL, I.PLANE_BODY, I.PLANE_WING, I.PLANE_ENGINE, I.PLANE_TAIL, I.PLANE, I.SKATEBOARD, I.BOAT, I.OBSIDIAN_BOAT, I.SUN]);
     putMany('Mobs', [
-      I.EGG_FROG, I.EGG_SKELETON, I.EGG_SPIDER, I.EGG_SHEEP, I.EGG_HUMBUG,
-      I.EGG_FLOOP, I.EGG_CHICKEN, I.EGG_CAMEL, I.EGG_TUNG,
+      I.EGG_FROG, I.EGG_SKELETON, I.EGG_SHEEP, I.EGG_HUMBUG,
+      I.EGG_FLOOP, I.EGG_CHICKEN, I.EGG_CAMEL, I.EGG_TUNG, I.EGG_JELLY, I.EGG_BIG_JELLY,
+      I.JELLY_PERSON_PINK, I.JELLY_PERSON_CYAN, I.JELLY_PERSON_LIME, I.JELLY_PERSON_GRAPE, I.JELLY_PERSON_ORANGE, I.JELLY_PERSON_YELLOW,
     ]);
 
     // Safety net: any future non-hidden item still appears in a sensible tab.
     const autoCat = (id) => {
       const def = Reg[id];
       const nm = (def.name || '').toLowerCase();
-      if (def.spawnEgg) return 'Mobs';
+      if (def.spawnEgg || def.placeJelly) return 'Mobs';
       if (def.block) {
         if (isSlab(id) || isStairs(id)) return 'Slabs/Stairs';
         if (nm.includes('ore')) return 'Ores';
@@ -1357,16 +1380,22 @@ const UI = {
   buildChest(ov) {
     const h = this.chestHit;
     const key = World.pkey(h.bx, h.by, h.bz);
-    if (!World.chests.has(key)) World.chests.set(key, new Array(27).fill(null));
+    const isJellyChest = h.id === B.JELLY_CHEST || World.getBlock(h.bx, h.by, h.bz) === B.JELLY_CHEST;
+    const chestSize = isJellyChest ? 54 : 27;
+    if (!World.chests.has(key)) World.chests.set(key, new Array(chestSize).fill(null));
+    if (World.chests.get(key).length < chestSize) {
+      const old = World.chests.get(key);
+      while (old.length < chestSize) old.push(null);
+    }
     this.activeChest = World.chests.get(key);
 
     const p = document.createElement('div');
     p.className = 'panel';
-    p.innerHTML = '<h2>Chest</h2>';
+    p.innerHTML = '<h2>' + (isJellyChest ? 'Jelly Chest' : 'Chest') + '</h2>';
     const grid = document.createElement('div');
     grid.className = 'grid';
     grid.style.gridTemplateColumns = 'repeat(9, 40px)';
-    for (let i = 0; i < 27; i++) {
+    for (let i = 0; i < chestSize; i++) {
       const idx = i;
       // read/write activeChest LIVE — a client's host chest_snapshot can replace the
       // backing array after this panel is built, so capturing it by ref would freeze

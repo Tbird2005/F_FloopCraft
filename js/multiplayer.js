@@ -26,7 +26,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v105',
+  versionTag: 'ffloopcraft-v112',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -510,33 +510,24 @@ const Multiplayer = {
   // world generation / entity sync to the host when they share a dimension; otherwise it
   // simulates its own dimension locally (the host can't be authoritative for a dim it isn't in).
   hostDim() {
-    if (this.role !== 'client') return (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
-    const hp = this.hostId && this.peers ? this.peers.get(this.hostId) : null;
-    const st = hp && (hp.target || hp.state);
-    if (st && st.dim) return st.dim;
-    return (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+    return 'overworld';
   },
   sameDimAsHost() {
-    const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
-    return this.role !== 'client' || this.hostDim() === cur;
+    return true;
   },
 
   // Host is the persistent EDIT authority for every dimension. This returns a dimension's
   // full authoritative block-edit set — live World.diffs if the host is standing in it,
   // otherwise the stored diffs it has been accumulating from players who were there.
   hostGetDimDiffs(dim) {
-    const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
-    if (dim === cur && typeof World !== 'undefined') return [...World.diffs.entries()];
-    const st = (typeof Dimensions !== 'undefined' && Dimensions.data) ? Dimensions.data[dim] : null;
-    return (st && Array.isArray(st.diffs)) ? st.diffs : [];
+    return (typeof World !== 'undefined') ? [...World.diffs.entries()] : [];
   },
 
   // client just entered a dimension: apply the host's authoritative edits on top of the
   // deterministic local terrain, so we see everything anyone edited there before us.
   clientApplyDimState(msg) {
     if (!msg || typeof World === 'undefined') return;
-    const cur = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
-    if (msg.dim !== cur) return; // stale (we changed dim again) — ignore
+    if (msg.dim && msg.dim !== 'overworld') return;
     this.applyingRemote = true;
     try {
       for (const [key, id] of (msg.diffs || [])) {
@@ -578,7 +569,8 @@ const Multiplayer = {
       base.signDirs = [...World.signDirs.entries()];
       base.lore = [...World.loreMap.entries()];
       base.chests = [...World.chests.entries()].map(([k, slots]) => [k, slots.map(s => Save.packStack(s))]);
-      base.spawners = [...World.spawners.entries()].map(([k, sp]) => [k, sp.type]);
+      base.spawners = [...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, { type: sp.type, roster: sp.roster || null }]);
+      base.jellyHouses = (typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries() : []);
       base.bedDirs = [...World.bedDirs.entries()];
       base.photoDirs = [...World.photoDirs.entries()];
       base.stairSideways = [...World.stairSideways.entries()];
@@ -601,6 +593,7 @@ const Multiplayer = {
   playerState() {
     const p = Player;
     const held = p.held ? p.held() : null;
+    const swingIntent = Number.isFinite(+p.swingIntentT) ? +p.swingIntentT : 0;
     return {
       x: +p.body.x.toFixed(3), y: +p.body.y.toFixed(3), z: +p.body.z.toFixed(3),
       vx: +p.body.vx.toFixed(3), vy: +p.body.vy.toFixed(3), vz: +p.body.vz.toFixed(3),
@@ -609,6 +602,9 @@ const Multiplayer = {
       held: held ? held.id : 0,
       dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
       swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
+      swing: p.swingSeq || 0,
+      swingT: +swingIntent.toFixed(3),
+      swinging: !!(swingIntent > 0 || p.mining || (p.lmb && !p.dead)),
       sit: !!(typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating || p.boarding)),
       board: !!p.boarding,
       inv: p.gamemode === 'creative',
@@ -731,6 +727,7 @@ const Multiplayer = {
     return {
       id, group, state: null, target: null, lastSeen: performance.now(),
       body: { x: 0, y: 0, z: 0, w: 0.3, h: 1.8, dead: false },
+      swingSeq: undefined, swingT: 0, swingHoldT: 0,
       parts: { body, head, armL, armR, legL, legR },
     };
   },
@@ -774,10 +771,19 @@ const Multiplayer = {
       p.body.x = p.state.x; p.body.y = p.state.y; p.body.z = p.state.z; p.body.h = +p.target.h || 1.8; p.body.dead = !!p.state.dead;
       const moving = Math.abs(+p.target.vx || 0) + Math.abs(+p.target.vz || 0) > 0.3;
       const bob = moving ? Math.sin(now * 0.012) * 0.35 : 0;
+      const remoteSwingSeq = Number.isFinite(+p.target.swing) ? +p.target.swing : 0;
+      if (p.swingSeq === undefined) p.swingSeq = remoteSwingSeq;
+      else if (remoteSwingSeq !== p.swingSeq) { p.swingSeq = remoteSwingSeq; p.swingT = 0.3; }
+      if (p.swingT > 0) p.swingT = Math.max(0, p.swingT - dt);
+      if (p.target.swinging || p.swingT > 0) p.swingHoldT = (p.swingHoldT || 0) + dt;
+      else p.swingHoldT = 0;
+      const impulseSwing = p.swingT > 0 ? Math.sin((1 - p.swingT / 0.3) * Math.PI) * 1.25 : 0;
+      const heldSwing = p.target.swinging ? Math.sin((((p.swingHoldT || 0) / 0.24) % 1) * Math.PI) * 1.15 : 0;
+      const actionSwing = Math.max(impulseSwing, heldSwing, 0);
       if (p.parts) {
         p.parts.head.rotation.x = (p.state.pitch || 0) * 0.35;
         p.parts.armL.rotation.x = bob;
-        p.parts.armR.rotation.x = -bob;
+        p.parts.armR.rotation.x = -bob + actionSwing;
         p.parts.legL.rotation.x = -bob;
         p.parts.legR.rotation.x = bob;
         if (p.target.swim) p.group.rotation.x = Math.PI / 2.8;
@@ -951,13 +957,13 @@ const Multiplayer = {
       if (typeof Drops !== 'undefined' && Drops.spawn && !Drops.__mpSpawnPatch) {
         Drops.__mpSpawnPatch = true;
         const oldDropSpawn = Drops.spawn.bind(Drops);
-        Drops.spawn = function(x, y, z, id, count, vel, dur) {
+        Drops.spawn = function(x, y, z, id, count, vel, dur, data) {
           if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && !Multiplayer.applyingRemoteState) {
-            Multiplayer.send({ type:'drop_request', x:+x, y:+y, z:+z, item:id|0, count:count|0, vel:vel || null, dur });
+            Multiplayer.send({ type:'drop_request', x:+x, y:+y, z:+z, item:id|0, count:count|0, vel:vel || null, dur, data });
             return null;
           }
           const before = this.list.length;
-          const ret = oldDropSpawn(x, y, z, id, count, vel, dur);
+          const ret = oldDropSpawn(x, y, z, id, count, vel, dur, data);
           for (let i = before; i < this.list.length; i++) {
             const d = this.list[i];
             if (d && !d.mpId) d.mpId = 'd' + (Multiplayer.dropSeq++).toString(36) + '_' + Math.random().toString(36).slice(2, 5);
@@ -1104,7 +1110,7 @@ const Multiplayer = {
         return true;
       }
       if (msg.type === 'drop_request') {
-        if (this.role === 'host' && cameFromClient) Drops.spawn(+msg.x, +msg.y, +msg.z, msg.item|0, msg.count|0, msg.vel || null, msg.dur);
+        if (this.role === 'host' && cameFromClient) Drops.spawn(+msg.x, +msg.y, +msg.z, msg.item|0, msg.count|0, msg.vel || null, msg.dur, msg.data);
         return true;
       }
       if (msg.type === 'pickup_request') {
@@ -1159,6 +1165,7 @@ const Multiplayer = {
     playerState() {
       const p = Player;
       const held = p.held ? p.held() : null;
+      const swingIntent = Number.isFinite(+p.swingIntentT) ? +p.swingIntentT : 0;
       return {
         x: +p.body.x.toFixed(3), y: +p.body.y.toFixed(3), z: +p.body.z.toFixed(3),
         vx: +p.body.vx.toFixed(3), vy: +p.body.vy.toFixed(3), vz: +p.body.vz.toFixed(3),
@@ -1169,6 +1176,9 @@ const Multiplayer = {
         armor: (p.armor || []).map(s => s ? { id:s.id, dur:s.dur } : null),
         dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
         swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
+        swing: p.swingSeq || 0,
+        swingT: +swingIntent.toFixed(3),
+        swinging: !!(swingIntent > 0 || p.mining || (p.lmb && !p.dead)),
         sit: !!(typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating || p.boarding)),
         board: !!p.boarding,
         inv: p.gamemode === 'creative',
@@ -1193,7 +1203,8 @@ const Multiplayer = {
         currentDimension: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
         signs:[...World.signs.entries()], signDirs:[...World.signDirs.entries()], lore:[...World.loreMap.entries()],
         chests:[...World.chests.entries()].map(([k, slots]) => [k, slots.map(pack)]),
-        spawners:[...World.spawners.entries()].map(([k, sp]) => [k, sp.type]),
+        spawners:[...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, { type: sp.type, roster: sp.roster || null }]),
+        jellyHouses:(typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries() : []),
         bedDirs:[...World.bedDirs.entries()], photoDirs:[...World.photoDirs.entries()], stairSideways:[...World.stairSideways.entries()],
         crops:[...World.crops.entries()], plantationOrigins:[...World.plantationOrigins.entries()], plantationUnderSlabs:[...World.plantationUnderSlabs.entries()],
         furnaces:[...World.furnaces.entries()].map(([k, f]) => [k, { i:pack(f.in), f:pack(f.fuel), o:pack(f.out), burn:f.burn || 0, burnMax:f.burnMax || 0, cook:f.cook || 0 }]),
@@ -1214,7 +1225,7 @@ const Multiplayer = {
       return Drops.list.map(d => {
         if (!d.mpId) d.mpId = 'd' + (this.dropSeq++).toString(36) + '_' + Math.random().toString(36).slice(2, 5);
         const b = d.body;
-        return { did:d.mpId, item:d.id, count:d.count, dur:d.dur, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), age:+(d.age||0).toFixed(2), pd:+(d.pickupDelay||0).toFixed(2) };
+        return { did:d.mpId, item:d.id, count:d.count, dur:d.dur, data:d.data, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), age:+(d.age||0).toFixed(2), pd:+(d.pickupDelay||0).toFixed(2) };
       });
     },
 
@@ -1259,7 +1270,8 @@ const Multiplayer = {
       try {
         World.signs = new Map(msg.signs || []); World.signDirs = new Map(msg.signDirs || []); World.loreMap = new Map(msg.lore || []);
         World.chests = new Map((msg.chests || []).map(([k, slots]) => [k, (slots || []).map(unpack)]));
-        World.spawners = new Map((msg.spawners || []).map(([k, type]) => [k, { type, cd:3 }]));
+        World.spawners = new Map((msg.spawners || []).filter(([k, val]) => !val || (val.type || val) !== 'jelly_house').map(([k, val]) => { const obj = (val && typeof val === 'object') ? val : { type: val }; return [k, { type: obj.type, cd:3, roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined }]; }));
+        if (typeof Jelly !== 'undefined') Jelly.loadHouseEntries(msg.jellyHouses || []);
         World.bedDirs = new Map(msg.bedDirs || []); World.photoDirs = new Map(msg.photoDirs || []); World.stairSideways = new Map(msg.stairSideways || []);
         World.crops = new Map(msg.crops || []); World.plantationOrigins = new Map(msg.plantationOrigins || []); World.plantationUnderSlabs = new Map(msg.plantationUnderSlabs || []);
         World.furnaces = new Map((msg.furnaces || []).map(([k, f]) => [k, { in:unpack(f.i), fuel:unpack(f.f), out:unpack(f.o), burn:f.burn || 0, burnMax:f.burnMax || 0, cook:f.cook || 0 }]));
@@ -1303,12 +1315,12 @@ const Multiplayer = {
         let d = Drops.list.find(x => x.mpId === s.did);
         if (!d) {
           const before = Drops.list.length;
-          Drops.spawn(+s.x, +s.y, +s.z, s.item|0, s.count|0, [0,0,0], s.dur);
+          Drops.spawn(+s.x, +s.y, +s.z, s.item|0, s.count|0, [0,0,0], s.dur, s.data);
           d = Drops.list[before];
           if (!d) continue;
           d.mpId = s.did;
         }
-        d.id = s.item|0; d.count = s.count|0; d.dur = s.dur; d.age = +s.age || 0; d.pickupDelay = +s.pd || 0;
+        d.id = s.item|0; d.count = s.count|0; d.dur = s.dur; d.data = s.data; d.age = +s.age || 0; d.pickupDelay = +s.pd || 0;
         const b = d.body; b.x = +s.x; b.y = +s.y; b.z = +s.z; b.vx = +s.vx || 0; b.vy = +s.vy || 0; b.vz = +s.vz || 0;
         if (d.mesh) d.mesh.position.set(b.x, b.y + 0.18, b.z);
       }
@@ -1439,7 +1451,7 @@ const Multiplayer = {
       const d = Drops.list[idx], b = d.body;
       if (Math.hypot((+st.x || 0) - b.x, ((+st.y || 0) + 0.6) - b.y, (+st.z || 0) - b.z) > 1.3) return;
       const conn = this.connections.get(pid);
-      this.sendTo(conn, { type:'give_item', item:d.id, count:d.count, dur:d.dur });
+      this.sendTo(conn, { type:'give_item', item:d.id, count:d.count, dur:d.dur, data:d.data });
       Drops.remove(idx);
     },
 
@@ -1564,6 +1576,9 @@ const Multiplayer = {
     createPeerObject(id) {
       const group = new THREE.Group();
       group.name = 'remote_player_' + id;
+      // yaw-then-pitch so a swim/prone tilt (rotation.x) leans the model FORWARD relative
+      // to its facing, not sideways (default XYZ order rolls it to the side once yaw is set)
+      group.rotation.order = 'YXZ';
       const mkMat = (color) => { const m = new THREE.MeshLambertMaterial({ color }); m.userData.baseColor = new THREE.Color(color); return m; };
       const matBody = mkMat(0x3c7bd6), matSkin = mkMat(0xd8a882), matDark = mkMat(0x1a1a1a);
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.28), matBody); body.position.y = 1.02;
@@ -1577,7 +1592,7 @@ const Multiplayer = {
       const legL = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.68, 0.20), matBody); const legR = legL.clone(); legL.position.set(-0.14, 0.34, 0); legR.position.set(0.14, 0.34, 0);
       group.add(body, head, armL, armR, legL, legR);
       Game.scene.add(group);
-      return { id, group, state:null, target:null, lastSeen:performance.now(), body:{ x:0, y:0, z:0, w:0.3, h:1.8, dead:false }, parts:{ body, head, eyeL, eyeR, armL, armR, legL, legR }, heldMesh:null, armorMeshes:[] };
+      return { id, group, state:null, target:null, lastSeen:performance.now(), body:{ x:0, y:0, z:0, w:0.3, h:1.8, dead:false }, swingSeq:undefined, swingT:0, swingHoldT:0, parts:{ body, head, eyeL, eyeR, armL, armR, legL, legR }, heldMesh:null, armorMeshes:[] };
     },
 
     updatePeers(dt) {
@@ -1598,12 +1613,35 @@ const Multiplayer = {
         p.body.x = p.state.x; p.body.y = p.state.y; p.body.z = p.state.z; p.body.h = sneak ? 1.55 : (+p.target.h || 1.8); p.body.dead = !!p.state.dead;
         const moving = Math.abs(+p.target.vx || 0) + Math.abs(+p.target.vz || 0) > 0.3;
         const bob = moving ? Math.sin(now * 0.012) * 0.35 : 0;
+        const remoteSwingSeq = Number.isFinite(+p.target.swing) ? +p.target.swing : 0;
+        if (p.swingSeq === undefined) p.swingSeq = remoteSwingSeq;
+        else if (remoteSwingSeq !== p.swingSeq) { p.swingSeq = remoteSwingSeq; p.swingT = 0.3; }
+        if (p.swingT > 0) p.swingT = Math.max(0, p.swingT - dt);
+        if (p.target.swinging || p.swingT > 0) p.swingHoldT = (p.swingHoldT || 0) + dt;
+        else p.swingHoldT = 0;
+        const impulseSwing = p.swingT > 0 ? Math.sin((1 - p.swingT / 0.3) * Math.PI) * 1.25 : 0;
+        const heldSwing = p.target.swinging ? Math.sin((((p.swingHoldT || 0) / 0.24) % 1) * Math.PI) * 1.15 : 0;
+        const actionSwing = Math.max(impulseSwing, heldSwing, 0);
         if (p.hitFlashT > 0) p.hitFlashT -= dt;
         if (p.parts) {
-          const board = !!p.target.board;
-          const sit = !!p.target.sit && !board;
+          const swim = !!p.target.swim;
+          const board = !!p.target.board && !swim;
+          const sit = !!p.target.sit && !board && !swim;
           const pitch = (p.state.pitch || 0) * 0.35;
           if (!board && p.boardMesh) p.boardMesh.visible = false; // hide the board when not riding
+          if (swim) {
+            // prone 1x1 swim/crawl: body flat face-down, arms reaching ahead, legs flutter-kick
+            const kick = Math.sin(now * 0.02) * 0.55;
+            p.parts.armL.rotation.z = 0; p.parts.armR.rotation.z = 0;
+            p.parts.body.position.set(0, 1.02, 0); p.parts.body.rotation.x = 0;
+            p.parts.head.position.set(0, 1.55, 0); p.parts.head.rotation.x = -0.7; // lift head to look ahead
+            p.parts.armL.position.set(-0.30, 1.30, 0); p.parts.armR.position.set(0.30, 1.30, 0);
+            p.parts.armL.rotation.x = Math.PI + kick * 0.4; p.parts.armR.rotation.x = Math.PI - kick * 0.4; // stretched overhead
+            p.parts.legL.position.set(-0.14, 0.34, 0); p.parts.legR.position.set(0.14, 0.34, 0);
+            p.parts.legL.rotation.x = kick; p.parts.legR.rotation.x = -kick;
+            p.parts.legL.scale.y = 1; p.parts.legR.scale.y = 1;
+            p.group.rotation.x = -Math.PI / 2; // lie horizontal, head pointing FORWARD (model faces -z)
+          } else {
           // model faces -z: forward tilt = NEGATIVE rot.x on the torso; limbs reaching
           // FORWARD = POSITIVE rot.x (bottom of the limb swings toward -z).
           if (board) {
@@ -1643,15 +1681,16 @@ const Multiplayer = {
             p.parts.body.position.set(0, 1.02 - crouch * 0.5, 0); p.parts.body.rotation.x = crouch ? -0.38 : 0;
             p.parts.head.position.set(0, 1.55 - crouch * 0.85, 0);
             p.parts.armL.position.set(-0.39, 1.02 - crouch * 0.5, 0); p.parts.armR.position.set(0.39, 1.02 - crouch * 0.5, 0);
-            p.parts.armL.rotation.x = bob; p.parts.armR.rotation.x = -bob;
+            p.parts.armL.rotation.x = bob; p.parts.armR.rotation.x = -bob + actionSwing;
             p.parts.legL.position.set(-0.14, 0.34, 0); p.parts.legR.position.set(0.14, 0.34, 0);
             p.parts.legL.scale.y = sneak ? 0.82 : 1; p.parts.legR.scale.y = sneak ? 0.82 : 1;
             p.parts.legL.rotation.x = -bob; p.parts.legR.rotation.x = bob;
-            // head leans forward WITH the torso when sneaking: tilt it (negative rot.x) AND
-            // shift it forward in -z so it sits on the leaned torso instead of floating upright
+            // sneaking moves the head's POSITION to follow the leaned torso (down + forward),
+            // but keeps the player's real look pitch — no extra tilt forced onto the head
             p.parts.head.position.set(0, 1.55 - crouch * 0.85, -crouch * 1.4);
-            p.parts.head.rotation.x = pitch - (crouch ? 0.5 : 0);
-            p.group.rotation.x = p.target.swim ? Math.PI / 2.8 : 0;
+            p.parts.head.rotation.x = pitch;
+            p.group.rotation.x = 0;
+          }
           }
         }
         this.updatePeerHeldAndArmor(p);
@@ -1802,6 +1841,7 @@ const Multiplayer = {
     peerArmorColorInfo(id) {
       const nm = Reg[id] && Reg[id].name ? Reg[id].name.toLowerCase() : '';
       // Match the real gearset colors used by the item icons, including Patapim purple.
+      if (nm.includes('patapim') && nm.includes('diamond') && nm.includes('jelly')) return { main:'#6ee8ff', dark:'#7a3fd0', hi:'#f8fff9', jelly:true };
       if (nm.includes('patapim')) return { main:'#b06cff', dark:'#7a3fd0', hi:'#ff7dfb' };
       if (nm.includes('emerald')) return { main:'#2ecc71', dark:'#168f48', hi:'#8ff0b4' };
       if (nm.includes('diamond')) return { main:'#58e0d8', dark:'#2fa8a0', hi:'#9ff5ef' };
@@ -1839,6 +1879,28 @@ const Multiplayer = {
       const specks = slot === 1 ? [[12,8],[5,9],[10,14],[3,6]] : [[12,4],[4,7],[11,11]];
       c.fillStyle = col.hi;
       for (const [x,y] of specks) c.fillRect(x, y, 1, 1);
+      if (col.jelly) {
+        const jelly = ['#ff7fd4', '#6ee8ff', '#9cff6e', '#c77dff', '#ff9d4a', '#ffe86e'];
+        const blobs = slot === 0
+          ? [[3,3],[6,2],[9,3],[12,4],[4,8],[11,8]]
+          : slot === 1
+            ? [[3,3],[11,3],[5,7],[10,8],[4,12],[12,12]]
+            : slot === 2
+              ? [[4,2],[11,2],[4,7],[11,7],[4,12],[11,12]]
+              : [[4,5],[11,5],[4,9],[11,9],[3,12],[12,12]];
+        c.fillStyle = '#7a3fd0';
+        if (slot === 0) c.fillRect(1, 1, 14, 2);
+        else if (slot === 1) { c.fillRect(1, 1, 14, 2); c.fillRect(1, 14, 14, 1); }
+        else if (slot === 2) { c.fillRect(1, 1, 14, 1); c.fillRect(7, 0, 2, 16); }
+        else c.fillRect(0, 13, 16, 2);
+        for (let i = 0; i < blobs.length; i++) {
+          const [x,y] = blobs[i];
+          c.fillStyle = jelly[i % jelly.length];
+          c.fillRect(x, y, 2, 2);
+          c.fillStyle = 'rgba(255,255,255,0.65)';
+          c.fillRect(x, y, 1, 1);
+        }
+      }
       const tex = new THREE.CanvasTexture(cv);
       tex.magFilter = THREE.NearestFilter;
       tex.minFilter = THREE.NearestFilter;
@@ -1891,7 +1953,7 @@ const Multiplayer = {
     // Guest placed vehicles become host vehicle-spawn requests. Local meshes are not spawned.
     if (typeof Vehicles !== 'undefined' && !Vehicles.__mpPlaceRequestPatch) {
       Vehicles.__mpPlaceRequestPatch = true;
-      for (const name of ['placeCar','placeSuperCar','placeBoat','placeBoard']) {
+      for (const name of ['placeCar','placeSuperCar','placePlane','placeBoat','placeBoard']) {
         if (!Vehicles[name]) continue;
         const old = Vehicles[name].bind(Vehicles);
         Vehicles[name] = function(x, y, z, yaw, obsidian) {
@@ -1916,6 +1978,7 @@ const Multiplayer = {
       if (this.role === 'host' && cameFromClient && typeof Vehicles !== 'undefined') {
         const k = String(msg.vehicleKind || '');
         if (k === 'placeSuperCar') Vehicles.placeSuperCar(+msg.x, +msg.y, +msg.z, +msg.yaw || 0);
+        else if (k === 'placePlane') Vehicles.placePlane(+msg.x, +msg.y, +msg.z, +msg.yaw || 0);
         else if (k === 'placeBoat') Vehicles.placeBoat(+msg.x, +msg.y, +msg.z, +msg.yaw || 0, !!msg.obsidian);
         else if (k === 'placeBoard') Vehicles.placeBoard(+msg.x, +msg.y, +msg.z, +msg.yaw || 0);
         else Vehicles.placeCar(+msg.x, +msg.y, +msg.z, +msg.yaw || 0);
@@ -2015,6 +2078,7 @@ const Multiplayer = {
 
     vehicleKind(v) {
       if (!v) return 'car';
+      if (v.kind === 'plane') return 'plane';
       if (v.kind === 'supercar') return 'supercar';
       if (v.kind === 'boat') return v.lavaBoat ? 'obsidian_boat' : 'boat';
       if (v.kind === 'board') return 'board';
@@ -2057,7 +2121,8 @@ const Multiplayer = {
       this.applyingRemoteState = true;
       try {
         const yaw = finite(s.yaw, 0);
-        if (s.kind === 'supercar' || s.item === (typeof I !== 'undefined' ? I.SUPER_CAR : -1)) v = Vehicles.placeSuperCar(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), yaw);
+        if (s.kind === 'plane' || s.item === (typeof I !== 'undefined' ? I.PLANE : -1)) v = Vehicles.placePlane(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), yaw);
+        else if (s.kind === 'supercar' || s.item === (typeof I !== 'undefined' ? I.SUPER_CAR : -1)) v = Vehicles.placeSuperCar(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), yaw);
         else if (s.kind === 'boat' || s.kind === 'obsidian_boat' || s.item === (typeof I !== 'undefined' ? I.BOAT : -1) || s.item === (typeof I !== 'undefined' ? I.OBSIDIAN_BOAT : -1)) v = Vehicles.placeBoat(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), yaw, !!(s.lavaBoat || s.kind === 'obsidian_boat' || s.item === (typeof I !== 'undefined' ? I.OBSIDIAN_BOAT : -1)));
         else if (s.kind === 'board' || s.item === (typeof I !== 'undefined' ? I.SKATEBOARD : -1)) v = Vehicles.placeBoard(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), yaw);
         else v = Vehicles.placeCar(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), yaw);
@@ -2122,6 +2187,7 @@ const Multiplayer = {
       if (v.group) { v.group.position.set(body.x, body.y, body.z); v.group.rotation.y = finite(v.yaw, 0); }
       if (v.mesh) { v.mesh.position.set(body.x, body.y, body.z); v.mesh.rotation.y = finite(v.yaw, 0); }
       if (v.wheels) for (const w of v.wheels) w.rotation.x = v.wheelSpin || 0;
+      if (v.propellers) for (const p of v.propellers) p.rotation.z = v.propSpin || v.wheelSpin || 0;
     },
 
     clientVehicleVisualTick(dt) {
@@ -2146,17 +2212,16 @@ const Multiplayer = {
       if (riding) {
         const b = riding.body || riding;
         Player.body.x = b.x;
-        Player.body.y = b.y + (riding.kind === 'boat' ? 0.25 : riding.kind === 'board' ? 0.08 : 0.35);
+        Player.body.y = b.y + (Vehicles.riderYOffset ? Vehicles.riderYOffset(riding) : (riding.kind === 'boat' ? 0.25 : riding.kind === 'board' ? 0.08 : 0.35));
         Player.body.z = b.z;
         Player.body.vx = Player.body.vy = Player.body.vz = 0;
+        Player.fallDist = 0;
         if (riding.kind === 'boat') { Vehicles.boating = riding; Vehicles.driving = null; Player.boarding = false; }
         else if (riding.kind === 'board') { Vehicles.driving = null; Vehicles.boating = null; Player.boarding = true; }
         else { Vehicles.driving = riding; Vehicles.boating = null; Player.boarding = false; }
       }
       const active = riding;
-      if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(active
-        ? (active.kind === 'supercar' ? '🏎️ ' : active.kind === 'car' ? '🚗 ' : active.kind === 'boat' ? (active.lavaBoat ? '🛶 ' : '⛵ ') : '🛹 ') + Math.max(0, Math.ceil(active.hp || 0)) + '/' + (Vehicles.maxHp ? Vehicles.maxHp(active) : Math.ceil(active.hp || 0)) + ' HP'
-        : null);
+      if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(active ? (Vehicles.vehicleHudLabel ? Vehicles.vehicleHudLabel(active) : Math.max(0, Math.ceil(active.hp || 0)) + ' HP') : null);
     },
 
     makeVehicleInputMessage() {
@@ -2240,6 +2305,7 @@ const Multiplayer = {
       if (msg && Number.isFinite(+msg.x)) {
         Player.body.x = +msg.x; Player.body.y = finite(msg.y, Player.body.y); Player.body.z = finite(msg.z, Player.body.z);
         Player.body.vx = Player.body.vy = Player.body.vz = 0;
+        Player.fallDist = 0;
       }
       if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(null);
     },
@@ -2286,7 +2352,7 @@ const Multiplayer = {
     return Mobs.list.filter(m => m && !m.dead).map(m => {
       if (!m.mpId) m.mpId = 'm' + (this.mobSeq++).toString(36) + '_' + Math.random().toString(36).slice(2, 5);
       const b = m.body;
-      return { mid:m.mpId, t:m.type, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), h:b.h, w:b.w, hp:m.hp, g:m.gunId || 0, c:m.color || 0, yaw:+(m.yaw||0).toFixed(4), targetYaw:+(m.targetYaw||m.yaw||0).toFixed(4), flash:m.flash || 0, fuse:m.fuse || 0, walk:+(m.walkAnim || 0).toFixed(3) };
+      return { mid:m.mpId, t:m.type, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), h:b.h, w:b.w, hp:m.hp, g:m.gunId || 0, c:m.color || 0, yaw:+(m.yaw||0).toFixed(4), targetYaw:+(m.targetYaw||m.yaw||0).toFixed(4), flash:m.flash || 0, fuse:m.fuse || 0, walk:+(m.walkAnim || 0).toFixed(3), jid:m.jellyId || '', hid:m.homeHouseId || '', mem:m.membership || '' };
     });
   };
 
@@ -2304,6 +2370,13 @@ const Multiplayer = {
         if (m.body) { m.body.x = finite(s.x, m.body.x); m.body.y = finite(s.y, m.body.y); m.body.z = finite(s.z, m.body.z); }
       }
       m.mpTarget = Object.assign({}, s);
+      if ((m.type === 'jelly' || m.type === 'big_jelly') && typeof Jelly !== 'undefined') {
+        m.jellyId = s.jid || m.jellyId || Jelly.newJellyId();
+        m.homeHouseId = s.hid || null;
+        m.membership = s.mem || (m.homeHouseId ? 'outside_member' : 'homeless');
+        m.jellyHome = m.homeHouseId ? (Jelly.getHouseKeyById(m.homeHouseId) || '') : '';
+        if (m.type === 'big_jelly') Jelly.initMob(m, 'remote_big');
+      }
       m.hp = Number.isFinite(+s.hp) ? +s.hp : m.hp;
       m.flash = Math.max(m.flash || 0, finite(s.flash, 0));
       m.fuse = finite(s.fuse, m.fuse || 0);
@@ -2376,14 +2449,14 @@ const Multiplayer = {
       let d = Drops.list.find(x => x.mpId === s.did);
       if (!d) {
         const before = Drops.list.length;
-        Drops.spawn(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), s.item|0, s.count|0, [0,0,0], s.dur);
+        Drops.spawn(finite(s.x, 0), finite(s.y, 0), finite(s.z, 0), s.item|0, s.count|0, [0,0,0], s.dur, s.data);
         d = Drops.list[before];
         if (!d) continue;
         d.mpId = s.did;
         d.body.x = finite(s.x, d.body.x); d.body.y = finite(s.y, d.body.y); d.body.z = finite(s.z, d.body.z);
       }
       d.mpTarget = Object.assign({}, s);
-      d.id = s.item|0; d.count = s.count|0; d.dur = s.dur; d.age = finite(s.age, d.age || 0); d.pickupDelay = finite(s.pd, d.pickupDelay || 0);
+      d.id = s.item|0; d.count = s.count|0; d.dur = s.dur; if (s.data !== undefined) d.data = JSON.parse(JSON.stringify(s.data)); d.age = finite(s.age, d.age || 0); d.pickupDelay = finite(s.pd, d.pickupDelay || 0);
     }
     for (let i = Drops.list.length - 1; i >= 0; i--) {
       const d = Drops.list[i];
@@ -2451,7 +2524,7 @@ const Multiplayer = {
     if (this.__vehicleAuthorityHooksReady || typeof Vehicles === 'undefined') return;
     this.__vehicleAuthorityHooksReady = true;
 
-    for (const name of ['placeCar','placeSuperCar','placeBoat','placeBoard']) {
+    for (const name of ['placeCar','placeSuperCar','placePlane','placeBoat','placeBoard']) {
       if (!Vehicles[name] || Vehicles['__mpId_' + name]) continue;
       Vehicles['__mpId_' + name] = true;
       const oldPlace = Vehicles[name].bind(Vehicles);
@@ -2572,16 +2645,21 @@ const Multiplayer = {
     const count = Math.max(1, Math.min(asCount(s.count || 1), def.stack || 64));
     const out = { id, count };
     if (isDurableDur(s.dur)) out.dur = +s.dur;
+    if (s.data !== undefined) out.data = JSON.parse(JSON.stringify(s.data));
     return out;
   };
 
-  function grantStackToPlayer(id, count, dur) {
+  function grantStackToPlayer(id, count, dur, data) {
     id = asItemId(id);
     count = asCount(count);
     const def = typeof Reg !== 'undefined' ? Reg[id] : null;
     if (!def || count <= 0 || typeof Player === 'undefined') return count;
     let left = count;
     const hasDur = isDurableDur(dur);
+    const hasData = data !== undefined;
+    const dataKey = hasData ? JSON.stringify(data) : '';
+    const sameData = (s) => (s && (s.data === undefined ? '' : JSON.stringify(s.data)) === dataKey);
+    const cloneData = (v) => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
     const maxStack = Math.max(1, def.stack || 64);
 
     // Durable/unique items never merge. This prevents broken repairs and also
@@ -2591,6 +2669,7 @@ const Multiplayer = {
         if (!Player.inv[i]) {
           const s = { id, count: 1 };
           if (hasDur) s.dur = +dur;
+          if (hasData) s.data = cloneData(data);
           Player.inv[i] = s;
           left--;
         }
@@ -2601,7 +2680,7 @@ const Multiplayer = {
 
     for (let i = 0; i < 36 && left > 0; i++) {
       const s = Player.inv[i];
-      if (samePlainItem(s, id) && s.count < maxStack) {
+      if (samePlainItem(s, id) && sameData(s) && s.count < maxStack) {
         const take = Math.min(maxStack - s.count, left);
         s.id = id;
         s.count += take;
@@ -2613,6 +2692,7 @@ const Multiplayer = {
       if (!Player.inv[i]) {
         const take = Math.min(maxStack, left);
         Player.inv[i] = { id, count: take };
+        if (hasData) Player.inv[i].data = cloneData(data);
         left -= take;
       }
     }
@@ -2624,7 +2704,7 @@ const Multiplayer = {
   // and the dur:null network case that made plain blocks enter one slot each.
   if (typeof Player !== 'undefined' && !Player.__mpRobustStackPatch) {
     Player.__mpRobustStackPatch = true;
-    Player.addItem = function(id, count, dur) { return grantStackToPlayer(id, count, dur); };
+    Player.addItem = function(id, count, dur, data) { return grantStackToPlayer(id, count, dur, data); };
     Player.canAccept = function(id, dur) {
       id = asItemId(id);
       const def = typeof Reg !== 'undefined' ? Reg[id] : null;
@@ -2668,7 +2748,7 @@ const Multiplayer = {
         if (Number.isFinite(+s.dur) || (def && (def.stack || 64) <= 1)) keep.push(s);
         else loose.set(s.id, (loose.get(s.id) || 0) + s.count);
       }
-      for (const s of keep) grantStackToPlayer(s.id, s.count, s.dur);
+      for (const s of keep) grantStackToPlayer(s.id, s.count, s.dur, s.data);
       for (const [id, count] of loose.entries()) grantStackToPlayer(id, count);
       if (typeof UI !== 'undefined') UI.updateHotbar();
     };
@@ -2683,9 +2763,9 @@ const Multiplayer = {
       const count = asCount(msg.count);
       if (!id || count <= 0) return;
       const dur = finiteNum(msg.dur);
-      const leftover = grantStackToPlayer(id, count, dur);
+      const leftover = grantStackToPlayer(id, count, dur, msg.data);
       if (leftover > 0) {
-        this.send({ type:'drop_request', x:Player.body.x, y:Player.body.y + 1, z:Player.body.z, item:id, count:leftover, dur:dur });
+        this.send({ type:'drop_request', x:Player.body.x, y:Player.body.y + 1, z:Player.body.z, item:id, count:leftover, dur:dur, data:msg.data });
       }
       if (typeof SFX !== 'undefined') SFX.pop();
       if (typeof UI !== 'undefined') UI.updateHotbar();
@@ -2717,6 +2797,14 @@ const Multiplayer = {
       const mb = World.multiblockGroupFor && World.multiblockGroupFor(bx, by, bz);
       if (mb) {
         World.destroyMultiblockAt(bx, by, bz, { drop: !creative && !!toolOk, particles: true });
+        if (!creative && toolOk && def.xp) xp += def.xp | 0;
+        return xp;
+      }
+      if (typeof B !== 'undefined' && id === B.JELLY_HOUSE) {
+        const res = (typeof Jelly !== 'undefined') ? Jelly.breakHouseAt(bx, by, bz, { reason: 'remote_player_mine', actor: pid }) : null;
+        World.setBlock(bx, by, bz, B.AIR, Object.assign(noUpdate ? { noUpdate:true } : {}, { jellyHouseBreakHandled:true }));
+        if (typeof Particles !== 'undefined' && Particles.blockBurst) Particles.blockBurst(bx, by, bz, id);
+        if (!creative && toolOk) Drops.spawn(bx + 0.5, by + 0.4, bz + 0.5, id, 1, null, undefined, (res && res.itemData) || (typeof Jelly !== 'undefined' ? Jelly.serializeHouseItem([]) : { jellyRoster: [] }));
         if (!creative && toolOk && def.xp) xp += def.xp | 0;
         return xp;
       }
@@ -3018,16 +3106,18 @@ const Multiplayer = {
       const goodBoatFluid = isBoat && (v.lavaBoat ? inLava : inWater);
       const wrongBoatFluid = isBoat && (v.lavaBoat ? inWater : inLava);
 
+      const profile = Vehicles.vehicleDriveProfile ? Vehicles.vehicleDriveProfile(v, isBoat, goodBoatFluid) : null;
       const isSuper = v.kind === 'supercar';
-      const maxF = isBoat ? (goodBoatFluid ? (v.lavaBoat ? 8.4 : 9.5) : 1.5) : (isSuper ? 23.0 : 11.5);
-      const reverseMax = isBoat ? -4.5 : (isSuper ? -7.0 : -4.5);
-      const accel = keys.KeyW ? (isBoat ? 10 : (isSuper ? 28 : 14)) : 0;
-      const brake = keys.KeyS ? (isBoat ? 8 : (isSuper ? 24 : 16)) : 0;
+      const isPlane = v.kind === 'plane';
+      const maxF = profile ? profile.maxF : isBoat ? (goodBoatFluid ? (v.lavaBoat ? 8.4 : 9.5) : 1.5) : (isPlane ? 46.0 : isSuper ? 23.0 : 11.5);
+      const reverseMax = profile ? profile.reverseMax : isBoat ? -4.5 : (isPlane ? -5.5 : isSuper ? -7.0 : -4.5);
+      const accel = keys.KeyW ? (profile ? profile.accel : isBoat ? 10 : (isPlane ? 56 : isSuper ? 28 : 14)) : 0;
+      const brake = keys.KeyS ? (profile ? profile.brake : isBoat ? 8 : (isPlane ? 34 : isSuper ? 24 : 16)) : 0;
       v.speed = finite(v.speed, 0) + (accel - brake) * (dt || 0);
       v.speed = clamp(v.speed, reverseMax, maxF);
-      if (!accel && !brake) v.speed *= (b.onGround || inWater || inLava ? (isSuper ? 0.99 : 0.985) : 0.999);
+      if (!accel && !brake) v.speed *= (b.onGround || inWater || inLava ? (profile ? profile.idleDrag : (isPlane ? 0.995 : isSuper ? 0.99 : 0.985)) : 0.999);
       const steer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
-      v.yaw = finite(v.yaw, 0) + steer * (dt || 0) * (isSuper ? 2.15 : 1.9) * clamp(v.speed / 5, -1, 1);
+      v.yaw = finite(v.yaw, 0) + steer * (dt || 0) * (profile ? profile.steerRate : isPlane ? 1.55 : isSuper ? 2.15 : 1.9) * clamp(v.speed / 5, -1, 1);
 
       b.vx = Math.sin(v.yaw + Math.PI) * -v.speed;
       b.vz = Math.cos(v.yaw + Math.PI) * -v.speed;
@@ -3037,6 +3127,8 @@ const Multiplayer = {
         const headId = World.getBlock(Math.floor(b.x), Math.floor(b.y + 0.7), Math.floor(b.z));
         if (v.lavaBoat ? !isLava(headId) : !isWater(headId)) b.vy = Math.min(b.vy, 0);
         b.vy -= (v.lavaBoat ? 7.5 : 9) * (dt || 0);
+      } else if (isPlane && Vehicles.applyPlaneFlight) {
+        Vehicles.applyPlaneFlight(v, dt || 0, true, inWater, inLava, keys);
       } else {
         if (inWater || inLava) {
           v.speed *= wrongBoatFluid ? 0.88 : 0.94;
@@ -3045,8 +3137,8 @@ const Multiplayer = {
         }
         b.vy -= Physics.GRAV * (dt || 0);
       }
-      b.vy = Math.max(b.vy, -36);
-      Physics.move(b, dt || 0, { stepUp:true, stepLift:isBoat ? 0.55 : 1.06 });
+      b.vy = isPlane ? Math.max(-36, Math.min(22, b.vy)) : Math.max(b.vy, -36);
+      Physics.move(b, dt || 0, { stepUp:true, stepLift:isBoat ? 0.55 : isPlane ? 0.65 : 1.06 });
       v.wheelSpin = finite(v.wheelSpin, 0) + finite(v.speed, 0) * (dt || 0) * 3;
       return true;
     },
@@ -3105,16 +3197,15 @@ const Multiplayer = {
       if (riding) {
         const b = riding.body || riding;
         Player.body.x = b.x;
-        Player.body.y = b.y + (riding.kind === 'boat' ? 0.25 : riding.kind === 'board' ? 0.08 : 0.35);
+        Player.body.y = b.y + (Vehicles.riderYOffset ? Vehicles.riderYOffset(riding) : (riding.kind === 'boat' ? 0.25 : riding.kind === 'board' ? 0.08 : 0.35));
         Player.body.z = b.z;
         Player.body.vx = Player.body.vy = Player.body.vz = 0;
+        Player.fallDist = 0;
         if (riding.kind === 'boat') { Vehicles.boating = riding; Vehicles.driving = null; Player.boarding = false; }
         else if (riding.kind === 'board') { Vehicles.driving = null; Vehicles.boating = null; Player.boarding = true; }
         else { Vehicles.driving = riding; Vehicles.boating = null; Player.boarding = false; }
       }
-      if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(riding
-        ? (riding.kind === 'supercar' ? '🏎️ ' : riding.kind === 'car' ? '🚗 ' : riding.kind === 'boat' ? (riding.lavaBoat ? '🛶 ' : '⛵ ') : '🛹 ') + Math.max(0, Math.ceil(riding.hp || 0)) + '/' + (Vehicles.maxHp ? Vehicles.maxHp(riding) : Math.ceil(riding.hp || 0)) + ' HP'
-        : null);
+      if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(riding ? (Vehicles.vehicleHudLabel ? Vehicles.vehicleHudLabel(riding) : Math.max(0, Math.ceil(riding.hp || 0)) + ' HP') : null);
     },
   });
 
@@ -3363,6 +3454,8 @@ const Multiplayer = {
     const out = { id, count: countOf(srcCount) };
     const d = s.dur !== undefined ? s.dur : (Array.isArray(s) ? s[2] : undefined);
     if (hasDur(d)) out.dur = +d;
+    const srcData = s.data !== undefined ? s.data : (Array.isArray(s) && s.length > 3 ? s[3] : undefined);
+    if (srcData !== undefined) out.data = JSON.parse(JSON.stringify(srcData));
     const max = stackMax(id);
     if (max <= 1 || hasDur(out.dur)) out.count = 1;
     return out;
@@ -3384,7 +3477,7 @@ const Multiplayer = {
     for (let i = 0; i < 4; i++) {
       const s = cleanStack(src[i]);
       const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}) };
+      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -3529,7 +3622,7 @@ const Multiplayer = {
       if (res.removed > 0 && typeof Drops !== 'undefined') {
         const x = finite(msg.x, 0), y = finite(msg.y, 64), z = finite(msg.z, 0);
         const vel = Array.isArray(msg.vel) ? msg.vel.map(v => finite(v, 0)) : null;
-        Drops.spawn(x, y, z, id, res.removed, vel, hasDur(msg.dur) ? +msg.dur : undefined);
+        Drops.spawn(x, y, z, id, res.removed, vel, hasDur(msg.dur) ? +msg.dur : undefined, msg.data);
       }
       this.hostSendInventorySnapshot(pid, 'drop');
     },
@@ -3556,13 +3649,22 @@ const Multiplayer = {
       } else this.hostSendInventorySnapshot(pid, 'full');
     },
 
+    chestSizeForKey(key) {
+      if (typeof World === 'undefined') return 27;
+      const p = String(key || '').split(',').map(Number);
+      const id = p.length >= 3 ? World.getBlock(p[0], p[1], p[2]) : 0;
+      const slots = World.chests && World.chests.get(String(key));
+      return (id === B.JELLY_CHEST || (Array.isArray(slots) && slots.length > 27)) ? 54 : 27;
+    },
+
     hostSendChestSnapshot(pid, key, reason) {
       if (this.role !== 'host' || !pid || typeof World === 'undefined') return;
       const conn = this.connections && this.connections.get(pid);
       if (!conn || !key) return;
       key = String(key);
-      if (!World.chests.has(key)) World.chests.set(key, new Array(27).fill(null));
-      const slots = cleanSlots(World.chests.get(key), 27);
+      const size = this.chestSizeForKey ? this.chestSizeForKey(key) : 27;
+      if (!World.chests.has(key)) World.chests.set(key, new Array(size).fill(null));
+      const slots = cleanSlots(World.chests.get(key), size);
       World.chests.set(key, slots);
       this.sendTo(conn, { type:'chest_snapshot', key, slots:slots.map(pack), reason:reason || 'open' });
     },
@@ -3571,7 +3673,8 @@ const Multiplayer = {
       if (this.role !== 'host' || !pid || !msg || !msg.key || typeof World === 'undefined') return;
       if (msg.snapshot) this.hostApplyClientInventoryState(pid, msg.snapshot, false);
       const key = String(msg.key);
-      const slots = cleanSlots((msg.slots || []).map(unpack), 27);
+      const size = this.chestSizeForKey ? this.chestSizeForKey(key) : ((msg.slots || []).length > 27 ? 54 : 27);
+      const slots = cleanSlots((msg.slots || []).map(unpack), size);
       World.chests.set(key, slots);
       const p = key.split(',').map(Number);
       if (p.length >= 3 && World.dirty) World.dirty.add(World.key((p[0] | 0) >> 4, (p[2] | 0) >> 4));
@@ -3586,7 +3689,8 @@ const Multiplayer = {
     clientApplyChestSnapshot(msg) {
       if (this.role !== 'client' || !msg || !msg.key || typeof World === 'undefined') return;
       const key = String(msg.key);
-      const slots = cleanSlots((msg.slots || []).map(unpack), 27);
+      const size = this.chestSizeForKey ? this.chestSizeForKey(key) : ((msg.slots || []).length > 27 ? 54 : 27);
+      const slots = cleanSlots((msg.slots || []).map(unpack), size);
       World.chests.set(key, slots);
       if (typeof UI !== 'undefined' && UI.screen === 'chest' && UI.chestHit) {
         const openKey = World.pkey(UI.chestHit.bx, UI.chestHit.by, UI.chestHit.bz);
@@ -3625,6 +3729,10 @@ const Multiplayer = {
     hostHandleChestOpen(pid, key) {
       if (this.role !== 'host' || !pid || !key) return;
       key = String(key);
+      const p = key.split(',').map(Number);
+      if (p.length >= 3 && typeof Jelly !== 'undefined' && typeof World !== 'undefined' && World.getBlock(p[0], p[1], p[2]) === B.JELLY_CHEST) {
+        Jelly.onChestAccess({ x:p[0], y:p[1], z:p[2], mode:'open', actor:pid });
+      }
       if (!this.hostAcquireChestLock(key, pid)) {
         const conn = this.connections && this.connections.get(pid);
         if (conn) this.sendTo(conn, { type:'chest_busy', key });
@@ -3646,7 +3754,8 @@ const Multiplayer = {
     clientSendChestState(reason) {
       if (this.role !== 'client' || !this.connected || typeof UI === 'undefined' || UI.screen !== 'chest' || !UI.chestHit || typeof World === 'undefined') return;
       const key = World.pkey(UI.chestHit.bx, UI.chestHit.by, UI.chestHit.bz);
-      const slots = cleanSlots(World.chests.get(key) || [], 27);
+      const size = this.chestSizeForKey ? this.chestSizeForKey(key) : ((World.chests.get(key) || []).length > 27 ? 54 : 27);
+      const slots = cleanSlots(World.chests.get(key) || [], size);
       World.chests.set(key, slots);
       this.send({ type:'chest_state', key, slots:slots.map(pack), snapshot:makeLocalSnapshot(), reason:reason || 'ui' });
       this.__lastChestStateSend = nowMs();
@@ -3654,15 +3763,23 @@ const Multiplayer = {
 
     serializeDungeonForNet(dg) {
       if (!dg) return null;
+      const conquered = !!(typeof World !== 'undefined' && dg.key && World.dungeonConquered && World.dungeonConquered.has(dg.key));
+      const mapId = (id) => conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(id) : id;
       return {
+        key: dg.key || '',
+        rank: dg.rank || '',
+        door: dg.door || 0,
         rooms: dg.rooms || [],
-        byChunk: [...(dg.byChunk || new Map()).entries()].map(([k, arr]) => [k, (arr || []).map(c => [c.x|0, c.y|0, c.z|0, c.id|0])]),
+        byChunk: [...(dg.byChunk || new Map()).entries()].map(([k, arr]) => [k, (arr || []).map(c => [c.x|0, c.y|0, c.z|0, mapId(c.id)|0])]),
       };
     },
 
     deserializeDungeonFromNet(data) {
       if (!data) return null;
       return {
+        key: data.key || '',
+        rank: data.rank || '',
+        door: data.door || 0,
         rooms: data.rooms || [],
         byChunk: new Map((data.byChunk || []).map(([k, arr]) => [k, (arr || []).map(c => ({ x:c[0]|0, y:c[1]|0, z:c[2]|0, id:c[3]|0 }))])),
       };
@@ -3700,7 +3817,8 @@ const Multiplayer = {
           if (seen.has(dk)) continue; seen.add(dk);
           const dg = World.dungeonFor(dkx, dkz);
           const bucket = dg && dg.byChunk && dg.byChunk.get(ck);
-          if (bucket) for (const f of bucket) overlays.push([f.x|0, f.y|0, f.z|0, f.id|0]);
+          const conquered = !!(dg && dg.key && World.dungeonConquered && World.dungeonConquered.has(dg.key));
+          if (bucket) for (const f of bucket) overlays.push([f.x|0, f.y|0, f.z|0, (conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(f.id) : f.id)|0]);
         }
         const diffBucket = World.diffIndex && World.diffIndex.get(ck);
         if (diffBucket) for (const [pk, id] of diffBucket.entries()) {
@@ -3739,7 +3857,7 @@ const Multiplayer = {
           if (World.chunks.has(ck)) {
             for (const c of overlays || []) {
               const x = c[0]|0, y = c[1]|0, z = c[2]|0, id = c[3]|0;
-              if (y >= 0 && y < World.H) World.setBlock(x, y, z, id, { remote:true, noUpdate:true, skipPortalCheck:true });
+              if (y >= 0) World.setBlock(x, y, z, id, { remote:true, noUpdate:true, skipPortalCheck:true });
             }
           } else {
             for (const c of overlays || []) {
@@ -3820,13 +3938,13 @@ const Multiplayer = {
   if (typeof Drops !== 'undefined' && Drops.spawn && !Drops.__mpHostInventoryDropOverride) {
     Drops.__mpHostInventoryDropOverride = true;
     const priorSpawn = Drops.spawn.bind(Drops);
-    Drops.spawn = function(x, y, z, id, count, vel, dur){
+    Drops.spawn = function(x, y, z, id, count, vel, dur, data){
       if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected && !Multiplayer.applyingRemoteState && !Multiplayer.applyingRemote) {
-        Multiplayer.send({ type:'inventory_drop_request', x:+x, y:+y, z:+z, item:itemId(id), count:Math.max(1, Math.floor(+count || 1)), vel:vel || null, dur:hasDur(dur) ? +dur : undefined, snapshot:makeLocalSnapshot() });
+        Multiplayer.send({ type:'inventory_drop_request', x:+x, y:+y, z:+z, item:itemId(id), count:Math.max(1, Math.floor(+count || 1)), vel:vel || null, dur:hasDur(dur) ? +dur : undefined, data, snapshot:makeLocalSnapshot() });
         Multiplayer.clientQueueInventoryState('drop');
         return null;
       }
-      return priorSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined);
+      return priorSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined, data);
     };
   }
 
@@ -4008,6 +4126,7 @@ const Multiplayer = {
       if (!id || (typeof Reg !== 'undefined' && !Reg[id])) return null;
       const s = { id, count: Math.max(1, Math.floor(+v[1] || 1)) };
       if (hasDur(v[2])) { s.dur = +v[2]; s.count = 1; }
+      if (v.length > 3 && v[3] !== undefined && v[3] !== null) s.data = v[3];
       return s;
     }
     if (typeof v === 'object') {
@@ -4015,6 +4134,7 @@ const Multiplayer = {
       if (!id || (typeof Reg !== 'undefined' && !Reg[id])) return null;
       const s = { id, count: Math.max(1, Math.floor(+v.count || 1)) };
       if (hasDur(v.dur)) { s.dur = +v.dur; s.count = 1; }
+      if (v.data !== undefined && v.data !== null) s.data = v.data;
       return s;
     }
     return null;
@@ -4030,8 +4150,8 @@ const Multiplayer = {
       const s = unpack(src[i]);
       if (!s) { out[i] = null; continue; }
       const max = stackMax(s.id);
-      if (max <= 1 || hasDur(s.dur)) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}) };
-      else out[i] = { id:s.id, count: Math.max(1, Math.floor(+s.count || 1)) };
+      if (max <= 1 || hasDur(s.dur)) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
+      else out[i] = { id:s.id, count: Math.max(1, Math.floor(+s.count || 1)), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -4041,7 +4161,7 @@ const Multiplayer = {
     for (let i = 0; i < 4; i++) {
       const s = unpack(src[i]);
       const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}) };
+      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -4190,9 +4310,46 @@ const Multiplayer = {
       // was stale from a no-snapshot drop_request — that was the drop-and-pickup duplication.
       const conn = this.connections && this.connections.get(pid);
       if (conn) {
-        this.sendTo(conn, { type:'give_item', item:id, count, ...(dur !== undefined ? { dur } : {}) });
+        this.sendTo(conn, { type:'give_item', item:id, count, ...(dur !== undefined ? { dur } : {}), ...(d.data !== undefined ? { data:d.data } : {}) });
         this.sendTo(conn, { type:'pickup_pop' });
       }
+    },
+
+    requestVehiclePickup(v) {
+      if (this.role !== 'client' || !this.connected || !v) return false;
+      if (this.ensureVehicleId) this.ensureVehicleId(v);
+      if (!v.mpId) return false;
+      if (v.mpRider && v.mpRider !== this.id) {
+        if (typeof UI !== 'undefined') UI.chat('That vehicle is occupied.', '#ffb347');
+        return false;
+      }
+      this.send({ type:'vehicle_pickup_request', vid:v.mpId });
+      if (typeof UI !== 'undefined') UI.chat('Vehicle pickup requested...', '#aaa');
+      return true;
+    },
+
+    hostHandleVehiclePickup(pid, msg) {
+      if (this.role !== 'host' || !pid || !msg || typeof Vehicles === 'undefined') return;
+      const v = this.findVehicleById ? this.findVehicleById(msg.vid) : null;
+      if (!v || (v.mpRider && v.mpRider !== pid)) return;
+      const peer = this.peers && this.peers.get(pid);
+      const ps = peer && (peer.target || peer.state);
+      if (!ps) return;
+      const b = v.body || v;
+      if (Math.hypot(finite(ps.x, 0) - b.x, (finite(ps.y, 0) + 0.8) - (b.y + 0.5), finite(ps.z, 0) - b.z) > 5.2) return;
+      const item = idOf(v.item);
+      if (!item) return;
+      if (v.mpRider === pid) v.mpRider = '';
+      if (this.clientMountedVehicleId === v.mpId) this.clientMountedVehicleId = null;
+      Vehicles.remove(v);
+      const st = this.mcGetPlayerState(pid);
+      if (st) addToStateInventory(st, item, 1);
+      const conn = this.connections && this.connections.get(pid);
+      if (conn) {
+        this.sendTo(conn, { type:'give_item', item, count:1 });
+        this.sendTo(conn, { type:'vehicle_pickup_apply', vid:msg.vid, by:pid });
+      }
+      if (this.broadcast) this.broadcast({ type:'vehicle_pickup_apply', vid:msg.vid, by:pid }, pid);
     },
 
     mcDropFromClient(pid, msg) {
@@ -4208,7 +4365,7 @@ const Multiplayer = {
       const removed = removeFromStateInventory(live, id, want, hasDur(msg.dur) ? +msg.dur : undefined);
       if (removed > 0 && typeof Drops !== 'undefined') {
         const vel = Array.isArray(msg.vel) ? msg.vel.map(v => finite(v, 0)) : null;
-        Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, removed, vel, hasDur(msg.dur) ? +msg.dur : undefined);
+        Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, removed, vel, hasDur(msg.dur) ? +msg.dur : undefined, msg.data);
       }
       this.mcSendPlayerInventory(pid, 'drop');
     },
@@ -4274,7 +4431,8 @@ const Multiplayer = {
         chests: [...World.chests.entries()].filter(([k]) => inChunk(k)).map(([k, slots]) => [k, stacks(slots)]),
         furnaces: [...World.furnaces.entries()].filter(([k]) => inChunk(k)).map(([k, f]) => [k, { i:pack(f.in), f:pack(f.fuel), o:pack(f.out), burn:f.burn || 0, burnMax:f.burnMax || 0, cook:f.cook || 0 }]),
         crops: [...World.crops.entries()].filter(([k]) => inChunk(k)),
-        spawners: [...World.spawners.entries()].filter(([k]) => inChunk(k)).map(([k, sp]) => [k, sp.type]),
+        spawners: [...World.spawners.entries()].filter(([k, sp]) => inChunk(k) && (!sp || sp.type !== 'jelly_house')).map(([k, sp]) => [k, { type: sp.type, roster: sp.roster || null }]),
+        jellyHouses: (typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries().filter(([k]) => inChunk(k)) : []),
         bedDirs: [...World.bedDirs.entries()].filter(([k]) => inChunk(k)),
         photoDirs: [...World.photoDirs.entries()].filter(([k]) => inChunk(k)),
         stairSideways: [...World.stairSideways.entries()].filter(([k]) => inChunk(k)),
@@ -4296,7 +4454,6 @@ const Multiplayer = {
       if (!ch) return;
       this.applyingRemote = true;
       try {
-        if (World.disposeMesh) World.disposeMesh(ch);
         ch.blocks = this.mcDecodeBlocks(msg.blocks || []);
         ch.light = null; ch.hasMesh = false;
         const meta = msg.meta || {};
@@ -4305,6 +4462,18 @@ const Multiplayer = {
           for (const [k, v] of entries) map.set(String(k), transform ? transform(v) : v);
         };
         putEntries(World.diffs, meta.diffs);
+        if (Array.isArray(meta.diffs)) {
+          if (!ch.extraBlocks) ch.extraBlocks = null;
+          for (const [dk, id] of meta.diffs) {
+            const parts = String(dk).split(',').map(Number);
+            if (parts.length < 3 || !Number.isFinite(parts[0] + parts[1] + parts[2])) continue;
+            const x = parts[0] | 0, y = parts[1] | 0, z = parts[2] | 0;
+            const bkey = World.key(x >> 4, z >> 4);
+            if (!World.diffIndex.has(bkey)) World.diffIndex.set(bkey, new Map());
+            World.diffIndex.get(bkey).set(String(dk), id);
+            if (bkey === key && y >= World.H && World.setExtraBlock) World.setExtraBlock(ch, x, y, z, id | 0);
+          }
+        }
         putEntries(World.signs, meta.signs);
         putEntries(World.signDirs, meta.signDirs);
         putEntries(World.loreMap, meta.lore);
@@ -4312,7 +4481,11 @@ const Multiplayer = {
         putEntries(World.photoDirs, meta.photoDirs);
         putEntries(World.stairSideways, meta.stairSideways);
         putEntries(World.crops, meta.crops);
-        putEntries(World.spawners, meta.spawners, type => ({ type, cd:3 }));
+        putEntries(World.spawners, (meta.spawners || []).filter(([k, val]) => !val || (val.type || val) !== 'jelly_house'), val => { const obj = (val && typeof val === 'object') ? val : { type: val }; return { type: obj.type, cd:3, roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined }; });
+        if (typeof Jelly !== 'undefined' && Array.isArray(meta.jellyHouses)) {
+          Jelly.ensureStorage();
+          for (const [hk, hd] of meta.jellyHouses) Jelly.setHouse(String(hk), Jelly.unpackHouseRecord(String(hk), hd), { storedNormalized: true });
+        }
         putEntries(World.chests, meta.chests, slots => (slots || []).map(unpack));
         putEntries(World.furnaces, meta.furnaces, f => ({ in:unpack(f && f.i), fuel:unpack(f && f.f), out:unpack(f && f.o), burn:(f && f.burn) || 0, burnMax:(f && f.burnMax) || 0, cook:(f && f.cook) || 0 }));
         if (World.dirty) {
@@ -4346,6 +4519,14 @@ const Multiplayer = {
     if (msg.type === 'inventory_snapshot') { if (this.role === 'client') applyLocalSnapshot(msg.snapshot); return true; }
     if (msg.type === 'mc_drop_request' || msg.type === 'inventory_drop_request' || msg.type === 'drop_request') { if (this.role === 'host' && cameFromClient) this.mcDropFromClient(sender, msg); return true; }
     if (msg.type === 'pickup_request') { if (this.role === 'host' && cameFromClient) this.mcPickupDropForClient(sender, msg.dropId); return true; }
+    if (msg.type === 'vehicle_pickup_request') { if (this.role === 'host' && cameFromClient) this.hostHandleVehiclePickup(sender, msg); return true; }
+    if (msg.type === 'vehicle_pickup_apply') {
+      if (this.role === 'client' && this.findVehicleById && typeof Vehicles !== 'undefined') {
+        const v = this.findVehicleById(msg.vid);
+        if (v) Vehicles.remove(v);
+      }
+      return true;
+    }
     if (msg.type === 'give_item') { if (this.role === 'client') { if (msg.snapshot) applyLocalSnapshot(msg.snapshot); else if (this.clientReceiveItem) this.clientReceiveItem(msg); } return true; }
     if (msg.type === 'mc_chunk_request') { if (this.role === 'host' && cameFromClient) this.mcHostSendChunk(sender, msg.cx, msg.cz); return true; }
     if (msg.type === 'mc_chunk_snapshot') { if (this.role === 'client') this.mcClientApplyChunk(msg); return true; }
@@ -4382,13 +4563,13 @@ const Multiplayer = {
   if (typeof Drops !== 'undefined' && Drops.spawn && !Drops.__mcAuthoritySpawnPatch) {
     Drops.__mcAuthoritySpawnPatch = true;
     const oldSpawn = Drops.spawn.bind(Drops);
-    Drops.spawn = function(x, y, z, id, count, vel, dur){
+    Drops.spawn = function(x, y, z, id, count, vel, dur, data){
       if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected && !Multiplayer.applyingRemote && !Multiplayer.applyingRemoteState) {
-        Multiplayer.send({ type:'mc_drop_request', x:+x, y:+y, z:+z, item:idOf(id), count:Math.max(1, Math.floor(+count || 1)), vel:vel || null, dur:hasDur(dur) ? +dur : undefined, snapshot:snapshotFromLocal() });
+        Multiplayer.send({ type:'mc_drop_request', x:+x, y:+y, z:+z, item:idOf(id), count:Math.max(1, Math.floor(+count || 1)), vel:vel || null, dur:hasDur(dur) ? +dur : undefined, data, snapshot:snapshotFromLocal() });
         Multiplayer.mcSendClientInventory('ui-drop-prestate', true);
         return null;
       }
-      return oldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined);
+      return oldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined, data);
     };
   }
 
@@ -4446,7 +4627,7 @@ const Multiplayer = {
   const packStack = (s) => {
     if (!s || !idOf(s.id)) return 0;
     const id = idOf(s.id), count = Math.max(1, Math.floor(+s.count || 1));
-    return hasDur(s.dur) ? [id, 1, +s.dur] : [id, count];
+    return hasDur(s.dur) ? [id, 1, +s.dur, s.data || null] : (s.data ? [id, count, null, s.data] : [id, count]);
   };
   const unpackStack = (v) => {
     if (!v) return null;
@@ -4454,12 +4635,14 @@ const Multiplayer = {
       const id = idOf(v[0]); if (!id) return null;
       const s = { id, count: Math.max(1, Math.floor(+v[1] || 1)) };
       if (hasDur(v[2])) { s.dur = +v[2]; s.count = 1; }
+      if (v.length > 3 && v[3] !== undefined && v[3] !== null) s.data = v[3];
       return s;
     }
     if (typeof v === 'object') {
       const id = idOf(v.id); if (!id) return null;
       const s = { id, count: Math.max(1, Math.floor(+v.count || 1)) };
       if (hasDur(v.dur)) { s.dur = +v.dur; s.count = 1; }
+      if (v.data !== undefined && v.data !== null) s.data = v.data;
       return s;
     }
     return null;
@@ -4479,8 +4662,8 @@ const Multiplayer = {
       const s = unpackStack(src[i]);
       if (!s) { out[i] = null; continue; }
       const max = stackMax(s.id);
-      if (hasDur(s.dur) || max <= 1) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}) };
-      else out[i] = { id:s.id, count: Math.max(1, Math.floor(+s.count || 1)) };
+      if (hasDur(s.dur) || max <= 1) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
+      else out[i] = { id:s.id, count: Math.max(1, Math.floor(+s.count || 1)), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -4490,7 +4673,7 @@ const Multiplayer = {
     for (let i = 0; i < 4; i++) {
       const s = unpackStack(src[i]);
       const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}) };
+      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -4575,7 +4758,7 @@ const Multiplayer = {
       b.vy = clamp(finite(state.vy, b.vy || 0), -80, 80);
       b.vz = clamp(finite(state.vz, b.vz || 0), -80, 80);
       v.yaw = finite(state.yaw, v.yaw || 0);
-      v.speed = clamp(finite(state.speed, v.speed || 0), -40, 40);
+      v.speed = clamp(finite(state.speed, v.speed || 0), v.kind === 'plane' ? -80 : -40, v.kind === 'plane' ? 80 : 40);
       v.wheelSpin = finite(state.wheelSpin, v.wheelSpin || 0);
       v.__driverAuthAt = performance.now();
       v.__driverAuthPid = pid;
@@ -4591,7 +4774,7 @@ const Multiplayer = {
       if (!v || v.mpRider !== pid) return;
       const b = v.body || v;
       const x = Math.floor(+msg.x), y = Math.floor(+msg.y), z = Math.floor(+msg.z);
-      if (!Number.isFinite(x + y + z) || y < 0 || y >= World.H) return;
+      if (!Number.isFinite(x + y + z) || y < 0) return;
       if (Math.hypot((b.x || 0) - (x + 0.5), (b.y || 0) - y, (b.z || 0) - (z + 0.5)) > 6.5) return;
       const cur = World.getBlock(x, y, z);
       if (!cur || cur === B.AIR) return;
@@ -4719,16 +4902,15 @@ const Multiplayer = {
     if (riding) {
       const b = riding.body || riding;
       Player.body.x = b.x;
-      Player.body.y = b.y + (riding.kind === 'boat' ? 0.25 : riding.kind === 'board' ? 0.08 : 0.35);
+      Player.body.y = b.y + (Vehicles.riderYOffset ? Vehicles.riderYOffset(riding) : (riding.kind === 'boat' ? 0.25 : riding.kind === 'board' ? 0.08 : 0.35));
       Player.body.z = b.z;
       Player.body.vx = Player.body.vy = Player.body.vz = 0;
+      Player.fallDist = 0;
       if (riding.kind === 'boat') { Vehicles.boating = riding; Vehicles.driving = null; Player.boarding = false; }
       else if (riding.kind === 'board') { Vehicles.driving = null; Vehicles.boating = null; Player.boarding = true; }
       else { Vehicles.driving = riding; Vehicles.boating = null; Player.boarding = false; }
     }
-    if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(riding
-      ? (riding.kind === 'supercar' ? '🏎️ ' : riding.kind === 'car' ? '🚗 ' : riding.kind === 'boat' ? (riding.lavaBoat ? '🛶 ' : '⛵ ') : '🛹 ') + Math.max(0, Math.ceil(riding.hp || 0)) + '/' + (Vehicles.maxHp ? Vehicles.maxHp(riding) : Math.ceil(riding.hp || 0)) + ' HP'
-      : null);
+    if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(riding ? (Vehicles.vehicleHudLabel ? Vehicles.vehicleHudLabel(riding) : Math.max(0, Math.ceil(riding.hp || 0)) + ' HP') : null);
   };
 
   // Host-side inventory drop replacement. The previous host code removed only from inv slots;
@@ -4746,7 +4928,7 @@ const Multiplayer = {
     if (removed <= 0 && msg.manualDrop) removed = want;
     if (removed > 0 && typeof Drops !== 'undefined' && Drops.spawn) {
       const vel = Array.isArray(msg.vel) ? msg.vel.map(v => finite(v, 0)) : null;
-      Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, removed, vel, hasDur(msg.dur) ? +msg.dur : undefined);
+      Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, removed, vel, hasDur(msg.dur) ? +msg.dur : undefined, msg.data);
     }
     if (this.mcSendPlayerInventory) this.mcSendPlayerInventory(pid, 'manual-drop');
   };
@@ -4756,7 +4938,7 @@ const Multiplayer = {
   if (typeof Drops !== 'undefined' && Drops.spawn && !Drops.__driverAuthorityManualDropPatch) {
     Drops.__driverAuthorityManualDropPatch = true;
     const oldSpawn = Drops.spawn.bind(Drops);
-    Drops.spawn = function(x, y, z, id, count, vel, dur){
+    Drops.spawn = function(x, y, z, id, count, vel, dur, data){
       if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected && !Multiplayer.applyingRemote && !Multiplayer.applyingRemoteState) {
         const p = (typeof Player !== 'undefined' && Player.body) ? Player.body : null;
         const manualVel = Array.isArray(vel) && Math.abs(finite(vel[1], 0) - 1.8) < 0.75;
@@ -4766,11 +4948,12 @@ const Multiplayer = {
           x:+x, y:+y, z:+z, item:idOf(id), count:Math.max(1, Math.floor(+count || 1)),
           vel: Array.isArray(vel) ? vel : null,
           dur: hasDur(dur) ? +dur : undefined,
+          data: data !== undefined ? JSON.parse(JSON.stringify(data)) : undefined,
           snapshot: localInventorySnapshot(),
         });
         return null;
       }
-      return oldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined);
+      return oldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined, data);
     };
   }
 })();
@@ -4799,6 +4982,7 @@ const Multiplayer = {
     const count = Math.max(1, Math.floor(+s.count || 1));
     const o = { id, count };
     if (hasDur(s.dur)) o.dur = +s.dur;
+    if (s.data !== undefined) o.data = JSON.parse(JSON.stringify(s.data));
     return o;
   };
   const unpack = (s) => {
@@ -4808,6 +4992,7 @@ const Multiplayer = {
     if (!id) return null;
     const o = { id, count:Math.max(1, Math.floor(+s.count || 1)) };
     if (hasDur(s.dur)) o.dur = +s.dur;
+    if (s.data !== undefined) o.data = JSON.parse(JSON.stringify(s.data));
     return o;
   };
   const normalizeStackArray = (arr, size) => {
@@ -4893,7 +5078,7 @@ const Multiplayer = {
     if (!d || !b) return null;
     return {
       did: ensureDropId(d), item:idOf(d.id), count:Math.max(1, Math.floor(+d.count || 1)),
-      dur:hasDur(d.dur) ? +d.dur : undefined,
+      dur:hasDur(d.dur) ? +d.dur : undefined, data:d.data,
       x:+finite(b.x, 0).toFixed(3), y:+finite(b.y, 0).toFixed(3), z:+finite(b.z, 0).toFixed(3),
       vx:+finite(b.vx, 0).toFixed(3), vy:+finite(b.vy, 0).toFixed(3), vz:+finite(b.vz, 0).toFixed(3),
       age:+finite(d.age, 0).toFixed(2), pd:+finite(d.pickupDelay, 0).toFixed(2),
@@ -4911,13 +5096,14 @@ const Multiplayer = {
       if (!d) {
         const before = Drops.list.length;
         const rawSpawn = Drops.__mpReliableRawSpawn || Drops.__mpReliableOldSpawn || Drops.spawn;
-        rawSpawn.call(Drops, finite(s.x, 0), finite(s.y, 64), finite(s.z, 0), idOf(s.item), Math.max(1, Math.floor(+s.count || 1)), [finite(s.vx, 0), finite(s.vy, 0), finite(s.vz, 0)], hasDur(s.dur) ? +s.dur : undefined);
+        rawSpawn.call(Drops, finite(s.x, 0), finite(s.y, 64), finite(s.z, 0), idOf(s.item), Math.max(1, Math.floor(+s.count || 1)), [finite(s.vx, 0), finite(s.vy, 0), finite(s.vz, 0)], hasDur(s.dur) ? +s.dur : undefined, s.data);
         d = Drops.list[before];
         if (d) d.mpId = s.did;
       }
       if (d) {
         d.mpId = s.did; d.id = idOf(s.item); d.count = Math.max(1, Math.floor(+s.count || 1));
         d.dur = hasDur(s.dur) ? +s.dur : undefined;
+        d.data = s.data;
         d.age = finite(s.age, d.age || 0); d.pickupDelay = finite(s.pd, d.pickupDelay || 0);
         const b = d.body; if (b) { b.x = finite(s.x, b.x); b.y = finite(s.y, b.y); b.z = finite(s.z, b.z); b.vx = finite(s.vx, b.vx || 0); b.vy = finite(s.vy, b.vy || 0); b.vz = finite(s.vz, b.vz || 0); }
         d.mpTarget = Object.assign({}, s);
@@ -4946,7 +5132,7 @@ const Multiplayer = {
     if (removed <= 0) { if (this.mcSendPlayerInventory) this.mcSendPlayerInventory(pid, 'drop-rejected'); return; }
     const vel = Array.isArray(msg.vel) ? msg.vel.map(v => finite(v, 0)) : null;
     const before = Drops.list.length;
-    Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, removed, vel, dur);
+    Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, removed, vel, dur, msg.data);
     const d = Drops.list[before];
     if (d) {
       ensureDropId(d);
@@ -4980,7 +5166,7 @@ const Multiplayer = {
   if (typeof Drops !== 'undefined' && Drops.spawn && !Drops.__mpReliableDropFinalPatch) {
     Drops.__mpReliableDropFinalPatch = true;
     Drops.__mpReliableOldSpawn = Drops.spawn.bind(Drops);
-    Drops.spawn = function(x, y, z, id, count, vel, dur) {
+    Drops.spawn = function(x, y, z, id, count, vel, dur, data) {
       if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client' && !Multiplayer.applyingRemote && !Multiplayer.applyingRemoteState) {
         const p = (typeof Player !== 'undefined' && Player.body) ? Player.body : null;
         const nearPlayer = p ? Math.hypot(finite(x, p.x) - p.x, finite(y, p.y + 1.4) - (p.y + 1.4), finite(z, p.z) - p.z) < 4.5 : true;
@@ -4989,11 +5175,12 @@ const Multiplayer = {
           x:+x, y:+y, z:+z, item:idOf(id), count:Math.max(1, Math.floor(+count || 1)),
           vel:Array.isArray(vel) ? vel : null,
           dur:hasDur(dur) ? +dur : undefined,
+          data:data,
           snapshot:makeLocalSnapshot(),
         });
         return null;
       }
-      return Drops.__mpReliableOldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined);
+      return Drops.__mpReliableOldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined, data);
     };
   }
 
@@ -5153,7 +5340,8 @@ const Multiplayer = {
   MP.hostHandleSleepRequest = function(pid, msg) {
     if (this.role !== 'host' || typeof Game === 'undefined') return;
     const toNight = !!(msg && msg.toNight);
-    if (!toNight && !Game.isNight) { const c = this.connections && this.connections.get(pid); if (c) this.sendTo(c, { type:'sleep_apply', rejected:true, text:'You can only sleep at night. The sun disapproves.' }); return; }
+    const stormSleep = !toNight && typeof Dynamics !== 'undefined' && Dynamics.weather === 'thunder';
+    if (!toNight && !Game.isNight && !stormSleep) { const c = this.connections && this.connections.get(pid); if (c) this.sendTo(c, { type:'sleep_apply', rejected:true, text:'You can only sleep at night or during thunderstorms. The sun disapproves.' }); return; }
     if (toNight && Game.isNight) { const c = this.connections && this.connections.get(pid); if (c) this.sendTo(c, { type:'sleep_apply', rejected:true, text:'The SunBed only works in daylight. It runs on sun. Obviously.' }); return; }
     const frac = Game.time / Game.dayLen;
     if (toNight) {
@@ -5161,6 +5349,7 @@ const Multiplayer = {
       Game.time += (t < 0.55 ? (0.55 - t) : (1 - t + 0.55)) * Game.dayLen;
     } else {
       Game.time = (Math.floor(frac) + 1) * Game.dayLen + Game.dayLen * 0.02;
+      if (typeof Dynamics !== 'undefined' && Dynamics.clearSleepEvents) Dynamics.clearSleepEvents();
     }
     if (typeof UI !== 'undefined') UI.chat((pid ? 'A player slept. ' : '') + (toNight ? 'Night falls.' : 'Morning arrives.'), '#ffd97a');
     this.broadcast({ type:'sleep_apply', id:this.id, time:Game.time, dayCount:Game.dayCount, toNight, text:toNight ? 'You skip the daylight. The stars say hello.' : 'You sleep through the night. Merry morning!' });
@@ -5169,6 +5358,7 @@ const Multiplayer = {
     if (msg && msg.rejected) { if (typeof UI !== 'undefined') UI.chat(msg.text || 'Cannot sleep right now.', '#ff8080'); return; }
     if (Number.isFinite(+msg.time) && typeof Game !== 'undefined') Game.time = +msg.time;
     if (Number.isFinite(+msg.dayCount) && typeof Game !== 'undefined') Game.dayCount = +msg.dayCount;
+    if (msg && !msg.toNight && typeof Dynamics !== 'undefined' && Dynamics.clearSleepEvents) Dynamics.clearSleepEvents();
     if (typeof UI !== 'undefined') UI.chat((msg && msg.text) || 'Sleep accepted.', '#ffd97a');
     const overlay = document.getElementById('sleepOverlay');
     if (overlay) { overlay.style.opacity = 1; setTimeout(() => { overlay.style.opacity = 0; }, 300); }
@@ -5243,6 +5433,7 @@ const Multiplayer = {
     const id = idOf(s.id); if (!id) return null;
     const o = { id, count:Math.max(1, Math.floor(+s.count || 1)) };
     if (hasDur(s.dur)) o.dur = +s.dur;
+    if (s.data !== undefined) o.data = JSON.parse(JSON.stringify(s.data));
     return o;
   };
   const stackMax = (id) => {
@@ -5279,7 +5470,7 @@ const Multiplayer = {
     for (let i = 0; i < 4; i++) {
       const s = cleanStack(src[i]);
       const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}) };
+      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -5342,7 +5533,7 @@ const Multiplayer = {
   const dropPacket = (d) => {
     if (!d || !d.body) return null;
     ensureDropId(d);
-    return { did:d.mpId, item:idOf(d.id), count:Math.max(1, Math.floor(+d.count || 1)), dur:hasDur(d.dur) ? +d.dur : undefined,
+    return { did:d.mpId, item:idOf(d.id), count:Math.max(1, Math.floor(+d.count || 1)), dur:hasDur(d.dur) ? +d.dur : undefined, data:d.data,
       x:+finite(d.body.x,0).toFixed(3), y:+finite(d.body.y,64).toFixed(3), z:+finite(d.body.z,0).toFixed(3),
       vx:+finite(d.body.vx,0).toFixed(3), vy:+finite(d.body.vy,0).toFixed(3), vz:+finite(d.body.vz,0).toFixed(3),
       age:+finite(d.age,0).toFixed(2), pd:+finite(d.pickupDelay,0).toFixed(2) };
@@ -5374,7 +5565,7 @@ const Multiplayer = {
   // Client weather visuals: the host owns weather state, but clients still tick only the particle mesh.
   MP.clientWeatherVisualTick = function(dt) {
     if (typeof Dynamics === 'undefined' || typeof Player === 'undefined' || typeof World === 'undefined') return;
-    if (Dynamics.weather === 'clear' || (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry')) {
+    if (Dynamics.weather === 'clear') {
       if (Dynamics.rainMesh) Dynamics.rainMesh.visible = false;
       return;
     }
@@ -5429,7 +5620,7 @@ const Multiplayer = {
     if (msg.snapshot && this.mcPlayerStates) this.mcPlayerStates.set(pid, snapToState(msg.snapshot));
     const vel = Array.isArray(msg.vel) ? msg.vel.map(v => finite(v, 0)) : null;
     const before = Drops.list.length;
-    Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, want, vel, dur);
+    Drops.spawn(finite(msg.x, 0), finite(msg.y, 64), finite(msg.z, 0), id, want, vel, dur, msg.data);
     const d = Drops.list[before];
     if (d) {
       const pkt = dropPacket(d);
@@ -5447,12 +5638,12 @@ const Multiplayer = {
   if (typeof Drops !== 'undefined' && Drops.spawn && !Drops.__mpFableFinalDropWrapper) {
     Drops.__mpFableFinalDropWrapper = true;
     const oldSpawn = Drops.spawn.bind(Drops);
-    Drops.spawn = function(x, y, z, id, count, vel, dur) {
+    Drops.spawn = function(x, y, z, id, count, vel, dur, data) {
       if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client' && !Multiplayer.applyingRemote && !Multiplayer.applyingRemoteState) {
-        Multiplayer.send({ type:'fable_drop_item', manualDrop:true, x:+x, y:+y, z:+z, item:idOf(id), count:Math.max(1, Math.floor(+count || 1)), vel:Array.isArray(vel) ? vel : null, dur:hasDur(dur) ? +dur : undefined, snapshot:localSnapshot() });
+        Multiplayer.send({ type:'fable_drop_item', manualDrop:true, x:+x, y:+y, z:+z, item:idOf(id), count:Math.max(1, Math.floor(+count || 1)), vel:Array.isArray(vel) ? vel : null, dur:hasDur(dur) ? +dur : undefined, data:data, snapshot:localSnapshot() });
         return null;
       }
-      return oldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined);
+      return oldSpawn(x, y, z, id, count, vel, hasDur(dur) ? +dur : undefined, data);
     };
   }
 
@@ -5471,13 +5662,18 @@ const Multiplayer = {
         active.wheelSpin = (active.wheelSpin || 0) + (active.speed || 0) * (dt || 0) * 3;
         for (const w of active.wheels) if (w) w.rotation.x = active.wheelSpin;
       }
+      if (active.propellers) {
+        active.propSpin = (active.propSpin || 0) + Math.max(18, Math.abs(active.speed || 0) * 1.3) * (dt || 0);
+        for (const p of active.propellers) if (p) p.rotation.z = active.propSpin;
+      }
       if (active.group) { active.group.position.set(b.x, b.y, b.z); active.group.rotation.y = active.yaw || 0; }
       if (active.mesh) { active.mesh.position.set(b.x, b.y, b.z); active.mesh.rotation.y = active.yaw || 0; }
       if (Vehicles.applyFlash) Vehicles.applyFlash(active, dt || 0);
       if (Vehicles.tintVehicle) Vehicles.tintVehicle(active, dt || 0, true);
-      Player.body.x = b.x; Player.body.y = b.y + (isBoat ? 0.25 : 0.35); Player.body.z = b.z;
+      Player.body.x = b.x; Player.body.y = b.y + (Vehicles.riderYOffset ? Vehicles.riderYOffset(active) : (isBoat ? 0.25 : 0.35)); Player.body.z = b.z;
       Player.body.vx = Player.body.vy = Player.body.vz = 0;
-      if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud((active.kind === 'supercar' ? '🏎️ ' : active.kind === 'car' ? '🚗 ' : active.lavaBoat ? '🛶 ' : '⛵ ') + Math.max(0, Math.ceil(active.hp || 0)) + '/' + (Vehicles.maxHp ? Vehicles.maxHp(active) : Math.ceil(active.hp || 0)) + ' HP');
+      Player.fallDist = 0;
+      if (typeof UI !== 'undefined' && UI.setVehicleHud) UI.setVehicleHud(Vehicles.vehicleHudLabel ? Vehicles.vehicleHudLabel(active) : Math.max(0, Math.ceil(active.hp || 0)) + ' HP');
     }
     if (Player.boarding && Vehicles.updateBoard) {
       // updateBoard is patched below; this keeps skateboards responsive too.
@@ -5528,6 +5724,14 @@ const Multiplayer = {
     if (World.signDirs && World.signDirs.has(k)) meta.signDir = World.signDirs.get(k);
     if (World.photoDirs && World.photoDirs.has(k)) meta.photoDir = World.photoDirs.get(k);
     if (World.stairSideways && World.stairSideways.has(k)) meta.stairSide = World.stairSideways.get(k);
+    // Plantation Pot multiblock: carry the raised/slab metadata so the 3x3 planter renders
+    // raised (and preserves the slabs beneath) for everyone, not just the placer.
+    if (World.plantationOrigins && World.plantationOrigins.has(k)) meta.potOrigin = World.plantationOrigins.get(k);
+    if (World.plantationUnderSlabs && World.plantationUnderSlabs.has(k)) meta.potUnderSlab = World.plantationUnderSlabs.get(k);
+    if (typeof B !== 'undefined' && World.getBlock && World.getBlock(x|0, y|0, z|0) === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
+      const h = Jelly.getHouseByKey(k);
+      if (h) meta.jellyHouse = Jelly.packHouseRecord(h);
+    }
     return Object.keys(meta).length ? meta : null;
   };
   const applyBlockMeta = (x, y, z, meta) => {
@@ -5537,6 +5741,12 @@ const Multiplayer = {
     if (meta.signDir !== undefined && World.signDirs) World.signDirs.set(k, meta.signDir);
     if (meta.photoDir !== undefined && World.photoDirs) World.photoDirs.set(k, meta.photoDir);
     if (meta.stairSide !== undefined && World.stairSideways) World.stairSideways.set(k, meta.stairSide);
+    if (meta.potOrigin !== undefined && World.plantationOrigins) World.plantationOrigins.set(k, meta.potOrigin);
+    if (meta.potUnderSlab !== undefined && World.plantationUnderSlabs) World.plantationUnderSlabs.set(k, meta.potUnderSlab);
+    if ((meta.jellyHouse !== undefined || meta.jellyRoster !== undefined) && typeof B !== 'undefined' && typeof Jelly !== 'undefined' && World.getBlock && World.getBlock(x|0, y|0, z|0) === B.JELLY_HOUSE) {
+      const house = meta.jellyHouse !== undefined ? Jelly.unpackHouseRecord(k, meta.jellyHouse) : Jelly.unpackHouseRecord(k, { stored: meta.jellyRoster });
+      Jelly.setHouse(k, house, { storedNormalized: true });
+    }
   };
   const oldLocalBlockChange = MP.onLocalBlockChange ? MP.onLocalBlockChange.bind(MP) : null;
   MP.onLocalBlockChange = function(x, y, z, id, opts, oldId) {

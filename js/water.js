@@ -79,7 +79,7 @@ const Water = {
       const belowSolid = belowDef && belowDef.block && belowDef.solid;
       if (srcCount >= 2 && (belowSolid || belowId === B.WATER)) {
         World.setBlock(x, y, z, B.WATER);
-        this.spread(x, y, z, 8);
+        this.spread(x, y, z, 8, true);
         return;
       }
       if (expected <= 0) {
@@ -91,14 +91,14 @@ const Water = {
       if (want !== id) {
         World.setBlock(x, y, z, want);
         this.wakeNeighbors(x, y, z);
-        this.spread(x, y, z, expected);
+        this.spread(x, y, z, expected, false);
         return;
       }
     }
-    this.spread(x, y, z, lvl);
+    this.spread(x, y, z, lvl, isSrc);
   },
 
-  spread(x, y, z, lvl) {
+  spread(x, y, z, lvl, isSource) {
     const below = World.getBlock(x, y - 1, z);
     const belowDef = Reg[below];
     // water onto lava below -> stone-ish outcomes
@@ -110,6 +110,26 @@ const Water = {
     const canFallInto = below === B.AIR || this.washable(below) ||
       (isWater(below) && below !== B.WATER && below !== B.WATER_FALL);
     if (canFallInto) {
+      if (isSource && lvl > 1) {
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx, nz = z + dz;
+          const n = World.getBlock(nx, y, nz);
+          if (isLava(n)) {
+            World.setBlock(nx, y, nz, n === B.LAVA ? B.OBSIDIAN : B.COBBLE);
+            SFX.splash();
+            continue;
+          }
+          const canFlow = n === B.AIR || this.washable(n) || (isWater(n) && n !== B.WATER && waterLevel(n) < lvl - 1);
+          if (canFlow) {
+            if (this.washable(n)) {
+              const d = this.washDrop(n);
+              if (d) Drops.spawn(nx + 0.5, y + 0.3, nz + 0.5, d, 1);
+            }
+            World.setBlock(nx, y, nz, flowIdFor(lvl - 1));
+            this.schedule(nx, y, nz);
+          }
+        }
+      }
       if (this.washable(below)) {
         const d = this.washDrop(below);
         if (d) Drops.spawn(x + 0.5, y - 0.7, z + 0.5, d, 1);
@@ -200,14 +220,14 @@ const Lava = {
         this.wakeNeighbors(x, y, z);
       }
     }
-    this.spread(x, y, z, isSrc ? 4 : Math.min(lvl, 3));
+    this.spread(x, y, z, isSrc ? 4 : Math.min(lvl, 3), isSrc);
     // lava sets its neighborhood on fire, occasionally
     if (Math.random() < 0.06 && typeof Dynamics !== 'undefined') {
       Dynamics.tryIgniteNear(x, y, z);
     }
   },
 
-  spread(x, y, z, lvl) {
+  spread(x, y, z, lvl, isSource) {
     const below = World.getBlock(x, y - 1, z);
     const belowDef = Reg[below];
     if (isWater(below)) {
@@ -219,6 +239,22 @@ const Lava = {
     const canFallInto = below === B.AIR || below === B.FIRE ||
       (isLava(below) && below !== B.LAVA && below !== B.LAVA_FALL);
     if (canFallInto) {
+      if (isSource && lvl > 1) {
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx, nz = z + dz;
+          const n = World.getBlock(nx, y, nz);
+          if (isWater(n)) {
+            World.setBlock(x, y, z, B.OBSIDIAN);
+            SFX.splash();
+            return;
+          }
+          const canFlow = n === B.AIR || n === B.FIRE || (isLava(n) && n !== B.LAVA && lavaLevel(n) < lvl - 1);
+          if (canFlow) {
+            World.setBlock(nx, y, nz, lavaFlowIdFor(Math.min(lvl - 1, 3)));
+            this.schedule(nx, y, nz);
+          }
+        }
+      }
       World.setBlock(x, y - 1, z, B.LAVA_FALL);
       this.schedule(x, y - 1, z);
       return;

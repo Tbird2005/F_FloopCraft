@@ -25,7 +25,7 @@ const Dynamics = {
     this.stars = [];
     this.leafDecay.clear();
     this.weather = 'clear';
-    this.weatherT = 60 + Math.random() * 120;
+    this.weatherT = this.nextClearWeatherDelay ? this.nextClearWeatherDelay() : 900 + Math.random() * 1200;
     this.starfall = false;
     if (this.rainMesh) { scene.remove(this.rainMesh); this.rainMesh = null; }
   },
@@ -222,7 +222,6 @@ const Dynamics = {
 
   // ---------------- weather ----------------
   biomeWeatherName() {
-    if (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') return 'clear';
     const b = World.biomeAt(Math.floor(Player.body.x), Math.floor(Player.body.z));
     if (this.weather === 'clear') return 'clear';
     if (b === 'desert') return 'sandstorm';
@@ -231,26 +230,18 @@ const Dynamics = {
   },
 
   updateWeather(dt) {
-    if (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') {
-      // The Merry Christmas Floop Dimension has its own void-sky mood, not
-      // overworld rain/thunder/sandstorm/blizzard events.
-      this.weather = 'clear';
-      this.weatherT = 999999;
-      if (this.rainMesh) this.rebuildRain();
-      return;
-    }
     this.weatherT -= dt;
     if (this.weatherT <= 0) {
       if (this.weather === 'clear') {
-        this.weather = Math.random() < 0.3 ? 'thunder' : 'rain';
-        this.weatherT = 60 + Math.random() * 120;
+        this.weather = Math.random() < 0.22 ? 'thunder' : 'rain';
+        this.weatherT = 120 + Math.random() * 210;
         const local = this.biomeWeatherName();
         UI.chat(local === 'sandstorm' ? 'A sandstorm rolls in...' :
           local === 'blizzard' || local === 'snowfall' ? 'Snow begins to fall...' :
           this.weather === 'thunder' ? 'A thunderstorm rolls in!' : 'It starts to rain.', '#9fb8d4');
       } else {
         this.weather = 'clear';
-        this.weatherT = 120 + Math.random() * 240;
+        this.weatherT = this.nextClearWeatherDelay();
         UI.chat('The sky clears up.', '#9fb8d4');
       }
       this.rebuildRain();
@@ -313,6 +304,43 @@ const Dynamics = {
     if (local === 'sandstorm') return [0xd8 / 255, 0xc8 / 255, 0x90 / 255];
     if (local === 'snowfall' || local === 'blizzard') return [1, 1, 1];
     return [0x7d / 255, 0x9f / 255, 0xd4 / 255];
+  },
+
+  nextClearWeatherDelay() {
+    return 900 + Math.random() * 1500;
+  },
+
+  clearWeather(reason) {
+    if (this.weather === 'clear') {
+      this.weatherT = Math.max(this.weatherT || 0, this.nextClearWeatherDelay());
+      return false;
+    }
+    this.weather = 'clear';
+    this.weatherT = this.nextClearWeatherDelay();
+    if (this.rebuildRain) this.rebuildRain();
+    if (reason && typeof UI !== 'undefined') UI.chat(reason, '#9fb8d4');
+    return true;
+  },
+
+  clearStarfall(silent) {
+    const had = !!this.starfall || (this.stars && this.stars.length);
+    this.starfall = false;
+    this.starfallT = 0;
+    this.starSpawnT = 0;
+    for (const s of this.stars || []) {
+      if (s.mesh) {
+        this.scene.remove(s.mesh);
+        if (s.mesh.geometry) s.mesh.geometry.dispose();
+      }
+    }
+    this.stars = [];
+    if (had && !silent && typeof UI !== 'undefined') UI.chat('The starfall fades. The night feels ordinary again.', '#9fb8d4');
+    return had;
+  },
+
+  clearSleepEvents() {
+    this.clearStarfall(false);
+    this.clearWeather('The storm passes while you sleep.');
   },
 
   updateRainLighting(local) {
@@ -488,15 +516,18 @@ const Dynamics = {
 
   // ---------------- monster spawners ----------------
   updateSpawners(dt) {
-    if (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') return;
     this.spawnerAcc = (this.spawnerAcc || 0) + dt;
     if (this.spawnerAcc < 1) return;
     this.spawnerAcc = 0;
+    if (typeof Jelly !== 'undefined') Jelly.updateHouses(dt);
     const p = Player.body;
     for (const [k, sp] of World.spawners) {
       const [x, y, z] = k.split(',').map(Number);
       if (!World.hasChunk(x, z)) continue;
-      if (World.getBlock(x, y, z) !== B.SPAWNER) { World.spawners.delete(k); continue; }
+      const blockId = World.getBlock(x, y, z);
+      if (sp.type === 'jelly_house') { if (typeof Jelly !== 'undefined') Jelly.migrateLegacySpawners(); else World.spawners.delete(k); continue; }
+      if (sp.type === 'spider') sp.type = Math.random() < 0.5 ? 'skeleton' : 'creeper';
+      if (blockId !== B.SPAWNER) { World.spawners.delete(k); continue; }
       const d2 = (x - p.x) ** 2 + (y - p.y) ** 2 + (z - p.z) ** 2;
       if (d2 > 16 * 16 || d2 < 2 * 2) continue;
       sp.cd -= 1;
@@ -508,7 +539,8 @@ const Dynamics = {
       for (let tries = 0; tries < 6; tries++) {
         const sx = x + ((Math.random() * 5) | 0) - 2, sz = z + ((Math.random() * 5) | 0) - 2, sy = y;
         if (World.getBlock(sx, sy, sz) === B.AIR && World.getBlock(sx, sy + 1, sz) === B.AIR &&
-            Physics.solidAt(sx + 0.5, sy - 0.5, sz + 0.5)) {
+            Physics.solidAt(sx + 0.5, sy - 0.5, sz + 0.5) &&
+            (!Mobs.spawnFits || Mobs.spawnFits(sp.type, sx + 0.5, sy + 0.02, sz + 0.5))) {
           // spawners ignore light rules — that's their whole deal
           const m = Mobs.spawn(sp.type, sx + 0.5, sy + 0.02, sz + 0.5, sp.type === 'humbug' ? Mobs.humbugGun() : null);
           m.fromSpawner = k;
@@ -574,7 +606,6 @@ const Dynamics = {
   // ---------------- starfall ----------------
   maybeStartStarfall() {
     // called at each dusk
-    if (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') return;
     if (this.starfall) return;
     if (Math.random() < 0.18) {
       this.starfall = true;
@@ -586,15 +617,6 @@ const Dynamics = {
   },
 
   updateStarfall(dt) {
-    if (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') {
-      // Clear any leftover overworld starfall visuals/state after switching.
-      this.starfall = false;
-      for (const s of this.stars || []) {
-        if (s.mesh) { this.scene.remove(s.mesh); s.mesh.geometry.dispose(); }
-      }
-      this.stars = [];
-      return;
-    }
     if (this.starfall) {
       this.starfallT -= dt;
       this.starSpawnT -= dt;
@@ -612,8 +634,7 @@ const Dynamics = {
         this.stars.push({ mesh, x, y: World.H + 10, z, vy: -14 - Math.random() * 8, spin: Math.random() });
       }
       if (this.starfallT <= 0) {
-        this.starfall = false;
-        UI.chat('The starfall fades. The night feels ordinary again.', '#9fb8d4');
+        this.clearStarfall(false);
       }
     }
     for (let i = this.stars.length - 1; i >= 0; i--) {
@@ -649,7 +670,7 @@ const Dynamics = {
     this.updateHazards(dt);
     this.updateWeather(dt);
     this.updateStarfall(dt);
-    if (!(typeof Dimensions !== 'undefined' && Dimensions.current === 'merry')) this.updateSpawners(dt);
+    this.updateSpawners(dt);
     this.updateLeafDecay(dt);
   },
 

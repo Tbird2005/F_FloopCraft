@@ -99,6 +99,10 @@ const Physics = {
       case 'door':
         return isDoorX(id) ? [[0.36, 0, 0.02, 0.64, 1, 0.98]] : [[0.02, 0, 0.36, 0.98, 1, 0.64]];
       case 'doorOpen': return null; // walkable; the thin panel only matters for targeting
+      case 'dungeonDoor':
+        return dungeonDoorAxisAt(id, x, y, z) === 'x'
+          ? [[0.38, 0, 0.02, 0.62, 1, 0.98]]
+          : [[0.02, 0, 0.38, 0.98, 1, 0.62]];
       case 'bed': return [[0, 0, 0, 1, 0.56, 1]];
       case 'snow': {
         // a single sheet is just powder — walk right through it
@@ -155,6 +159,10 @@ const Physics = {
     const def = Reg[id];
     if (!def || !def.block || id === B.AIR || isFluid(id)) return null;
     switch (def.shape) {
+      case 'dungeonDoor':
+        return dungeonDoorAxisAt(id, x, y, z) === 'x'
+          ? [[0.34, 0, 0, 0.66, 1, 1]]
+          : [[0, 0, 0.34, 1, 1, 0.66]];
       case 'doorOpen':
         return isDoorX(id) ? [[0.02, 0, 0.02, 0.98, 1, 0.18]] : [[0.02, 0, 0.02, 0.18, 1, 0.98]];
       case 'cross':

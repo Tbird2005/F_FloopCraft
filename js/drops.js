@@ -38,7 +38,7 @@ const Drops = {
 
   makeMesh(id) {
     const def = Reg[id];
-    if (def && def.block && !def.cutout && def.opaque && def.shape === 'cube') {
+    if (def && def.block && def.shape === 'cube' && (def.force3dIcon || (!def.cutout && def.opaque))) {
       return this.makeBlockCube(id, 0.3);
     }
     // sprite icon for items / non-cube blocks (own material per drop for tinting)
@@ -64,13 +64,13 @@ const Drops = {
     if (mat && mat.color) mat.color.setRGB(l, l, l);
   },
 
-  spawn(x, y, z, id, count, vel, dur) {
+  spawn(x, y, z, id, count, vel, dur, data) {
     if (!id || !count) return;
     const mesh = this.makeMesh(id);
     mesh.position.set(x, y, z);
     this.scene.add(mesh);
     this.list.push({
-      id, count, dur, mesh,
+      id, count, dur, data: data === undefined ? undefined : JSON.parse(JSON.stringify(data)), mesh,
       body: {
         x, y, z,
         vx: vel ? vel[0] : (Math.random() - 0.5) * 2.4,
@@ -140,12 +140,12 @@ const Drops = {
               leftover = d.count;
               for (let slot = 0; slot < 36 && leftover > 0; slot++) {
                 if (!Player.inv[slot]) {
-                  Player.inv[slot] = { id: d.id, count: 1, dur: d.dur };
+                  Player.inv[slot] = { id: d.id, count: 1, dur: d.dur, ...(d.data !== undefined ? { data: JSON.parse(JSON.stringify(d.data)) } : {}) };
                   leftover--;
                 }
               }
             } else {
-              leftover = Player.addItem(d.id, d.count);
+              leftover = Player.addItem(d.id, d.count, d.dur, d.data);
             }
             if (leftover < d.count) {
               SFX.pop();
@@ -188,6 +188,13 @@ const Drops = {
   },
 
   dropFromBlock(bx, by, bz, blockId, toolOk) {
+    if (blockId === B.JELLY_HOUSE && toolOk) {
+      const key = World && World.pkey ? World.pkey(bx, by, bz) : (bx + ',' + by + ',' + bz);
+      const preBreakItemData = (typeof Jelly !== 'undefined' && Jelly.itemDataForPlacedHouse) ? Jelly.itemDataForPlacedHouse(bx, by, bz) : null;
+      const res = (typeof Jelly !== 'undefined') ? Jelly.onHouseBreak(key, { reason: 'drop_helper' }) : null;
+      this.spawn(bx + 0.5, by + 0.4, bz + 0.5, blockId, 1, null, undefined, (res && res.itemData) || preBreakItemData || (typeof Jelly !== 'undefined' ? Jelly.serializeHouseItem([]) : { jellyRoster: [] }));
+      return;
+    }
     const def = Reg[blockId];
     if (def.drop === null) return;
     if (!toolOk) return;

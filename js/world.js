@@ -19,18 +19,21 @@ const LORE = [
   '"I buried rooms beneath the ground. Old rooms.\nFull of powder and presents.\nThe Humbugs dig for them. Dig faster." — M.F.',
   '"Some nights the stars fall. Catch them.\nThey are warm. They remember being wished on." — M.F.',
   '"There is a thing in the dark that says TUNG.\nIt says it three times. Then SAHUR.\nI do not open the door." — M.F.',
-  '"Four dark corners. Emeralds around them.\nThe Christmas Gem falls in the square between.\nDo not step through hungry." — M.F.',
+  '"Colored doors below the ground do not open for courage.\nThey open for keys. Courage helps after." — M.F.',
 ];
 const LORE_SILENT = 'The stone is silent.\nWhatever it remembered, it remembered somewhere else.\n\n(Lore stones only speak where they were first placed.)';
 
 const World = {
   H: 80, SEA: 30, R: 4,
+  CHUNK_H: 16,
+  VERTICAL_RENDER_RADIUS: 5,
   seed: 1337,
   dimensionId: 'overworld',
   chunks: new Map(),
   featureCache: new Map(),
   structCellCache: new Map(),
   dungeonCache: new Map(),
+  dungeonConquered: new Set(),
   structSeen: new Set(),
   floopSpots: [],
   dungeonSpots: [],
@@ -47,7 +50,9 @@ const World = {
   signSprites: new Map(),
   furnaces: new Map(),
   chests: new Map(),
-  spawners: new Map(),      // "x,y,z" -> {type, cd}
+  spawners: new Map(),      // "x,y,z" -> {type, cd} — monster spawners only
+  jellyHouses: new Map(),   // "x,y,z" -> JellyHouseRecord
+  jellyHouseIds: new Map(), // house id -> "x,y,z"
   loreMap: new Map(),
   diffs: new Map(),
   diffIndex: new Map(),   // chunkKey -> Map(pkey -> id): fast replay at chunk gen
@@ -60,17 +65,20 @@ const World = {
   matSolid: null, matCutout: null, matWater: null, matLava: null, matPhoto: null,
   dayFUniform: { value: 1 },
   scene: null,
+  visibleSectionY: 0,
 
   init(scene, seed) {
     this.scene = scene;
     this.seed = seed;
+    this.dimensionId = 'overworld';
     this.chunks.clear(); this.featureCache.clear(); this.structCellCache.clear();
-    this.dungeonCache.clear(); this.structSeen.clear(); this.dirty.clear();
+    this.dungeonCache.clear(); this.dungeonConquered.clear(); this.structSeen.clear(); this.dirty.clear();
     this.lights.clear(); this.saplings.clear(); this.crops.clear(); this.plantationOrigins.clear(); this.plantationUnderSlabs.clear(); this.loreMap.clear(); this.diffs.clear();
     this.megaTorches.clear(); this.fires.clear();
     this.floopSpots.length = 0; this.dungeonSpots.length = 0;
     this.signs.clear(); this.furnaces.clear(); this.chests.clear(); this.signDirs.clear();
-    this.spawners.clear(); this.diffIndex.clear(); this.bedDirs.clear(); this.photoDirs.clear(); this.stairSideways.clear(); this.relightQueue.clear();
+    this.spawners.clear(); this.jellyHouses.clear(); this.jellyHouseIds.clear(); this.diffIndex.clear(); this.bedDirs.clear(); this.photoDirs.clear(); this.stairSideways.clear(); this.relightQueue.clear();
+    if (typeof Jelly !== 'undefined' && Jelly.resetStorageCache) Jelly.resetStorageCache();
     for (const s of this.signSprites.values()) scene.remove(s);
     this.signSprites.clear();
     this.ready = false;
@@ -111,13 +119,33 @@ const World = {
   key(cx, cz) { return cx + ',' + cz; },
   pkey(x, y, z) { return x + ',' + y + ',' + z; },
   idx(x, y, z) { return (y << 8) + (z << 4) + x; },
+  isBaseY(y) { return y >= 0 && y < this.H; },
+
+  extraBlock(ch, x, y, z) {
+    if (!ch || !ch.extraBlocks) return B.AIR;
+    return ch.extraBlocks.get(this.pkey(x, y, z)) || B.AIR;
+  },
+
+  setExtraBlock(ch, x, y, z, id) {
+    if (!ch) return;
+    const k = this.pkey(x, y, z);
+    if (id === B.AIR || id === 0) {
+      if (ch.extraBlocks) {
+        ch.extraBlocks.delete(k);
+        if (!ch.extraBlocks.size) ch.extraBlocks = null;
+      }
+      return;
+    }
+    if (!ch.extraBlocks) ch.extraBlocks = new Map();
+    ch.extraBlocks.set(k, id);
+  },
 
   getBlock(x, y, z) {
     if (y < 0) return B.AIR; // below the generated world is true void, not invisible bedrock
-    if (y >= this.H) return B.AIR;
     const ch = this.chunks.get(this.key(x >> 4, z >> 4));
-    if (!ch) return B.STONE;
-    return ch.blocks[this.idx(x & 15, y, z & 15)];
+    if (!ch) return y < this.H ? B.STONE : B.AIR;
+    if (y < this.H) return ch.blocks[this.idx(x & 15, y, z & 15)];
+    return this.extraBlock(ch, x, y, z);
   },
 
   hasChunk(x, z) { return this.chunks.has(this.key(x >> 4, z >> 4)); },
@@ -385,6 +413,7 @@ const World = {
   },
 
   lightOnBlockChanged(x, y, z, oldId, newId) {
+    if (y < 0 || y >= this.H) return;
     const ch = this.chunks.get(this.key(x >> 4, z >> 4));
     if (!ch || !ch.light) return;
     const oldEm = this.lightEmit(oldId), newEm = this.lightEmit(newId);
@@ -425,10 +454,12 @@ const World = {
         if (!seen.has(rk)) { seen.add(rk); this.relightQueue.add(rk); }
       };
       const ccx = x >> 4, ccz = z >> 4;
-      // Sky spill can cross chunk borders, so opacity changes need a wider
-      // verification pass. The queue is still time-sliced later, but every chunk
-      // that could contain stale leaked daylight gets scheduled immediately.
-      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) relightChunk(ccx + dx, ccz + dz);
+      relightChunk(ccx, ccz);
+      const lx = x & 15, lz = z & 15;
+      if (lx === 0) relightChunk(ccx - 1, ccz);
+      if (lx === 15) relightChunk(ccx + 1, ccz);
+      if (lz === 0) relightChunk(ccx, ccz - 1);
+      if (lz === 15) relightChunk(ccx, ccz + 1);
     }
 
     for (const k of touched) {
@@ -469,13 +500,15 @@ const World = {
 
   setBlock(x, y, z, id, opts) {
     opts = opts || {};
-    if (y < 0 || y >= this.H) return;
+    if (y < 0) return;
     const cx = x >> 4, cz = z >> 4;
     const ch = this.chunks.get(this.key(cx, cz));
     if (!ch) return;
-    const old = ch.blocks[this.idx(x & 15, y, z & 15)];
+    const baseY = y < this.H;
+    const old = baseY ? ch.blocks[this.idx(x & 15, y, z & 15)] : this.extraBlock(ch, x, y, z);
     if (old === id) return;
-    ch.blocks[this.idx(x & 15, y, z & 15)] = id;
+    if (baseY) ch.blocks[this.idx(x & 15, y, z & 15)] = id;
+    else this.setExtraBlock(ch, x, y, z, id);
     if (this.ready && old !== id && id !== old && typeof Dynamics !== 'undefined' && Dynamics.isLogId && Dynamics.isLogId(old) && !Dynamics.isLogId(id)) {
       Dynamics.queueLeafDecay(x, y, z);
     }
@@ -494,7 +527,7 @@ const World = {
     if (lz === 0) this.dirty.add(this.key(cx, cz - 1));
     if (lz === 15) this.dirty.add(this.key(cx, cz + 1));
 
-    this.updateRegistries(x, y, z, old, id);
+    this.updateRegistries(x, y, z, old, id, opts);
 
     // Any block/shape replacement should clear stored crack progress for that
     // cell. Keep this extremely cheap: most block changes happen when no stored
@@ -529,7 +562,7 @@ const World = {
     }
   },
 
-  updateRegistries(x, y, z, oldId, newId) {
+  updateRegistries(x, y, z, oldId, newId, opts) {
     const k = this.pkey(x, y, z);
     const wasLight = Reg[oldId] && Reg[oldId].light;
     const isLight = Reg[newId] && Reg[newId].light;
@@ -555,15 +588,18 @@ const World = {
       const f = this.furnaces.get(k);
       if (f) {
         for (const s of [f.in, f.fuel, f.out]) {
-          if (s) Drops.spawn(x + 0.5, y + 0.5, z + 0.5, s.id, s.count);
+          if (s) Drops.spawn(x + 0.5, y + 0.5, z + 0.5, s.id, s.count, null, s.dur, s.data);
         }
         this.furnaces.delete(k);
       }
     }
-    if ((oldId === B.CHEST || oldId === B.LOOT_CRATE) && newId !== B.CHEST && newId !== B.LOOT_CRATE) {
+    if ((oldId === B.CHEST || oldId === B.LOOT_CRATE || oldId === B.JELLY_CHEST) && newId !== B.CHEST && newId !== B.LOOT_CRATE && newId !== B.JELLY_CHEST) {
+      if (oldId === B.JELLY_CHEST && this.ready && typeof Jelly !== 'undefined' && !opts.jellyChestBreakHandled && !(typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client')) {
+        Jelly.onChestAccess({ x, y, z, mode: 'break', wasJellyChest: true, oldId });
+      }
       const chc = this.chests.get(k);
       if (chc) {
-        for (const s of chc) if (s) Drops.spawn(x + 0.5, y + 0.5, z + 0.5, s.id, s.count);
+        for (const s of chc) if (s) Drops.spawn(x + 0.5, y + 0.5, z + 0.5, s.id, s.count, null, s.dur, s.data);
         this.chests.delete(k);
       }
     }
@@ -571,12 +607,32 @@ const World = {
     if (oldId === B.MR_FLOOP_DRINKING_WATER && newId !== B.MR_FLOOP_DRINKING_WATER) this.photoDirs.delete(k);
     if (isStairs(oldId) && !isStairs(newId)) this.stairSideways.delete(k);
     if (oldId === B.SPAWNER && newId !== B.SPAWNER) this.spawners.delete(k);
+    if (oldId === B.JELLY_HOUSE && newId !== B.JELLY_HOUSE && typeof Jelly !== 'undefined' && !opts.jellyHouseBreakHandled) {
+      Jelly.onHouseBreak(k, { reason: 'block_removed', drop: false });
+    }
     if (newId === B.SPAWNER && !this.spawners.has(k)) {
-      this.spawners.set(k, { type: ['spider', 'skeleton', 'humbug'][(Math.random() * 3) | 0], cd: 3 });
+      this.spawners.set(k, { type: ['skeleton', 'creeper', 'humbug'][(Math.random() * 3) | 0], cd: 3 });
+    }
+    if (newId === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
+      const hasJellyPlacementData = !!(opts && (opts.jellyHouse || opts.itemData || opts.data || opts.stored || opts.jellyRoster || opts.seedDefault || opts.source));
+      if (hasJellyPlacementData || !Jelly.getHouseByKey(k)) {
+        Jelly.createHouseAt(x, y, z, {
+          itemData: (opts && (opts.jellyHouse || opts.itemData || opts.data)) || null,
+          jellyRoster: opts && opts.jellyRoster,
+          stored: opts && opts.stored,
+          seedDefault: opts && opts.seedDefault,
+          source: opts && opts.source || 'placed',
+        });
+      }
     }
   },
 
   checkSupports(x, y, z, newId) {
+    // Multiplayer: the HOST is authoritative for support cascades (torch/sapling/cactus/
+    // plantation drops + falling blocks). If a client also ran this, every support-break
+    // double-dropped — the client spawns a drop_request AND the host's relayed break spawns
+    // its own. Clients skip it; the resulting block changes + drops sync back from the host.
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client') return;
     const solidNow = !!Physics.blockBoxes(newId, x, y, z);
     const above = this.getBlock(x, y + 1, z);
 
@@ -645,49 +701,120 @@ const World = {
     }
   },
 
-  initChest(x, y, z, rnd, rich = false, source = 'surface') {
+  initChest(x, y, z, rnd, rich = false, source = 'surface', size = 27) {
     const k = this.pkey(x, y, z);
     if (this.chests.has(k)) return;
+    size = Math.max(27, Math.floor(+size || 27));
     // Multiplayer: only the host rolls container loot. Clients must NEVER generate
     // their own chest contents (they'd diverge from the host and hand out infinite
     // loot on reopen). Clients receive the authoritative slots via chest_snapshot.
     if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client') return;
-    const slots = new Array(27).fill(null);
+    const slots = new Array(size).fill(null);
 
     // Surface monuments/houses/towers are meant to be early-game finds.
     // They intentionally do NOT roll diamonds or late-game weapons anymore.
     const SURFACE_LOOT = [
-      [I.GUNPOWDER, 1, 3, 0.35], [I.COOKIE, 1, 3, 0.55], [I.XMAS_GEM, 1, 1, 0.16],
+      [I.GUNPOWDER, 1, 3, 0.35], [I.COOKIE, 1, 3, 0.55], [I.STAR, 1, 1, 0.08],
       [I.GOLD_INGOT, 1, 2, 0.12], [I.LIGHT_AMMO, 2, 6, 0.22],
       [I.APPLE, 1, 3, 0.50], [B.TORCH, 2, 6, 0.45], [I.BONE, 1, 2, 0.30],
-      [I.FEATHER, 1, 3, 0.25], [I.STRING, 1, 3, 0.28], [I.ARROW, 2, 6, 0.24],
+      [I.FEATHER, 1, 3, 0.30], [B.WOOL, 1, 2, 0.18], [I.ARROW, 2, 6, 0.28],
     ];
     const SURFACE_BONUS = [
       [I.SHELLS, 2, 4, 0.08], [I.HEAVY_AMMO, 1, 3, 0.05],
       [I.DARK_FLOOPIUM, 1, 1, 0.025],
     ];
 
-    // Dungeons can still have good loot, but diamonds/top-tier rewards are much rarer.
-    const DUNGEON_LOOT = [
-      [I.GUNPOWDER, 2, 6, 0.65], [I.COOKIE, 1, 4, 0.45], [I.XMAS_GEM, 1, 2, 0.24],
-      [I.GOLD_INGOT, 1, 3, 0.28], [I.DIAMOND, 1, 1, 0.045], [I.LIGHT_AMMO, 3, 10, 0.42],
-      [I.APPLE, 1, 3, 0.45], [B.TORCH, 2, 8, 0.45], [I.BONE, 1, 3, 0.38],
-      [I.PISTOL, 1, 1, 0.035], [I.DARK_FLOOPIUM, 1, 1, 0.045],
-      [I.FEATHER, 1, 3, 0.25], [I.STRING, 1, 4, 0.32], [I.ARROW, 3, 8, 0.28],
+    const DUNGEON_COMMON = [
+      [I.GUNPOWDER, 3, 9, 0.70], [I.COOKIE, 1, 4, 0.50], [I.APPLE, 1, 4, 0.45],
+      [B.TORCH, 4, 12, 0.55], [I.BONE, 1, 4, 0.36], [I.ARROW, 4, 12, 0.42],
+      [I.LIGHT_AMMO, 4, 12, 0.48], [I.SHELLS, 2, 6, 0.20],
     ];
-    const DUNGEON_RICH = [
-      [I.STAR, 1, 1, 0.055], [I.SHELLS, 3, 7, 0.18], [I.HEAVY_AMMO, 2, 6, 0.18],
-      [I.DIAMOND, 1, 2, 0.09], [I.SMG, 1, 1, 0.022],
-    ];
+    const DUNGEON_BY_RANK = {
+      green: {
+        guaranteed: [[I.IRON_INGOT, 2, 6], [I.GOLD_INGOT, 1, 3]],
+        base: [
+          [I.EMERALD, 1, 2, 0.25], [I.DIAMOND, 1, 1, 0.12],
+          [I.DUNGEON_KEY_GREEN, 1, 1, 0.16], [I.HEAVY_AMMO, 2, 5, 0.16],
+          [I.FLOOPIUM, 1, 1, 0.12], [I.PISTOL, 1, 1, 0.04],
+        ],
+        rich: [
+          [I.DIAMOND, 1, 2, 0.32], [I.STAR, 1, 1, 0.14],
+          [I.DUNGEON_KEY_BLUE, 1, 1, 0.12], [I.DARK_FLOOPIUM, 1, 1, 0.10],
+        ],
+      },
+      blue: {
+        guaranteed: [[I.GOLD_INGOT, 3, 7], [I.EMERALD, 2, 5]],
+        base: [
+          [I.DIAMOND, 1, 3, 0.40], [I.CHARGE_CELL, 4, 8, 0.36],
+          [I.DARK_FLOOPIUM, 1, 1, 0.18], [I.DUNGEON_KEY_GREEN, 1, 1, 0.14],
+          [I.DUNGEON_KEY_BLUE, 1, 1, 0.14], [I.HEAVY_AMMO, 4, 10, 0.30],
+          [I.SMG, 1, 1, 0.045], [I.RIFLE, 1, 1, 0.035],
+        ],
+        rich: [
+          [I.DIAMOND, 2, 4, 0.50], [B.EMERALD_BLOCK, 1, 1, 0.20],
+          [I.DUNGEON_KEY_GOLD, 1, 1, 0.11], [I.CHARGE_CORE, 1, 1, 0.10],
+          [I.STAR, 1, 2, 0.18],
+        ],
+      },
+      gold: {
+        guaranteed: [[I.DIAMOND, 2, 5], [I.EMERALD, 4, 9]],
+        base: [
+          [B.EMERALD_BLOCK, 1, 1, 0.30], [I.DARK_FLOOPIUM, 1, 2, 0.38],
+          [B.FLOOP_METAL, 1, 3, 0.38], [I.CHARGE_CELL, 6, 14, 0.48],
+          [I.PATAPIM_SHARD, 1, 2, 0.20], [I.DUNGEON_KEY_BLUE, 1, 1, 0.18],
+          [I.DUNGEON_KEY_GOLD, 1, 1, 0.13], [I.HEAVY_AMMO, 7, 16, 0.46],
+          [I.ROCKET, 2, 5, 0.24], [I.BAZOOKA, 1, 1, 0.045],
+        ],
+        rich: [
+          [I.DIAMOND, 4, 8, 0.68], [I.CHARGE_CORE, 1, 2, 0.25],
+          [I.DUNGEON_KEY_DIAMOND, 1, 1, 0.07], [I.STAR, 1, 2, 0.28],
+          [I.DUNGEON_CORE_SHARD, 1, 1, 0.18], [I.FLOOP_RAY, 1, 1, 0.025],
+        ],
+      },
+      diamond: {
+        guaranteed: [[I.DIAMOND, 5, 10], [I.DARK_FLOOPIUM, 2, 4], [I.CHARGE_CELL, 8, 18]],
+        base: [
+          [B.EMERALD_BLOCK, 1, 2, 0.58], [I.EMERALD, 8, 16, 0.48],
+          [B.FLOOP_METAL, 2, 4, 0.62], [I.CHARGE_CORE, 1, 2, 0.38],
+          [I.STAR, 1, 3, 0.45], [I.PATAPIM_SHARD, 2, 5, 0.48],
+          [I.DUNGEON_KEY_GOLD, 1, 1, 0.24], [I.DUNGEON_KEY_DIAMOND, 1, 1, 0.14],
+          [I.HEAVY_AMMO, 12, 28, 0.60], [I.ROCKET, 4, 10, 0.44],
+          [I.DIAMOND_HAMMER, 1, 1, 0.08], [I.DIAMOND_EXCAVATOR, 1, 1, 0.08],
+        ],
+        rich: [
+          [I.DIAMOND, 8, 16, 0.95], [B.EMERALD_BLOCK, 2, 4, 0.64],
+          [I.DARK_FLOOPIUM, 3, 7, 0.72], [I.CHARGE_CORE, 2, 4, 0.62],
+          [I.STAR, 2, 5, 0.58], [I.PATAPIM_SHARD, 4, 8, 0.58],
+          [I.DUNGEON_KEY_DIAMOND, 1, 1, 0.22], [I.DUNGEON_CORE_SHARD, 1, 2, 0.40],
+          [I.FLOOP_RAY, 1, 1, 0.07], [I.PATAPIM_BEAM, 1, 1, 0.055],
+          [I.PATAPIM_DIAMOND_JELLY_HELMET, 1, 1, 0.04],
+          [I.PATAPIM_DIAMOND_JELLY_CHEST, 1, 1, 0.035],
+          [I.PATAPIM_DIAMOND_JELLY_LEGS, 1, 1, 0.035],
+          [I.PATAPIM_DIAMOND_JELLY_BOOTS, 1, 1, 0.04],
+        ],
+      },
+    };
 
-    const table = source === 'dungeon'
-      ? DUNGEON_LOOT.concat(rich ? DUNGEON_RICH : [])
+    const dungeonSource = typeof source === 'string' && source.indexOf('dungeon') === 0;
+    const dungeonRank = dungeonSource ? ((source.split(':')[1] || 'green').toLowerCase()) : '';
+    const profile = DUNGEON_BY_RANK[dungeonRank] || DUNGEON_BY_RANK.green;
+    const table = dungeonSource
+      ? DUNGEON_COMMON.concat(profile.base, rich ? profile.rich : [])
       : SURFACE_LOOT.concat(rich ? SURFACE_BONUS : []);
+    const guaranteed = dungeonSource ? profile.guaranteed : [];
 
+    const putLoot = (id, min, max) => {
+      const empty = [];
+      for (let i = 0; i < size; i++) if (!slots[i]) empty.push(i);
+      if (!empty.length) return false;
+      const slot = empty[(rnd() * empty.length) | 0];
+      slots[slot] = { id, count: min + ((rnd() * (max - min + 1)) | 0) };
+      return true;
+    };
+
+    for (const [id, min, max] of guaranteed) putLoot(id, min, max);
     for (const [id, min, max, chance] of table) {
-      if (rnd() <= chance) {
-        slots[(rnd() * 27) | 0] = { id, count: min + ((rnd() * (max - min + 1)) | 0) };
-      }
+      if (rnd() <= chance) putLoot(id, min, max);
     }
     this.chests.set(k, slots);
   },
@@ -766,107 +893,7 @@ const World = {
     return NoiseGen.mulberry((NoiseGen.hash2(this.seed + salt, cx, cz) * 4294967296) | 0);
   },
 
-  genMerryChunk(cx, cz) {
-    const k = this.key(cx, cz);
-    if (this.chunks.has(k)) return this.chunks.get(k);
-    const H = this.H;
-    const blocks = new Uint16Array(16 * 16 * H);
-    const rnd = this.chunkRand(cx, cz, 2525);
-    const centers = [];
-    const gcx0 = Math.floor(cx / 4), gcz0 = Math.floor(cz / 4);
-    for (let gcx = gcx0 - 1; gcx <= gcx0 + 1; gcx++) {
-      for (let gcz = gcz0 - 1; gcz <= gcz0 + 1; gcz++) {
-        const r = this.chunkRand(gcx, gcz, 2526);
-        if ((gcx === 0 && gcz === 0) || r() < 0.62) {
-          centers.push({
-            x: gcx * 64 + 12 + ((r() * 40) | 0),
-            z: gcz * 64 + 12 + ((r() * 40) | 0),
-            y: 34 + ((r() * 18) | 0),
-            r: 10 + ((r() * 14) | 0),
-          });
-        }
-      }
-    }
-
-    for (let lz = 0; lz < 16; lz++) {
-      for (let lx = 0; lx < 16; lx++) {
-        const wx = cx * 16 + lx, wz = cz * 16 + lz;
-        let top = -1, bot = 999;
-        for (const c of centers) {
-          const dx = wx - c.x, dz = wz - c.z;
-          const d = Math.sqrt(dx * dx + dz * dz);
-          if (d >= c.r) continue;
-          const f = 1 - d / c.r;
-          const t = c.y + Math.floor(f * 3 + NoiseGen.value3(this.seed + 2527, wx * 0.08, 0, wz * 0.08) * 2);
-          const b = t - 2 - Math.floor(f * 7);
-          top = Math.max(top, t); bot = Math.min(bot, b);
-        }
-        for (let y = 0; y < H; y++) {
-          let id = B.AIR;
-          if (top >= 0 && y >= bot && y <= top) {
-            if (y === top) id = B.SNOW;
-            else if (y > top - 3) id = rnd() < 0.18 ? B.STONE_BRICKS : B.COBBLE;
-            else id = rnd() < 0.04 ? B.XMAS_ORE : B.STONE;
-          }
-          blocks[this.idx(lx, y, lz)] = id;
-        }
-      }
-    }
-
-    const putLocal = (wx, y, wz, id) => {
-      if (wx >> 4 !== cx || wz >> 4 !== cz || y < 0 || y >= H) return;
-      blocks[this.idx(wx & 15, y, wz & 15)] = id;
-    };
-    // Starter island / return portal. This is generated in the real Merry dimension,
-    // not hidden in a far-away overworld coordinate.
-    for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) {
-      const d = Math.max(Math.abs(x), Math.abs(z));
-      if (d <= 5) putLocal(x, 40, z, d === 5 ? B.OBSIDIAN : B.STONE_BRICKS);
-      if (d <= 4) putLocal(x, 41, z, B.SNOW);
-    }
-    const fy = 42, fx = -2, fz = -2;
-    for (let dx = 0; dx < 4; dx++) for (let dz = 0; dz < 4; dz++) {
-      const corner = (dx === 0 || dx === 3) && (dz === 0 || dz === 3);
-      const center = dx >= 1 && dx <= 2 && dz >= 1 && dz <= 2;
-      if (center) putLocal(fx + dx, fy + 1, fz + dz, B.MERRY_PORTAL);
-      else putLocal(fx + dx, fy, fz + dz, corner ? B.OBSIDIAN : B.EMERALD_BLOCK);
-    }
-    putLocal(3, 42, -3, B.LORE);
-    this.putLore(3, 42, -3, 0);
-    putLocal(-4, 42, 4, B.FLOOP_LAMP);
-    putLocal(4, 42, 4, B.FLOOP_LAMP);
-
-    const bucket2 = this.diffIndex.get(k);
-    if (bucket2) {
-      for (const [dk, id] of bucket2) {
-        const [wx2, wy2, wz2] = dk.split(',').map(Number);
-        if (wy2 >= 0 && wy2 < H) blocks[this.idx(wx2 & 15, wy2, wz2 & 15)] = id;
-      }
-    }
-
-    const ch = { cx, cz, blocks, light: null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, hasMesh: false };
-    this.chunks.set(k, ch);
-    for (let y = 0; y < H; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
-      const id = blocks[this.idx(lx, y, lz)];
-      if (id === B.AIR) continue;
-      const def = Reg[id];
-      const wx = cx * 16 + lx, wz = cz * 16 + lz;
-      if (def && def.light) this.lights.set(this.pkey(wx, y, wz), [wx, y, wz]);
-      if (id === B.MEGA_TORCH) this.megaTorches.add(this.pkey(wx, y, wz));
-      if (id === B.FIRE) this.fires.set(this.pkey(wx, y, wz), { t: 5 });
-      else if (isSapling(id)) {
-        const pk = this.pkey(wx, y, wz);
-        if (!this.saplings.has(pk)) this.saplings.set(pk, { id, t: 25 + Math.random() * 50 });
-      } else if (isCrop(id)) {
-        const pk = this.pkey(wx, y, wz);
-        if (!this.crops.has(pk)) this.crops.set(pk, { id, t: 35 + Math.random() * 55 });
-      }
-    }
-    return ch;
-  },
-
   genChunk(cx, cz) {
-    if (this.dimensionId === 'merry') return this.genMerryChunk(cx, cz);
     const k = this.key(cx, cz);
     if (this.chunks.has(k)) return this.chunks.get(k);
     const H = this.H, SEA = this.SEA;
@@ -944,25 +971,29 @@ const World = {
         seen.add(dk);
         const dungeon = this.dungeonFor(Math.floor((cx + dcx) / 6), Math.floor((cz + dcz) / 6));
         if (!dungeon) continue;
+        const conqueredDungeon = dungeon.key && this.dungeonConquered && this.dungeonConquered.has(dungeon.key);
         const bucket = dungeon.byChunk.get(k);
         if (bucket) for (const f of bucket) {
           if (f.y < 0 || f.y >= H) continue;
-          blocks[this.idx(f.x - cx * 16, f.y, f.z - cz * 16)] = f.id;
+          const placedId = conqueredDungeon ? this.deactivatedDungeonBlockId(f.id) : f.id;
+          blocks[this.idx(f.x - cx * 16, f.y, f.z - cz * 16)] = placedId;
         }
       }
     }
 
     // player-era edits: replay just this chunk's bucket (used to scan every cell —
     // with a big world file that was a real chunk-load cost)
+    const extraBlocks = new Map();
     const bucket2 = this.diffIndex.get(k);
     if (bucket2) {
       for (const [dk, id] of bucket2) {
         const [wx2, wy2, wz2] = dk.split(',').map(Number);
         if (wy2 >= 0 && wy2 < H) blocks[this.idx(wx2 & 15, wy2, wz2 & 15)] = id;
+        else if (wy2 >= H && id !== B.AIR) extraBlocks.set(this.pkey(wx2, wy2, wz2), id);
       }
     }
 
-    const ch = { cx, cz, blocks, light: null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, hasMesh: false };
+    const ch = { cx, cz, blocks, extraBlocks: extraBlocks.size ? extraBlocks : null, light: null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, sectionMeshes: [], hasMesh: false };
     this.chunks.set(k, ch);
 
     for (let y = 0; y < H; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
@@ -979,6 +1010,18 @@ const World = {
       } else if (isCrop(id)) {
         const pk = this.pkey(wx, y, wz);
         if (!this.crops.has(pk)) this.crops.set(pk, { id, t: 35 + Math.random() * 55 });
+      }
+    }
+    if (ch.extraBlocks) {
+      for (const [pk, id] of ch.extraBlocks) {
+        if (id === B.AIR) continue;
+        const [wx, y, wz] = pk.split(',').map(Number);
+        const def = Reg[id];
+        if (def && def.light) this.lights.set(pk, [wx, y, wz]);
+        if (id === B.MEGA_TORCH) this.megaTorches.add(pk);
+        if (id === B.FIRE) this.fires.set(pk, { t: 5 });
+        else if (isSapling(id) && !this.saplings.has(pk)) this.saplings.set(pk, { id, t: 25 + Math.random() * 50 });
+        else if (isCrop(id) && !this.crops.has(pk)) this.crops.set(pk, { id, t: 35 + Math.random() * 55 });
       }
     }
     return ch;
@@ -1093,7 +1136,8 @@ const World = {
         const wx = cx * 16 + lx, wz = cz * 16 + lz;
         const h = this.heightAt(wx, wz);
         if (h <= this.SEA + 1 || h > 57) continue;
-        const ground = this.biomeAt(wx, wz) === 'snowy' ? B.SNOWY_GRASS : B.GRASS;
+        const localBiome = this.biomeAt(wx, wz);
+        if (localBiome === 'desert' || h <= this.SEA + 1) continue;
         put(wx, h + 1, wz, B.WILD_GRASS, false);
       }
     }
@@ -1184,14 +1228,12 @@ const World = {
     const roll = r();
     let type = null;
     // Surface structures are beginner-side discoveries, so keep them much rarer
-    // than before. Old total chance was 30% per 4x4 chunk cell; new total is 10%.
-    // Ruined portals are rare, but not myth-level rare; /locatetp should find real ones
-    // without wandering for thousands of blocks. Total surface structure rate stays low.
-    if (roll < 0.012) type = 'ruined_portal';
-    else if (roll < 0.026) type = 'ufo';
-    else if (roll < 0.056) type = 'shrine';
-    else if (roll < 0.091) type = 'house';
-    else if (roll < 0.111) type = 'tower';
+    // than before. Old total chance was 30% per 4x4 chunk cell; new total stays low.
+    if (roll < 0.006) type = 'jelly_village';
+    else if (roll < 0.032) type = 'ufo';
+    else if (roll < 0.062) type = 'shrine';
+    else if (roll < 0.097) type = 'house';
+    else if (roll < 0.117) type = 'tower';
     let res = null;
     if (type) {
       res = { type, cx: scx * 4 + ((r() * 4) | 0), cz: scz * 4 + ((r() * 4) | 0) };
@@ -1204,26 +1246,26 @@ const World = {
   // ---------- structure locating / teleport helpers ----------
   // These are the real generated structure targets that /locate and /locatetp know about.
   locateStructureNames() {
-    return ['house', 'tower', 'shrine', 'ufo', 'ruined_portal', 'dungeon'];
+    return ['house', 'tower', 'shrine', 'ufo', 'jelly_village', 'dungeon'];
   },
 
   locateStructureHelpLines() {
     return [
-      'Surface structures: house, tower, shrine, ufo, ruined_portal',
+      'Surface structures: house, tower, shrine, ufo, jelly_village',
       'Underground structures: dungeon',
       'Plural names work too: houses, towers, dungeons',
-      'Aliases: portal/ruin = ruined_portal, saucer/casino = ufo, monument = shrine'
+      'Aliases: saucer/casino = ufo, monument = shrine, jelly/village = jelly_village'
     ];
   },
 
   normalizeLocateName(name) {
     const q = String(name || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
     const aliases = {
-      ruin: 'ruined_portal', ruins: 'ruined_portal', ruined: 'ruined_portal', portal: 'ruined_portal', portals: 'ruined_portal', ruined_portals: 'ruined_portal', merry_portal: 'ruined_portal', christmas_portal: 'ruined_portal',
       floop_house: 'house', home: 'house', homes: 'house', houses: 'house', floop_houses: 'house',
       floop_tower: 'tower', towers: 'tower', floop_towers: 'tower',
       floop_shrine: 'shrine', shrines: 'shrine', monument: 'shrine', monuments: 'shrine',
       saucer: 'ufo', saucers: 'ufo', casino: 'ufo', casinos: 'ufo', floop_ufo: 'ufo', ufos: 'ufo', ufo_structure: 'ufo',
+      jelly: 'jelly_village', jellies: 'jelly_village', village: 'jelly_village', villages: 'jelly_village', jelly_villages: 'jelly_village', jelly_town: 'jelly_village',
       dungeon_room: 'dungeon', dungeon_rooms: 'dungeon', dungeons: 'dungeon'
     };
     return aliases[q] || q;
@@ -1231,17 +1273,15 @@ const World = {
 
   surfaceStructureGroundY(type, x0, z0) {
     // This is the exact dry-land gate used by both generation AND /locate.
-    // The first ruined-portal build could be located in a lake because locate
-    // only checked the planned structure cell, while generation cancelled wet cells.
-    if (type === 'ruined_portal') {
+    if (type === 'jelly_village') {
       let maxH = -999, minH = 999;
-      for (let dx = -5; dx <= 5; dx++) for (let dz = -5; dz <= 5; dz++) {
+      for (let dx = -6; dx <= 6; dx++) for (let dz = -6; dz <= 6; dz++) {
         const h = this.heightAt(x0 + dx, z0 + dz);
         maxH = Math.max(maxH, h); minH = Math.min(minH, h);
-        if (h <= this.SEA + 1) return null; // never point portal ruins at lakes/ocean/beaches
+        if (h <= this.SEA + 1) return null;
       }
       if (maxH >= this.H - 18) return null;
-      if (maxH - minH > 7) return null; // avoid buried/floating ruins on cliffs
+      if (maxH - minH > 5) return null;
       return maxH;
     }
     const gy = this.heightAt(x0, z0);
@@ -1275,10 +1315,6 @@ const World = {
     const type = this.normalizeLocateName(name);
     const allowed = this.locateStructureNames();
     if (!allowed.includes(type)) return { error: 'unknown', type };
-    if (this.dimensionId === 'merry') {
-      // Locate/locatetp searches overworld structures. Use a portal back first.
-      return { error: 'dimension', type };
-    }
     const ringMax = maxRing || 80;
     let best = null;
     const dist2 = (p) => (p.x - fromX) * (p.x - fromX) + (p.z - fromZ) * (p.z - fromZ);
@@ -1316,37 +1352,6 @@ const World = {
     this.loreMap.set(this.pkey(x, y, z), idx % LORE.length);
   },
 
-  stamp_ruined_portal(put, x0, gy, z0, rnd) {
-    for (let dx = -4; dx <= 5; dx++) for (let dz = -4; dz <= 5; dz++) {
-      const edge = Math.abs(dx) === 4 || Math.abs(dz) === 4 || dx === 5 || dz === 5;
-      // Build a little foundation up from the natural ground so the ruin is visibly there
-      // even on mildly uneven terrain.  This also keeps locate/locatetp from landing at
-      // a surface that later gets cancelled or buried.
-      const ground = this.heightAt(x0 + dx, z0 + dz);
-      for (let fy = Math.max(1, ground); fy < gy; fy++) put(x0 + dx, fy, z0 + dz, B.COBBLE, true);
-      if (dx >= -3 && dx <= 4 && dz >= -3 && dz <= 4) put(x0 + dx, gy, z0 + dz, edge ? B.COBBLE : (rnd() < 0.15 ? B.COBBLE : B.STONE_BRICKS), true);
-      for (let y = 1; y <= 4; y++) put(x0 + dx, gy + y, z0 + dz, B.AIR, true);
-    }
-    const fx = x0 - 2, fz = z0 - 2;
-    for (let dx = 0; dx < 4; dx++) for (let dz = 0; dz < 4; dz++) {
-      const center = dx >= 1 && dx <= 2 && dz >= 1 && dz <= 2;
-      const corner = (dx === 0 || dx === 3) && (dz === 0 || dz === 3);
-      if (center) continue;
-      if (rnd() < 0.18 && !corner) continue;
-      put(fx + dx, gy + 1, fz + dz, corner ? B.OBSIDIAN : B.EMERALD_BLOCK, true);
-    }
-    put(x0 - 4, gy + 1, z0, B.LORE, true);
-    this.putLore(x0 - 4, gy + 1, z0, LORE.length - 1);
-    put(x0 + 4, gy + 1, z0, B.SIGN, true);
-    const sk = this.pkey(x0 + 4, gy + 1, z0);
-    this.signs.set(sk, 'Gem in center');
-    this.signDirs.set(sk, { d: 6, w: 0 });
-    put(x0 + 3, gy + 1, z0 + 3, B.LOOT_CRATE, true);
-    this.initChest(x0 + 3, gy + 1, z0 + 3, rnd);
-    put(x0 - 3, gy + 1, z0 - 3, B.TORCH, true);
-    put(x0 + 3, gy + 1, z0 - 3, B.TORCH, true);
-  },
-
   stamp_shrine(put, x0, gy, z0, rnd) {
     const li = (rnd() * LORE.length) | 0;
     for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) {
@@ -1368,6 +1373,41 @@ const World = {
       const dx = ((rnd() * 7) | 0) - 3, dz = ((rnd() * 7) | 0) - 3;
       if (Math.abs(dx) === 3 || Math.abs(dz) === 3) put(x0 + dx, gy + 1, z0 + dz, B.SNOW, true);
     }
+  },
+
+  stamp_jelly_village(put, x0, gy, z0, rnd) {
+    for (let dx = -6; dx <= 6; dx++) for (let dz = -6; dz <= 6; dz++) {
+      const ground = this.heightAt(x0 + dx, z0 + dz);
+      for (let fy = Math.max(1, ground); fy < gy; fy++) put(x0 + dx, fy, z0 + dz, B.DIRT, true);
+      const d = Math.sqrt(dx * dx + dz * dz);
+      if (d <= 5.8) put(x0 + dx, gy, z0 + dz, d < 2.2 ? B.JELLY_BLOCK : (rnd() < 0.45 ? B.JELLY_BLOCK : B.WOOL_PURPLE), true);
+      for (let y = 1; y <= 3; y++) put(x0 + dx, gy + y, z0 + dz, B.AIR, true);
+    }
+
+    const hut = (hx, hz, block, lamp) => {
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        const wx = x0 + hx + dx, wz = z0 + hz + dz;
+        put(wx, gy + 1, wz, (Math.abs(dx) === 1 || Math.abs(dz) === 1) ? block : B.AIR, true);
+        put(wx, gy + 2, wz, (Math.abs(dx) === 1 || Math.abs(dz) === 1) ? block : B.AIR, true);
+        put(wx, gy + 3, wz, block, true);
+      }
+      put(x0 + hx, gy + 1, z0 + hz + 1, B.AIR, true);
+      put(x0 + hx, gy + 2, z0 + hz + 1, B.AIR, true);
+      put(x0 + hx, gy + 1, z0 + hz, lamp || B.JELLY_LAMP, true);
+    };
+    hut(-3, -3, B.JELLY_BLOCK, B.JELLY_LAMP);
+    hut(3, -3, B.JELLY_BLOCK_CYAN, B.JELLY_LAMP_CYAN);
+    hut(-3, 3, B.JELLY_BLOCK_LIME, B.JELLY_LAMP_LIME);
+    hut(3, 3, B.JELLY_BLOCK_GRAPE, B.JELLY_LAMP_GRAPE);
+
+    put(x0, gy + 1, z0, B.JELLY_HOUSE, true);
+    const colors = (typeof JELLY_COLORS_ALL !== 'undefined') ? JELLY_COLORS_ALL : ['pink', 'cyan', 'lime', 'grape'];
+    const roster = [];
+    for (let i = 0; i < 10; i++) roster.push(colors[(rnd() * colors.length) | 0]);
+    if (typeof Jelly !== 'undefined') Jelly.createHouseAt(x0, gy + 1, z0, { roster, source: 'worldgen' });
+    put(x0, gy + 2, z0, B.JELLY_LAMP_YELLOW, true);
+    put(x0 + 1, gy + 1, z0, B.JELLY_CHEST, true);
+    this.initChest(x0 + 1, gy + 1, z0, rnd, true, 'surface', 54);
   },
 
   stamp_house(put, x0, gy, z0, rnd) {
@@ -1490,6 +1530,9 @@ const World = {
     if (this.dungeonCache.has(k)) return this.dungeonCache.get(k);
     const r = this.chunkRand(dscx, dscz, 909);
     if (r() > 0.35) { this.dungeonCache.set(k, null); return null; }
+    const rankRoll = r();
+    const rankInfo = dungeonRankInfo(rankRoll < 0.55 ? 'green' : rankRoll < 0.80 ? 'blue' : rankRoll < 0.95 ? 'gold' : 'diamond');
+    const conqueredAlready = this.dungeonConquered && this.dungeonConquered.has(k);
 
     const cells = new Map();
     const setC = (x, y, z, id) => cells.set(this.pkey(x, y, z), { x, y, z, id });
@@ -1508,32 +1551,37 @@ const World = {
         const shell = x < cx0 || x >= cx0 + w || y < y0 || y >= y0 + hgt || z < cz0 || z >= cz0 + l;
         if (shell) {
           if (!cells.has(this.pkey(x, y, z))) {
-            setC(x, y, z, r() < 0.06 ? B.GUNPOWDER_ORE : B.STONE_BRICKS);
+            setC(x, y, z, B.DUNGEON_BRICK);
           }
         } else setC(x, y, z, B.AIR);
       }
       setC(cx0, y0, cz0, B.TORCH); setC(cx0 + w - 1, y0, cz0 + l - 1, B.TORCH);
       // some rooms guard their loot with a monster spawner
-      if (r() < 0.4) {
+      if (!conqueredAlready && r() < 0.35 + rankInfo.mobBonus * 0.12) {
         const sx2 = cx0 + (w >> 1), sz2 = cz0 + (l >> 1);
         setC(sx2, y0, sz2, B.SPAWNER);
         const sk = this.pkey(sx2, y0, sz2);
         if (!this.spawners.has(sk)) {
-          this.spawners.set(sk, { type: ['spider', 'skeleton', 'humbug'][(r() * 3) | 0], cd: 3 });
+          const mobPool = rankInfo.rank === 'green'
+            ? ['skeleton', 'creeper', 'humbug']
+            : rankInfo.rank === 'blue'
+              ? ['skeleton', 'creeper', 'humbug', 'humbug']
+              : ['skeleton', 'creeper', 'humbug', 'humbug', 'tung'];
+          this.spawners.set(sk, { type: mobPool[(r() * mobPool.length) | 0], cd: 3 });
         }
       }
       const nLoot = 1 + ((r() * 2) | 0);
       for (let i = 0; i < nLoot; i++) {
         const lx = cx0 + 1 + ((r() * (w - 2)) | 0), lz = cz0 + 1 + ((r() * (l - 2)) | 0);
         setC(lx, y0, lz, B.LOOT_CRATE);
-        this.initChest(lx, y0, lz, r, false, 'dungeon');
+        this.initChest(lx, y0, lz, r, r() < rankInfo.richBonus, 'dungeon:' + rankInfo.rank);
       }
       if (isLast) {
-        setC(cx0 + (w >> 1), y0, cz0 + (l >> 1), B.PRESENT);
+        setC(cx0 + (w >> 1), y0, cz0 + (l >> 1), B.DUNGEON_CORE);
         setC(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), B.LOOT_CRATE);
-        this.initChest(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), r, true, 'dungeon');
+        this.initChest(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), r, true, 'dungeon:' + rankInfo.rank);
         setC(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, B.CHEST);
-        this.initChest(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, r, true, 'dungeon');
+        this.initChest(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, r, true, 'dungeon:' + rankInfo.rank);
         const li = (r() * LORE.length) | 0;
         setC(cx0 + (w >> 1) - 1, y0, cz0 + (l >> 1), B.LORE);
         this.putLore(cx0 + (w >> 1) - 1, y0, cz0 + (l >> 1), li);
@@ -1547,8 +1595,17 @@ const World = {
         for (let o = 0; o < 2; o++) {
           const ox = dz !== 0 ? o : 0, oz = dx !== 0 ? o : 0;
           for (let y = y0; y < y0 + 3; y++) setC(x + ox, y, z + oz, B.AIR);
-          if (!cells.has(this.pkey(x + ox, y0 - 1, z + oz))) setC(x + ox, y0 - 1, z + oz, B.STONE_BRICKS);
-          if (!cells.has(this.pkey(x + ox, y0 + 3, z + oz))) setC(x + ox, y0 + 3, z + oz, B.STONE_BRICKS);
+          if (!cells.has(this.pkey(x + ox, y0 - 1, z + oz))) setC(x + ox, y0 - 1, z + oz, B.DUNGEON_BRICK);
+          if (!cells.has(this.pkey(x + ox, y0 + 3, z + oz))) setC(x + ox, y0 + 3, z + oz, B.DUNGEON_BRICK);
+        }
+        for (let y = y0; y < y0 + 3; y++) {
+          if (dx !== 0) {
+            if (!cells.has(this.pkey(x, y, z - 1))) setC(x, y, z - 1, B.DUNGEON_BRICK);
+            if (!cells.has(this.pkey(x, y, z + 2))) setC(x, y, z + 2, B.DUNGEON_BRICK);
+          } else {
+            if (!cells.has(this.pkey(x - 1, y, z))) setC(x - 1, y, z, B.DUNGEON_BRICK);
+            if (!cells.has(this.pkey(x + 2, y, z))) setC(x + 2, y, z, B.DUNGEON_BRICK);
+          }
         }
       }
       return [x, z];
@@ -1577,33 +1634,79 @@ const World = {
       }
     }
 
-    // entrance staircase — but never surfacing underwater
-    {
-      let ex = startX, ez = startZ, ey = baseY;
-      const dx = startX < dscx * 96 + 48 ? 1 : -1;
-      // probe: find where we'd surface, skip the entrance if that spot is wet
-      let px2 = ex, py = ey, guard0 = 70;
-      while (py < this.heightAt(px2, ez) && guard0-- > 0) { px2 += dx; py++; }
-      const surfaceOk = this.heightAt(px2 + dx, ez) > this.SEA + 1;
-      if (surfaceOk) {
-        const surf = () => this.heightAt(ex, ez);
-        let guard = 70;
-        while (ey < surf() && guard-- > 0) {
-          ex += dx;
-          for (let y = ey; y < ey + 4; y++) setC(ex, y, ez, B.AIR);
-          setC(ex, ey + 4, ez, B.STONE_BRICKS);
-          setC(ex, ey - 1, ez, B.STONE_BRICKS);
-          setC(ex, ey, ez, dx > 0 ? B.COBBLE_STAIRS_PX : B.COBBLE_STAIRS_NX);
-          ey++;
+    if (rooms.length) {
+      const first = rooms[0];
+      const doorX = first.x - 1;
+      const doorY = first.y;
+      const doorCenterZ = first.z + (first.l >> 1);
+      const entryWest = first.x - 6;
+      const entryEast = doorX;
+      const entryZ0 = doorCenterZ - 2;
+      const entryZ1 = doorCenterZ + 2;
+      const shaftX = first.x - 4;
+      const shaftZ = doorCenterZ;
+      const surfaceFloorY = Math.min(this.H - 5, Math.max(first.y + 8, this.heightAt(shaftX, shaftZ)));
+
+      // Underground entrance room. The east wall opens into room 1; the ranked
+      // 3x3 gate lives on the surface tower so it is reachable before the ladder.
+      for (let x = entryWest; x <= entryEast; x++) {
+        for (let y = first.y - 1; y <= first.y + 3; y++) {
+          for (let z = entryZ0; z <= entryZ1; z++) {
+            const shell = x === entryWest || x === entryEast || y === first.y - 1 || y === first.y + 3 || z === entryZ0 || z === entryZ1;
+            setC(x, y, z, shell ? B.DUNGEON_BRICK : B.AIR);
+          }
         }
-        const gy = this.heightAt(ex + dx, ez);
-        setC(ex + dx, gy + 1, ez - 1, B.STONE_BRICKS); setC(ex + dx, gy + 2, ez - 1, B.STONE_BRICKS);
-        setC(ex + dx, gy + 1, ez + 1, B.STONE_BRICKS); setC(ex + dx, gy + 2, ez + 1, B.STONE_BRICKS);
-        setC(ex + dx, gy + 3, ez - 1, B.STONE_BRICKS); setC(ex + dx, gy + 3, ez, B.STONE_BRICKS); setC(ex + dx, gy + 3, ez + 1, B.STONE_BRICKS);
-        setC(ex + dx, gy + 1, ez, B.AIR); setC(ex + dx, gy + 2, ez, B.AIR);
-        // torch sits ON TOP of the arch now (no more floating doorway torch)
-        setC(ex + dx, gy + 4, ez, B.TORCH);
       }
+      for (let y = doorY; y <= doorY + 2; y++) {
+        for (let z = doorCenterZ - 1; z <= doorCenterZ + 1; z++) setC(doorX, y, z, B.AIR);
+      }
+
+      // Sealed ladder shaft from the entry room up into a small surface tower.
+      for (let y = first.y; y < surfaceFloorY; y++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            const x = shaftX + dx, z = shaftZ + dz;
+            if (dx === 0 && dz === 0) setC(x, y, z, B.LADDER_PZ);
+            else setC(x, y, z, B.DUNGEON_BRICK);
+          }
+        }
+      }
+      for (let x = entryWest + 1; x <= entryEast - 1; x++) {
+        for (let y = first.y; y <= first.y + 2; y++) {
+          for (let z = entryZ0 + 1; z <= entryZ1 - 1; z++) setC(x, y, z, B.AIR);
+        }
+      }
+      for (let y = first.y; y < surfaceFloorY; y++) {
+        setC(shaftX, y, shaftZ - 1, B.DUNGEON_BRICK);
+        setC(shaftX, y, shaftZ, B.LADDER_PZ);
+      }
+
+      // Surface access room. Its outside wall is the reachable 3x3 ranked gate.
+      for (let x = shaftX - 2; x <= shaftX + 2; x++) {
+        for (let y = surfaceFloorY; y <= surfaceFloorY + 4; y++) {
+          for (let z = shaftZ - 2; z <= shaftZ + 2; z++) {
+            const shell = x === shaftX - 2 || x === shaftX + 2 || y === surfaceFloorY || y === surfaceFloorY + 4 || z === shaftZ - 2 || z === shaftZ + 2;
+            setC(x, y, z, shell ? B.DUNGEON_BRICK : B.AIR);
+          }
+        }
+      }
+      for (let y = surfaceFloorY; y <= surfaceFloorY + 3; y++) {
+        setC(shaftX, y, shaftZ - 1, B.DUNGEON_BRICK);
+        setC(shaftX, y, shaftZ, B.LADDER_PZ);
+      }
+      for (let x = shaftX - 1; x <= shaftX + 1; x++) {
+        for (let y = surfaceFloorY + 1; y <= surfaceFloorY + 3; y++) setC(x, y, shaftZ + 2, rankInfo.door);
+      }
+      for (let z = shaftZ + 3; z <= shaftZ + 5; z++) {
+        for (let x = shaftX - 1; x <= shaftX + 1; x++) {
+          setC(x, surfaceFloorY, z, B.DUNGEON_BRICK);
+          setC(x, surfaceFloorY + 1, z, B.AIR);
+          setC(x, surfaceFloorY + 2, z, B.AIR);
+          setC(x, surfaceFloorY + 3, z, B.AIR);
+        }
+      }
+      setC(shaftX - 1, surfaceFloorY + 1, shaftZ - 1, B.TORCH);
+      setC(shaftX + 1, first.y, shaftZ + 1, B.TORCH);
     }
 
     const byChunk = new Map();
@@ -1617,9 +1720,76 @@ const World = {
       this.structSeen.add(dgKey);
       for (const s of spots) this.dungeonSpots.push(s);
     }
-    const res = { byChunk, rooms };
+    const res = { byChunk, rooms, key: k, rank: rankInfo.rank, door: rankInfo.door };
     this.dungeonCache.set(k, res);
     return res;
+  },
+
+  dungeonCellKeyForPos(x, z) {
+    return Math.floor(x / 96) + '|' + Math.floor(z / 96);
+  },
+
+  deactivatedDungeonBlockId(id) {
+    if (id === B.DUNGEON_BRICK || id === B.DUNGEON_CORE || isDungeonDoor(id)) return B.DUNGEON_BRICK_INACTIVE;
+    if (id === B.SPAWNER) return B.AIR;
+    return id;
+  },
+
+  isProtectedDungeonBlock(x, y, z, id) {
+    if (id === B.DUNGEON_CORE || id === B.DUNGEON_BRICK_INACTIVE) return false;
+    if (isActiveDungeonBlock(id)) return true;
+    const dkey = this.dungeonCellKeyForPos(x, z);
+    if (this.dungeonConquered && this.dungeonConquered.has(dkey)) return false;
+    const protectedContent = id === B.LOOT_CRATE || id === B.CHEST || id === B.SPAWNER || id === B.LORE || id === B.TORCH;
+    if (!protectedContent) return false;
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 3; dy++) for (let dz = -2; dz <= 2; dz++) {
+      if (isActiveDungeonBlock(this.getBlock(x + dx, y + dy, z + dz))) return true;
+    }
+    return false;
+  },
+
+  deactivateDungeonAt(x, y, z) {
+    const dkey = this.dungeonCellKeyForPos(x, z);
+    if (!this.dungeonConquered) this.dungeonConquered = new Set();
+    this.dungeonConquered.add(dkey);
+    const radius = 160;
+    const radius2 = radius * radius;
+    const touched = new Set();
+    for (const ch of this.chunks.values()) {
+      const minX = ch.cx * 16, minZ = ch.cz * 16;
+      const maxX = minX + 15, maxZ = minZ + 15;
+      const nearX = x < minX ? minX : x > maxX ? maxX : x;
+      const nearZ = z < minZ ? minZ : z > maxZ ? maxZ : z;
+      const ddx = nearX - x, ddz = nearZ - z;
+      if (ddx * ddx + ddz * ddz > radius2) continue;
+      let changed = false;
+      for (let yy = 0; yy < this.H; yy++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+        const wx = ch.cx * 16 + lx, wz = ch.cz * 16 + lz;
+        const dx = wx - x, dz = wz - z;
+        if (dx * dx + dz * dz > radius2) continue;
+        const idx = this.idx(lx, yy, lz);
+        const oldId = ch.blocks[idx];
+        const newId = this.deactivatedDungeonBlockId(oldId);
+        if (newId === oldId) continue;
+        ch.blocks[idx] = newId;
+        const pk = this.pkey(wx, yy, wz);
+        this.diffs.set(pk, newId);
+        const ck = this.key(ch.cx, ch.cz);
+        if (!this.diffIndex.has(ck)) this.diffIndex.set(ck, new Map());
+        this.diffIndex.get(ck).set(pk, newId);
+        if (oldId === B.DUNGEON_CORE) this.lights.delete(pk);
+        if (oldId === B.SPAWNER) this.spawners.delete(pk);
+        changed = true;
+      }
+      if (changed) {
+        const ck = this.key(ch.cx, ch.cz);
+        touched.add(ck);
+        if (ch.hasMesh) this.dirty.add(ck);
+        this.relightQueue.add(ck);
+      }
+    }
+    if (touched.size && typeof UI !== 'undefined') UI.chat('Dungeon conquered. Its active blocks have gone quiet.', '#c77dff');
+    return touched.size;
   },
 
   // ---------- streaming ----------
@@ -1636,8 +1806,9 @@ const World = {
     return { need, pcx, pcz };
   },
 
-  update(px, pz, budget) {
+  update(px, pz, budget, py) {
     budget = budget || 2;
+    this.updateVerticalMeshVisibility(py);
     const { need, pcx, pcz } = this.neededChunks(px, pz);
     // in-game (budget 1): time-slice — gen, light and mesh are each ~10-25ms,
     // so stacking them all in one frame made flying stutter. Work not done
@@ -1736,13 +1907,66 @@ const World = {
     return { genned, meshed };
   },
 
-  countMissing(px, pz) {
+  remeshDirtyNow(x, z, maxChunks, radius) {
+    if (!this.dirty || !this.dirty.size) return 0;
+    const limit = Math.max(1, maxChunks || 16);
+    const maxDist = Number.isFinite(+radius) ? Math.max(0, +radius) : Infinity;
+    const cx0 = Math.floor(x) >> 4;
+    const cz0 = Math.floor(z) >> 4;
+    const list = [...this.dirty].map(k => {
+      const parts = k.split(',');
+      return { k, d: Math.max(Math.abs((+parts[0]) - cx0), Math.abs((+parts[1]) - cz0)) };
+    }).filter(e => e.d <= maxDist).sort((a, b) => a.d - b.d);
+    let rebuilt = 0;
+    for (const e of list) {
+      if (rebuilt >= limit) break;
+      this.dirty.delete(e.k);
+      const ch = this.chunks.get(e.k);
+      if (!ch || !ch.hasMesh) continue;
+      if (!ch.light) this.computeChunkLight(ch);
+      this.buildMesh(ch);
+      rebuilt++;
+    }
+    return rebuilt;
+  },
+
+  remeshCellsNow(cells, maxChunks) {
+    if (!this.dirty || !this.dirty.size || !Array.isArray(cells) || !cells.length) return 0;
+    const keys = new Set();
+    for (const cell of cells) {
+      if (!cell || cell.length < 3) continue;
+      const x = Math.floor(cell[0]), z = Math.floor(cell[2]);
+      const cx = x >> 4, cz = z >> 4;
+      keys.add(this.key(cx, cz));
+      const lx = x & 15, lz = z & 15;
+      if (lx === 0) keys.add(this.key(cx - 1, cz));
+      if (lx === 15) keys.add(this.key(cx + 1, cz));
+      if (lz === 0) keys.add(this.key(cx, cz - 1));
+      if (lz === 15) keys.add(this.key(cx, cz + 1));
+    }
+    let rebuilt = 0;
+    const limit = Math.max(1, maxChunks || 4);
+    for (const k of keys) {
+      if (rebuilt >= limit || !this.dirty.has(k)) continue;
+      this.dirty.delete(k);
+      const ch = this.chunks.get(k);
+      if (!ch || !ch.hasMesh) continue;
+      if (!ch.light) this.computeChunkLight(ch);
+      this.buildMesh(ch);
+      rebuilt++;
+    }
+    return rebuilt;
+  },
+
+  countMissing(px, pz, radius) {
     const { need } = this.neededChunks(px, pz);
+    const renderRadius = Number.isFinite(+radius) ? Math.max(0, Math.min(this.R, +radius | 0)) : this.R;
     let missing = 0, total = 0;
     for (const n of need) {
+      if (n.dist > renderRadius) continue;
       total++;
       const ch = this.chunks.get(this.key(n.cx, n.cz));
-      if (!ch || (n.dist <= this.R && !ch.hasMesh)) missing++;
+      if (!ch || !ch.hasMesh) missing++;
     }
     return { missing, total };
   },
@@ -1751,7 +1975,41 @@ const World = {
     for (const m of ['solidMesh', 'cutoutMesh', 'waterMesh', 'lavaMesh', 'photoMesh']) {
       if (ch[m]) { this.scene.remove(ch[m]); ch[m].geometry.dispose(); ch[m] = null; }
     }
+    if (ch.sectionMeshes && ch.sectionMeshes.length) {
+      for (const sec of ch.sectionMeshes) {
+        for (const m of ['solidMesh', 'cutoutMesh', 'waterMesh', 'lavaMesh', 'photoMesh']) {
+          const mesh = sec && sec[m];
+          if (!mesh) continue;
+          this.scene.remove(mesh);
+          if (mesh.geometry) mesh.geometry.dispose();
+          sec[m] = null;
+        }
+      }
+      ch.sectionMeshes.length = 0;
+    }
     ch.hasMesh = false;
+  },
+
+  applyChunkSectionVisibility(ch) {
+    if (!ch || !ch.sectionMeshes) return;
+    const centerY = Number.isFinite(this.visibleSectionY) ? this.visibleSectionY : 0;
+    const radius = Math.max(0, this.VERTICAL_RENDER_RADIUS || 0);
+    for (const sec of ch.sectionMeshes) {
+      if (!sec) continue;
+      const visible = Math.abs((sec.sy | 0) - centerY) <= radius;
+      for (const m of ['solidMesh', 'cutoutMesh', 'waterMesh', 'lavaMesh', 'photoMesh']) {
+        if (sec[m]) sec[m].visible = visible;
+      }
+    }
+  },
+
+  updateVerticalMeshVisibility(py) {
+    if (!Number.isFinite(+py)) return;
+    const sectionH = this.CHUNK_H || 16;
+    const nextY = Math.floor(+py / sectionH);
+    if (nextY === this.visibleSectionY) return;
+    this.visibleSectionY = nextY;
+    for (const ch of this.chunks.values()) if (ch && ch.hasMesh) this.applyChunkSectionVisibility(ch);
   },
 
   // ---------- meshing ----------
@@ -1765,15 +2023,48 @@ const World = {
   ],
 
   buildMesh(ch) {
-    this.disposeMesh(ch);
+    const oldMeshes = ['solidMesh', 'cutoutMesh', 'waterMesh', 'lavaMesh', 'photoMesh']
+      .map(name => ch[name])
+      .filter(Boolean);
+    if (ch.sectionMeshes && ch.sectionMeshes.length) {
+      for (const sec of ch.sectionMeshes) {
+        for (const name of ['solidMesh', 'cutoutMesh', 'waterMesh', 'lavaMesh', 'photoMesh']) {
+          if (sec && sec[name]) oldMeshes.push(sec[name]);
+        }
+      }
+    }
     const H = this.H;
-    const bufs = {
+    const makeBufs = () => ({
       solid: { pos: [], uv: [], col: [], idx: [] },
       cutout: { pos: [], uv: [], col: [], idx: [] },
       water: { pos: [], uv: [], col: [], idx: [] },
       lava: { pos: [], uv: [], col: [], idx: [] },
       photo: { pos: [], uv: [], col: [], idx: [] },
+    });
+    const sectionH = this.CHUNK_H || 16;
+    const baseSectionCount = Math.max(1, Math.ceil(H / sectionH));
+    const sectionMap = new Map();
+    const ensureSection = (sy) => {
+      sy = Math.floor(+sy || 0);
+      let sec = sectionMap.get(sy);
+      if (!sec) {
+        sec = { sy, y0: sy * sectionH, y1: sy * sectionH + sectionH, bufs: makeBufs() };
+        sectionMap.set(sy, sec);
+      }
+      return sec;
     };
+    for (let sy = 0; sy < baseSectionCount; sy++) {
+      const sec = ensureSection(sy);
+      sec.y1 = Math.min(H, sec.y1);
+    }
+    if (ch.extraBlocks) {
+      for (const pk of ch.extraBlocks.keys()) {
+        const y = +(String(pk).split(',')[1]);
+        if (Number.isFinite(y)) ensureSection(Math.floor(y / sectionH));
+      }
+    }
+    const bufsForY = (yy) => ensureSection(Math.floor(yy / sectionH)).bufs;
+    let bufs = ensureSection(0).bufs;
     const chunkSigns = [];
     const X0 = ch.cx * 16, Z0 = ch.cz * 16;
 
@@ -1794,10 +2085,10 @@ const World = {
     };
     const gb = (wx, y, wz) => {
       if (y < 0) return B.AIR; // below the generated world is true void, not invisible bedrock
-      if (y >= H) return B.AIR;
       const [c, ax, az] = resolve(wx, wz);
-      if (!c) return B.STONE;
-      return c.blocks[(y << 8) + (az << 4) + ax];
+      if (!c) return y < H ? B.STONE : B.AIR;
+      if (y < H) return c.blocks[(y << 8) + (az << 4) + ax];
+      return this.extraBlock(c, wx, y, wz);
     };
     const gl = (wx, y, wz) => {
       if (y >= H) return 0xF0;
@@ -1922,6 +2213,9 @@ const World = {
         case 'cactus': return [[bx + 0.07, by, bz + 0.07, bx + 0.93, by + 1, bz + 0.93]];
         case 'door': return isDoorX(bid) ? [[bx + 0.38, by, bz + 0.02, bx + 0.62, by + 1, bz + 0.98]] : [[bx + 0.02, by, bz + 0.38, bx + 0.98, by + 1, bz + 0.62]];
         case 'doorOpen': return isDoorX(bid) ? [[bx + 0.02, by, bz + 0.02, bx + 0.98, by + 1, bz + 0.18]] : [[bx + 0.02, by, bz + 0.02, bx + 0.18, by + 1, bz + 0.98]];
+        case 'dungeonDoor': return dungeonDoorAxisAt(bid, bx, by, bz) === 'x'
+          ? [[bx + 0.38, by, bz + 0.02, bx + 0.62, by + 1, bz + 0.98]]
+          : [[bx + 0.02, by, bz + 0.38, bx + 0.98, by + 1, bz + 0.62]];
         case 'bed': return [[bx, by, bz, bx + 1, by + 0.56, bz + 1]];
         case 'planter': case 'crop': {
           const yOff = this.plantationYOffset ? this.plantationYOffset(bx, by, bz) : 0;
@@ -2279,6 +2573,7 @@ const World = {
     };
 
     for (let y = 0; y < H; y++) {
+      bufs = bufsForY(y);
       for (let lz = 0; lz < 16; lz++) {
         for (let lx = 0; lx < 16; lx++) {
           const id = ch.blocks[this.idx(lx, y, lz)];
@@ -2398,6 +2693,12 @@ const World = {
               else emitBox(bufs.solid, wx, y, wz, 0.02, 0, 0.02, 0.18, 1, 0.98, tx, tx, tx);
               continue;
             }
+            case 'dungeonDoor': {
+              const tx = Atlas.texName(id, 'side');
+              if (dungeonDoorAxisAt(id, wx, y, wz) === 'x') emitBox(bufs.solid, wx, y, wz, 0.38, 0, 0.02, 0.62, 1, 0.98, tx, tx, tx);
+              else emitBox(bufs.solid, wx, y, wz, 0.02, 0, 0.38, 0.98, 1, 0.62, tx, tx, tx);
+              continue;
+            }
             case 'bed': {
               // orientation is STORED at placement — beds no longer point at strangers' feet
               let rot;
@@ -2471,7 +2772,177 @@ const World = {
       }
     }
 
-    const mk = (b, mat) => {
+    const emitSparseCell = (wx, y, wz, id) => {
+      if (id === B.AIR) return;
+      const def = Reg[id];
+      if (!def || !def.block) return;
+      bufs = bufsForY(y);
+
+      if (isWater(id)) { this.meshFluid(bufs.water, pushQuad, wx, y, wz, id, false, lightAt, gb); return; }
+      if (isLava(id)) { this.meshFluid(bufs.lava, pushQuad, wx, y, wz, id, true, lightAt, gb); return; }
+      if (id === B.MR_FLOOP_DRINKING_WATER) { emitPhotoCube(bufs.photo, wx, y, wz); return; }
+      if (isJoinedGlassBlock(id) && emitJoinedGlass(wx, y, wz, id)) return;
+
+      switch (def.shape) {
+        case 'cross':
+          crossQuads(bufs.cutout, wx, y, wz, Atlas.texName(id, 'side'), null, 0);
+          return;
+        case 'mega':
+          crossQuads(bufs.cutout, wx, y, wz, 'mega_torch', null, 0, null, 2);
+          return;
+        case 'wtorch': {
+          const d = WTORCH_DIR[id];
+          crossQuads(bufs.cutout, wx, y, wz, 'torch',
+            [-d[0] * 0.38, 0, -d[2] * 0.38], 0.12,
+            [d[0] * 0.42, 0, d[2] * 0.42]);
+          return;
+        }
+        case 'ladder': {
+          const d = LADDER_DIR[id];
+          const tx = 'ladder';
+          if (d[0] === 1) emitBox(bufs.cutout, wx, y, wz, 0.02, 0, 0, 0.1, 1, 1, tx, tx, tx);
+          else if (d[0] === -1) emitBox(bufs.cutout, wx, y, wz, 0.9, 0, 0, 0.98, 1, 1, tx, tx, tx);
+          else if (d[2] === 1) emitBox(bufs.cutout, wx, y, wz, 0, 0, 0.02, 1, 1, 0.1, tx, tx, tx);
+          else emitBox(bufs.cutout, wx, y, wz, 0, 0, 0.9, 1, 1, 0.98, tx, tx, tx);
+          return;
+        }
+        case 'slabB':
+          emitBox(def.cutout ? bufs.cutout : bufs.solid, wx, y, wz, 0, 0, 0, 1, 0.5, 1, Atlas.texName(id, 'top'), Atlas.texName(id, 'side'), Atlas.texName(id, 'bottom'));
+          return;
+        case 'slabT':
+          emitBox(def.cutout ? bufs.cutout : bufs.solid, wx, y, wz, 0, 0.5, 0, 1, 1, 1, Atlas.texName(id, 'top'), Atlas.texName(id, 'side'), Atlas.texName(id, 'bottom'));
+          return;
+        case 'vslab': {
+          const part = slabPartInfo(id);
+          const bo = slabPartBox(part);
+          const tx = SLAB_TEX[part.mat];
+          const partDef = Reg[SLAB_OF[part.mat]] || def;
+          emitBox(partDef.cutout ? bufs.cutout : bufs.solid, wx, y, wz, bo[0], bo[1], bo[2], bo[3], bo[4], bo[5], tx, tx, tx);
+          return;
+        }
+        case 'dslab': {
+          const [botM, topM] = DSLAB_MATS[id];
+          emitSlabPieces(wx, y, wz, [
+            { mat: botM, orient: 'bottom' },
+            { mat: topM, orient: 'top' },
+          ], def);
+          return;
+        }
+        case 'slabCombo':
+          emitSlabPieces(wx, y, wz, SLAB_COMBO_PIECES[id] || [], def);
+          return;
+        case 'stairs': {
+          const tx = Atlas.texName(id, 'side');
+          const stairBuf = def.cutout ? bufs.cutout : bufs.solid;
+          for (const bo of Physics.stairBoxes(id, wx, y, wz)) {
+            emitBox(stairBuf, wx, y, wz, bo[0], bo[1], bo[2], bo[3], bo[4], bo[5], tx, tx, tx);
+          }
+          return;
+        }
+        case 'snow':
+          emitBox(bufs.solid, wx, y, wz, 0, 0, 0, 1, snowSheetLevel(id) / 8, 1, 'snow', 'snow', 'snow');
+          return;
+        case 'planter':
+          emitPlanterCell(wx, y, wz);
+          return;
+        case 'crop': {
+          emitPlanterCell(wx, y, wz);
+          const tx = Atlas.texName(id, 'all');
+          const st = cropStage(id);
+          crossQuads(bufs.cutout, wx, y, wz, tx, null, 0.28 + this.plantationYOffset(wx, y, wz), null, 0.46 + st * 0.17);
+          return;
+        }
+        case 'portalH': {
+          const uvr = Atlas.uv('merry_portal');
+          const yy = y - 0.445;
+          const [lb, ls] = lightAt(wx, y, wz);
+          pushQuad(bufs.cutout, [[wx, yy, wz], [wx + 1, yy, wz], [wx + 1, yy, wz + 1], [wx, yy, wz + 1]], uvr, UVQ, 1.0, Math.max(lb, 12), Math.max(ls, 12));
+          return;
+        }
+        case 'cactus':
+          emitBox(bufs.solid, wx, y, wz, 0.07, 0, 0.07, 0.93, 1, 0.93, Atlas.texName(id, 'top'), Atlas.texName(id, 'side'), Atlas.texName(id, 'bottom'));
+          return;
+        case 'door': {
+          const tx = Atlas.texName(id, 'side');
+          if (isDoorX(id)) emitBox(bufs.solid, wx, y, wz, 0.38, 0, 0.02, 0.62, 1, 0.98, tx, tx, tx);
+          else emitBox(bufs.solid, wx, y, wz, 0.02, 0, 0.38, 0.98, 1, 0.62, tx, tx, tx);
+          return;
+        }
+        case 'doorOpen': {
+          const tx = Atlas.texName(id, 'side');
+          if (isDoorX(id)) emitBox(bufs.solid, wx, y, wz, 0.02, 0, 0.02, 0.98, 1, 0.18, tx, tx, tx);
+          else emitBox(bufs.solid, wx, y, wz, 0.02, 0, 0.02, 0.18, 1, 0.98, tx, tx, tx);
+          return;
+        }
+        case 'dungeonDoor': {
+          const tx = Atlas.texName(id, 'side');
+          if (dungeonDoorAxisAt(id, wx, y, wz) === 'x') emitBox(bufs.solid, wx, y, wz, 0.38, 0, 0.02, 0.62, 1, 0.98, tx, tx, tx);
+          else emitBox(bufs.solid, wx, y, wz, 0.02, 0, 0.38, 0.98, 1, 0.62, tx, tx, tx);
+          return;
+        }
+        case 'bed': {
+          let rot = this.bedDirs.get(this.pkey(wx, y, wz));
+          if (rot === undefined) rot = 0;
+          emitBox(bufs.solid, wx, y, wz, 0, 0, 0, 1, 0.2, 1, 'planks', 'planks', 'planks');
+          emitBox(bufs.solid, wx, y, wz, 0, 0.2, 0, 1, 0.56, 1, Atlas.texName(id, 'top'), Atlas.texName(id, 'side'), 'planks', rot);
+          return;
+        }
+        case 'sign': {
+          const sd = this.signDirs.get(this.pkey(wx, y, wz)) || { d: 0, w: 0 };
+          const selfL = lightAt(wx, y, wz);
+          if (sd.w) {
+            const d = WTORCH_DIR[[B.WTORCH_PX, B.WTORCH_NX, B.WTORCH_PZ, B.WTORCH_NZ][sd.d]] || [0, 0, 1];
+            if (d[0] === 1) emitBox(bufs.cutout, wx, y, wz, 0, 0.25, 0.08, 0.14, 0.8, 0.92, 'planks', 'planks', 'planks');
+            else if (d[0] === -1) emitBox(bufs.cutout, wx, y, wz, 0.86, 0.25, 0.08, 1, 0.8, 0.92, 'planks', 'planks', 'planks');
+            else if (d[2] === 1) emitBox(bufs.cutout, wx, y, wz, 0.08, 0.25, 0, 0.92, 0.8, 0.14, 'planks', 'planks', 'planks');
+            else emitBox(bufs.cutout, wx, y, wz, 0.08, 0.25, 0.86, 0.92, 0.8, 1, 'planks', 'planks', 'planks');
+          } else {
+            const ang = sd.d * Math.PI / 4;
+            emitBox(bufs.cutout, wx, y, wz, 0.44, 0, 0.44, 0.56, 0.55, 0.56, 'planks', 'log_side', 'planks');
+            emitYawBox(bufs.cutout, wx + 0.5, y + 0.775, wz + 0.5, 0.44, 0.225, 0.1, ang, 'planks', selfL);
+          }
+          chunkSigns.push(this.pkey(wx, y, wz));
+          return;
+        }
+      }
+
+      const target = def.cutout ? bufs.cutout : bufs.solid;
+      for (let f = 0; f < 6; f++) {
+        const face = this.FACES[f];
+        const nx = wx + face.d[0], ny = y + face.d[1], nz = wz + face.d[2];
+        const nb = gb(nx, ny, nz);
+        const nbDef = Reg[nb];
+        let visible;
+        if (nb === B.AIR) visible = true;
+        else if (isFluid(nb)) visible = true;
+        else if (nbDef && !nbDef.opaque) {
+          if (def.cutout && nbDef.cutout && nbDef.shape === 'cube' && def.shape === 'cube') visible = id < nb;
+          else visible = !(def.cutout && nb === id);
+        } else visible = false;
+        if (!visible) continue;
+        const texName = Atlas.texName(id, f === 2 ? 'top' : f === 3 ? 'bottom' : 'side');
+        const uvr = Atlas.uv(texName);
+        let verts = face.c.map(cn => [wx + cn[0], y + cn[1], wz + cn[2]]);
+        if (def.cutout && def.shape === 'cube') {
+          const bo = [wx, y, wz, wx + 1, y + 1, wz + 1];
+          if (hasCoplanarNonJoinedNeighbor(bo, f, wx, y, wz, id)) verts = insetFaceVerts(verts, f);
+        }
+        const [lb, ls] = lightAt(nx, ny, nz);
+        pushQuad(target, verts, uvr, UVQ, face.shade, lb, ls);
+      }
+    };
+
+    if (ch.extraBlocks) {
+      for (const [pk, id] of ch.extraBlocks) {
+        const [wx, y, wz] = pk.split(',').map(Number);
+        if (!Number.isFinite(wx + y + wz) || y < H) continue;
+        emitSparseCell(wx, y, wz, id);
+      }
+    }
+
+    const sectionBufs = [...sectionMap.values()].sort((a, b) => a.sy - b.sy);
+
+    const mk = (b, mat, sy) => {
       if (!b.idx.length) return null;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
@@ -2480,15 +2951,27 @@ const World = {
       g.setIndex(b.idx);
       const mesh = new THREE.Mesh(g, mat);
       mesh.matrixAutoUpdate = false;
+      mesh.userData.chunkSectionY = sy;
       this.scene.add(mesh);
       return mesh;
     };
-    ch.solidMesh = mk(bufs.solid, this.matSolid);
-    ch.cutoutMesh = mk(bufs.cutout, this.matCutout);
-    ch.waterMesh = mk(bufs.water, this.matWater);
-    ch.lavaMesh = mk(bufs.lava, this.matLava);
-    ch.photoMesh = mk(bufs.photo, this.matPhoto);
+    ch.solidMesh = ch.cutoutMesh = ch.waterMesh = ch.lavaMesh = ch.photoMesh = null;
+    ch.sectionMeshes = sectionBufs.map(sec => ({
+      sy: sec.sy,
+      y0: sec.y0,
+      y1: sec.y1,
+      solidMesh: mk(sec.bufs.solid, this.matSolid, sec.sy),
+      cutoutMesh: mk(sec.bufs.cutout, this.matCutout, sec.sy),
+      waterMesh: mk(sec.bufs.water, this.matWater, sec.sy),
+      lavaMesh: mk(sec.bufs.lava, this.matLava, sec.sy),
+      photoMesh: mk(sec.bufs.photo, this.matPhoto, sec.sy),
+    }));
     ch.hasMesh = true;
+    for (const mesh of oldMeshes) {
+      this.scene.remove(mesh);
+      if (mesh.geometry) mesh.geometry.dispose();
+    }
+    this.applyChunkSectionVisibility(ch);
     this.syncSignSprites(chunkSigns);
   },
 
@@ -2734,7 +3217,6 @@ const World = {
   },
 
   findSpawn() {
-    if (this.dimensionId === 'merry') return { x: 0.5, y: 44.05, z: 0.5 };
     for (let r = 0; r < 40; r++) {
       for (let a = 0; a < 8; a++) {
         const ang = a / 8 * Math.PI * 2;
@@ -2872,10 +3354,11 @@ const World = {
       const x = cx + dx, z = cz + dz;
       const k = this.pkey(x, y, z);
       const underSlab = mode === 'lowerSlab' ? this.getBlock(x, y, z) : 0;
-      this.setBlock(x, y, z, B.PLANTATION_POT, { noUpdate: dx !== 0 || dz !== 0 });
+      // set the multiblock metadata BEFORE setBlock so the block's network sync can carry it
       this.plantationOrigins.set(k, origin);
       if (underSlab) this.plantationUnderSlabs.set(k, underSlab);
       else this.plantationUnderSlabs.delete(k);
+      this.setBlock(x, y, z, B.PLANTATION_POT, { noUpdate: dx !== 0 || dz !== 0 });
     }
     return true;
   },
@@ -3178,14 +3661,23 @@ const World = {
           const bx = Math.floor(ex) + dx, by = Math.floor(ey) + dy, bz = Math.floor(ez) + dz;
           const id = this.getBlock(bx, by, bz);
           if (id === B.AIR || id === B.BEDROCK || isFluid(id)) continue;
+          if ((this.isProtectedDungeonBlock && this.isProtectedDungeonBlock(bx, by, bz, id)) || id === B.DUNGEON_CORE) continue;
           const wasLog = typeof Dynamics !== 'undefined' && Dynamics.isLogId && Dynamics.isLogId(id);
           const dropThisBlock = Math.random() < 0.3;
           if (this.destroyMultiblockAt(bx, by, bz, { drop: dropThisBlock, particles: true })) continue;
           if (wasLog) explodedLogs.push([bx, by, bz]);
+          let jellyHouseDropData = null;
+          if (id === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
+            const jk = this.pkey ? this.pkey(bx, by, bz) : (bx + ',' + by + ',' + bz);
+            const res = Jelly.onHouseBreak(jk, { reason: 'explosion', drop: dropThisBlock });
+            jellyHouseDropData = res && res.itemData;
+          }
           if (dropThisBlock) {
             const def = Reg[id];
             if (def.drop !== null) {
-              if (def.drop && def.drop.table) Drops.dropTable(bx + 0.5, by + 0.5, bz + 0.5, def.drop.table);
+              if (id === B.JELLY_HOUSE) {
+                Drops.spawn(bx + 0.5, by + 0.5, bz + 0.5, id, 1, null, undefined, jellyHouseDropData || (typeof Jelly !== 'undefined' ? Jelly.serializeHouseItem([]) : { jellyRoster: [] }));
+              } else if (def.drop && def.drop.table) Drops.dropTable(bx + 0.5, by + 0.5, bz + 0.5, def.drop.table);
               else {
                 let dropId = id, n = 1;
                 if (def.drop) { dropId = def.drop.id; n = def.drop.min || 1; if (def.drop.chance && Math.random() > def.drop.chance) dropId = 0; }
@@ -3194,7 +3686,7 @@ const World = {
             }
           }
           if (wasLog && typeof Dynamics !== 'undefined') Dynamics.queueLeafDecay(bx, by, bz);
-          this.setBlock(bx, by, bz, B.AIR);
+          this.setBlock(bx, by, bz, B.AIR, id === B.JELLY_HOUSE ? { jellyHouseBreakHandled: true } : undefined);
         }
       }
     }

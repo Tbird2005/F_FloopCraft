@@ -22,8 +22,71 @@ const Vehicles = {
     if (this.boardMesh) { scene.remove(this.boardMesh); this.boardMesh = null; }
   },
 
-  isCarLike(v) { return v && (v.kind === 'car' || v.kind === 'supercar'); },
+  isCarLike(v) { return v && (v.kind === 'car' || v.kind === 'supercar' || v.kind === 'plane'); },
   isTreeLeaf(id) { return id === B.LEAVES || id === B.BIRCH_LEAVES || id === B.SPRUCE_LEAVES || id === B.OASIS_LEAVES; },
+
+  riderYOffset(v) {
+    if (!v) return 0.35;
+    return v.kind === 'plane' ? 0.62 : v.kind === 'boat' ? 0.25 : v.kind === 'board' ? 0.08 : 0.35;
+  },
+
+  vehicleHudLabel(v) {
+    if (!v) return null;
+    const name = v.kind === 'plane' ? 'Plane ' : v.kind === 'supercar' ? 'Blue Super Car ' : v.kind === 'car' ? 'Floopmobile ' : v.kind === 'boat' ? (v.lavaBoat ? 'Obsidian Boat ' : 'Boat ') : 'Skateboard ';
+    return name + Math.max(0, Math.ceil(v.hp || 0)) + '/' + this.maxHp(v) + ' HP';
+  },
+
+  planeTakeoffSpeed() { return 14.0; },
+
+  planeThrottleAccel(v) {
+    const s = Math.abs((v && v.speed) || 0);
+    if (s < 6) return 3.8;
+    if (s < this.planeTakeoffSpeed()) return 6.2;
+    if (s < 22) return 11.0;
+    if (s < 34) return 18.0;
+    return 24.0;
+  },
+
+  vehicleDriveProfile(v, isBoat, goodBoatFluid) {
+    const isSuper = v.kind === 'supercar';
+    const isPlane = v.kind === 'plane';
+    if (isBoat) {
+      return {
+        maxF: goodBoatFluid ? (v.lavaBoat ? 8.4 : 9.5) : 1.5,
+        reverseMax: -4.5,
+        accel: 10,
+        brake: 8,
+        idleDrag: 0.985,
+        steerRate: 1.9,
+      };
+    }
+    return {
+      maxF: isPlane ? 46.0 : (isSuper ? 23.0 : 11.5),
+      reverseMax: isPlane ? -3.5 : (isSuper ? -7.0 : -4.5),
+      accel: isPlane ? this.planeThrottleAccel(v) : (isSuper ? 28 : 14),
+      brake: isPlane ? 24 : (isSuper ? 24 : 16),
+      idleDrag: isPlane ? 0.992 : (isSuper ? 0.99 : 0.985),
+      steerRate: isPlane ? 1.55 : (isSuper ? 2.15 : 1.9),
+    };
+  },
+
+  applyPlaneFlight(v, dt, drivingThis, inWater, inLava, keys) {
+    if (!v || v.kind !== 'plane' || !v.body) return false;
+    const b = v.body;
+    const k = keys || {};
+    const liftSpeed = Math.abs(v.speed || 0);
+    const takeoff = this.planeTakeoffSpeed();
+    const lift = Math.max(0, Math.min(1, (liftSpeed - takeoff) / (46 - takeoff)));
+    if (drivingThis) {
+      if (k.Space && liftSpeed >= takeoff) b.vy += (10 + lift * 14) * dt;
+      else if (k.KeyW && liftSpeed > 20) b.vy += 3.5 * lift * dt;
+      if (k.KeyS) b.vy -= (6 + lift * 2) * dt;
+    }
+    if (inWater || inLava) v.speed *= 0.90;
+    b.vy -= Physics.GRAV * (drivingThis && liftSpeed >= takeoff ? 0.42 : 0.92) * dt;
+    b.vy = Math.max(-26, Math.min(16, b.vy));
+    return true;
+  },
 
   buildCarMesh() {
     const g = new THREE.Group();
@@ -81,6 +144,54 @@ const Vehicles = {
       g.add(light);
     }
     return { group: g, wheels };
+  },
+
+  buildPlaneMesh() {
+    const g = new THREE.Group();
+    const mat = (c, emissive = 0) => new THREE.MeshLambertMaterial({ color: c, emissive, emissiveIntensity: emissive ? 0.12 : 0 });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.45, 3.35), mat(0xdfe8f2));
+    body.position.set(0, 0.62, 0);
+    const belly = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.18, 2.25), mat(0x6d7f94));
+    belly.position.set(0, 0.38, -0.1);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.34, 0.62), mat(0x2f75ff));
+    nose.position.set(0, 0.62, 1.92);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.34, 0.72), mat(0x9eeeff, 0x2266aa));
+    cabin.position.set(0, 0.98, 0.2);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.05, 3.05), mat(0x174aaf));
+    stripe.position.set(0, 0.88, -0.08);
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(4.35, 0.12, 0.92), mat(0x2f75ff));
+    wing.position.set(0, 0.64, 0.05);
+    const wingTipL = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 0.72), mat(0xdfe8f2));
+    wingTipL.position.set(-2.3, 0.66, 0.05);
+    const wingTipR = wingTipL.clone();
+    wingTipR.position.x = 2.3;
+    const tailBoom = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.28, 1.15), mat(0xdfe8f2));
+    tailBoom.position.set(0, 0.72, -1.72);
+    const tailWing = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.10, 0.52), mat(0x2f75ff));
+    tailWing.position.set(0, 0.82, -2.06);
+    const tailFin = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.78, 0.52), mat(0x174aaf));
+    tailFin.position.set(0, 1.18, -2.14);
+    g.add(body, belly, nose, cabin, stripe, wing, wingTipL, wingTipR, tailBoom, tailWing, tailFin);
+
+    const propellers = [];
+    const hub = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.16), mat(0xff9d2e, 0x552200));
+    hub.position.set(0, 0.62, 2.28);
+    const bladeA = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.05, 0.06), mat(0x101014));
+    bladeA.position.set(0, 0.62, 2.38);
+    const bladeB = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.12, 0.06), mat(0x101014));
+    bladeB.position.set(0, 0.62, 2.39);
+    g.add(hub, bladeA, bladeB);
+    propellers.push(bladeA, bladeB);
+
+    const wheels = [];
+    for (const [px, py, pz] of [[-0.52, 0.18, 0.78], [0.52, 0.18, 0.78], [0, 0.18, -1.18]]) {
+      const w = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.36, 0.36), mat(0x101014));
+      w.position.set(px, py, pz);
+      g.add(w);
+      wheels.push(w);
+    }
+    return { group: g, wheels, propellers };
   },
 
   buildBoatMesh(obsidian) {
@@ -145,6 +256,20 @@ const Vehicles = {
     return car;
   },
 
+  placePlane(x, y, z, yaw) {
+    const { group, wheels, propellers } = this.buildPlaneMesh();
+    group.position.set(x, y, z);
+    this.scene.add(group);
+    const plane = {
+      kind: 'plane', hp: 10, item: I.PLANE,
+      x, y, z, yaw: yaw || 0, speed: 0, fallDist: 0,
+      body: { x, y, z, vx: 0, vy: 0, vz: 0, w: 1.2, h: 1.18, onGround: false, hitH: false },
+      group, wheels, propellers, wheelSpin: 0, propSpin: 0, smashT: 0,
+    };
+    this.cars.push(plane);
+    return plane;
+  },
+
   placeBoat(x, y, z, yaw, obsidian) {
     const { group } = this.buildBoatMesh(!!obsidian);
     group.position.set(x, y, z);
@@ -202,7 +327,7 @@ const Vehicles = {
     }
   },
 
-  maxHp(v) { return v.kind === 'supercar' ? 60 : v.kind === 'car' ? 40 : v.kind === 'boat' ? (v.lavaBoat ? 34 : 20) : 12; },
+  maxHp(v) { return v.kind === 'plane' ? 10 : v.kind === 'supercar' ? 60 : v.kind === 'car' ? 40 : v.kind === 'boat' ? (v.lavaBoat ? 34 : 20) : 12; },
 
   applyFlash(v, dt) {
     const obj = v.group || v.mesh;
@@ -285,9 +410,9 @@ const Vehicles = {
     let best = null;
     for (const car of this.cars) {
       const b = car.body;
-      const hw = car.kind === 'supercar' ? 1.25 : 1.1;
-      const hl = car.kind === 'supercar' ? 1.55 : 1.4;
-      const hh = car.kind === 'supercar' ? 1.25 : 1.5;
+      const hw = car.kind === 'plane' ? 2.45 : car.kind === 'supercar' ? 1.25 : 1.1;
+      const hl = car.kind === 'plane' ? 2.05 : car.kind === 'supercar' ? 1.55 : 1.4;
+      const hh = car.kind === 'plane' ? 1.35 : car.kind === 'supercar' ? 1.25 : 1.5;
       const t = this.rayAABB([b.x - hw, b.y, b.z - hl], [b.x + hw, b.y + hh, b.z + hl], ox, oy, oz, dx, dy, dz, maxDist);
       if (t !== null && (!best || t < best.dist)) best = { v: car, dist: t };
     }
@@ -306,7 +431,7 @@ const Vehicles = {
   enter(v) {
     if (this.isCarLike(v)) {
       this.driving = v;
-      UI.chat(v.kind === 'supercar' ? 'Blue Super Car! 2x speed, 60 HP. Shift to hop out.' : 'Vroom. Shift to hop out. (Floopmobile™ — crash responsibly)', '#ffd97a');
+      UI.chat(v.kind === 'plane' ? 'Floop Plane! Hold W to build speed. Space climbs after takeoff speed, S descends/brakes, Shift hops out.' : v.kind === 'supercar' ? 'Blue Super Car! 2x speed, 60 HP. Shift to hop out.' : 'Vroom. Shift to hop out. (Floopmobile™ — crash responsibly)', '#ffd97a');
     } else if (v.kind === 'boat') {
       this.boating = v;
       UI.chat('Boat mode. W to paddle, A/D to steer, Shift to hop out.', '#ffd97a');
@@ -384,22 +509,24 @@ const Vehicles = {
 
     if (drivingThis && !Player.dead) {
       const k = Player.keys;
-      const isSuper = v.kind === 'supercar';
-      const maxF = isBoat ? (goodBoatFluid ? (v.lavaBoat ? 8.4 : 9.5) : 1.5) : (isSuper ? 23.0 : 11.5);
-      const reverseMax = isBoat ? -4.5 : (isSuper ? -7.0 : -4.5);
-      const accel = k['KeyW'] ? (isBoat ? 10 : (isSuper ? 28 : 14)) : 0;
-      const brake = k['KeyS'] ? (isBoat ? 8 : (isSuper ? 24 : 16)) : 0;
+      const profile = this.vehicleDriveProfile(v, isBoat, goodBoatFluid);
+      const maxF = profile.maxF;
+      const reverseMax = profile.reverseMax;
+      const accel = k['KeyW'] ? profile.accel : 0;
+      const brake = k['KeyS'] ? profile.brake : 0;
       v.speed += (accel - brake) * dt;
       v.speed = Math.max(reverseMax, Math.min(maxF, v.speed));
-      if (!accel && !brake) v.speed *= (b.onGround || inWater || inLava ? (isSuper ? 0.99 : 0.985) : 0.999);
+      if (!accel && !brake) v.speed *= (b.onGround || inWater || inLava ? profile.idleDrag : 0.999);
       const steer = (k['KeyA'] ? 1 : 0) - (k['KeyD'] ? 1 : 0);
-      v.yaw += steer * dt * (isSuper ? 2.15 : 1.9) * Math.max(-1, Math.min(1, v.speed / 5));
+      v.yaw += steer * dt * profile.steerRate * Math.max(-1, Math.min(1, v.speed / 5));
     } else {
       v.speed *= 0.96;
     }
 
     b.vx = Math.sin(v.yaw + Math.PI) * -v.speed;
     b.vz = Math.cos(v.yaw + Math.PI) * -v.speed;
+
+    const isPlane = v.kind === 'plane';
 
     if (isBoat && goodBoatFluid) {
       // float to the correct surface: normal boats on water, obsidian boats on lava
@@ -408,6 +535,8 @@ const Vehicles = {
       const headId = World.getBlock(Math.floor(b.x), Math.floor(b.y + 0.7), Math.floor(b.z));
       if (v.lavaBoat ? !isLava(headId) : !isWater(headId)) b.vy = Math.min(b.vy, 0); // don't pop out of the fluid
       b.vy -= (v.lavaBoat ? 7.5 : 9) * dt;
+    } else if (isPlane) {
+      this.applyPlaneFlight(v, dt, drivingThis && !Player.dead, inWater, inLava, Player.keys);
     } else {
       if (inWater || inLava) {
         v.speed *= wrongBoatFluid ? 0.88 : 0.94;
@@ -419,7 +548,7 @@ const Vehicles = {
       }
       b.vy -= Physics.GRAV * dt;
     }
-    b.vy = Math.max(b.vy, -36);
+    b.vy = isPlane ? Math.max(-26, Math.min(16, b.vy)) : Math.max(b.vy, -36);
 
     // fast cars are mobile deforestation units: clear weak blocks around them
     // so edges and corners can't snag on stray leaves. Super cars shred tree leaves
@@ -457,14 +586,25 @@ const Vehicles = {
     }
 
     const preSpeed = v.speed;
-    const wasY = b.y, fallingBefore = b.vy < 0;
-    Physics.move(b, dt, { stepUp: true, stepLift: isBoat ? 0.55 : 1.06 });
+    const wasY = b.y, fallingBefore = b.vy < 0, landingVy = b.vy;
+    Physics.move(b, dt, { stepUp: true, stepLift: isBoat ? 0.55 : isPlane ? 0.65 : 1.06 });
 
     // vehicle fall damage (lenient)
     if (!(isBoat ? goodBoatFluid : inWater)) {
       if (fallingBefore && wasY > b.y) v.fallDist += wasY - b.y;
       if (b.onGround) {
-        if (v.fallDist > 7) {
+        if (isPlane) {
+          const impact = fallingBefore ? Math.max(0, -landingVy) : 0;
+          const landingSpeed = Math.abs(preSpeed || v.speed || 0);
+          const safeImpact = drivingThis && landingSpeed >= this.planeTakeoffSpeed() ? 27 : 16;
+          const hardLanding = impact > safeImpact;
+          if (hardLanding) {
+            const dmg = Math.max(1, Math.floor(Math.max(0, impact - safeImpact) * 1.1));
+            this.hurt(v, dmg);
+            if (drivingThis && dmg > 3) Player.hurt(Math.max(1, Math.floor(dmg * 0.2)), 0, 0, { pierce: true });
+          }
+          if (drivingThis) Player.fallDist = 0;
+        } else if (v.fallDist > 7) {
           const dmg = Math.floor((v.fallDist - 6) * 0.6);
           if (dmg > 0) {
             this.hurt(v, dmg);
@@ -540,12 +680,17 @@ const Vehicles = {
       car.wheelSpin += car.speed * dt * 3;
       car.group.position.set(b.x, b.y, b.z);
       car.group.rotation.y = car.yaw;
-      for (const w of car.wheels) w.rotation.x = car.wheelSpin;
+      for (const w of car.wheels || []) w.rotation.x = car.wheelSpin;
+      if (car.propellers) {
+        car.propSpin = (car.propSpin || 0) + Math.max(18, Math.abs(car.speed || 0) * 1.3) * dt;
+        for (const p of car.propellers) p.rotation.z = car.propSpin;
+      }
       this.applyFlash(car, dt);
       this.tintVehicle(car, dt);
       if (this.driving === car) {
-        Player.body.x = b.x; Player.body.y = b.y + 0.35; Player.body.z = b.z;
+        Player.body.x = b.x; Player.body.y = b.y + this.riderYOffset(car); Player.body.z = b.z;
         Player.body.vx = Player.body.vy = Player.body.vz = 0;
+        Player.fallDist = 0;
       }
     }
     for (const boat of this.boats) {
@@ -559,8 +704,9 @@ const Vehicles = {
         // Keep the rider at the normal boat height. Lava safety is handled by
         // the hazard check ignoring the rider's lower legs while mounted in an
         // obsidian boat, not by floating the player unrealistically high.
-        Player.body.x = b.x; Player.body.y = b.y + 0.25; Player.body.z = b.z;
+        Player.body.x = b.x; Player.body.y = b.y + this.riderYOffset(boat); Player.body.z = b.z;
         Player.body.vx = Player.body.vy = Player.body.vz = 0;
+        Player.fallDist = 0;
       }
     }
     for (const board of this.boards) {
@@ -570,9 +716,7 @@ const Vehicles = {
 
     // HP readout while riding
     const active = this.driving || this.boating;
-    UI.setVehicleHud(active
-      ? (active.kind === 'supercar' ? '🏎️ ' : active.kind === 'car' ? '🚗 ' : active.lavaBoat ? '🛶 ' : '⛵ ') + Math.max(0, Math.ceil(active.hp)) + '/' + this.maxHp(active) + ' HP'
-      : null);
+    UI.setVehicleHud(active ? this.vehicleHudLabel(active) : null);
   },
 
   // ---------- skateboard ----------
@@ -641,8 +785,9 @@ const Vehicles = {
 
   deserialize(cars, boards, boats) {
     for (const c of cars || []) {
+      const isPlane = c.kind === 'plane' || c.item === I.PLANE;
       const isSuper = c.kind === 'supercar' || c.item === I.SUPER_CAR;
-      const v = isSuper ? this.placeSuperCar(c.x, c.y, c.z, c.yaw) : this.placeCar(c.x, c.y, c.z, c.yaw);
+      const v = isPlane ? this.placePlane(c.x, c.y, c.z, c.yaw) : isSuper ? this.placeSuperCar(c.x, c.y, c.z, c.yaw) : this.placeCar(c.x, c.y, c.z, c.yaw);
       if (c.hp) v.hp = c.hp;
     }
     for (const b of boards || []) { const v = this.placeBoard(b.x, b.y, b.z, b.yaw); if (b.hp) v.hp = b.hp; }

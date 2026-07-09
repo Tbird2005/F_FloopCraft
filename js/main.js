@@ -9,6 +9,7 @@ const Game = {
   stocks: { price: 100, hist: [100], shares: 0 },
   sun: null, moon: null, stars: null, dirLight: null, ambLight: null,
   clock: null,
+  debugChunkBorders: false, chunkBorderMesh: null, chunkBorderKey: '',
   pendingSave: null,
   stockT: 0, sapT: 0, cropT: 0, grassT: 0, saveT: 0, furnaceLitSync: 0, sleepLock: 0,
   cinematicPlaying: false, cinematicEndCb: null,
@@ -81,7 +82,7 @@ const Game = {
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(innerWidth, innerHeight);
     });
-    addEventListener('pagehide', () => { if (this.inWorld && World.ready) Save.saveCurrent(); });
+    addEventListener('pagehide', () => { if (this.inWorld && World.ready) Save.saveCurrent({ auto: true }); });
 
     this.clock = performance.now();
     requestAnimationFrame(() => this.frame());
@@ -105,7 +106,7 @@ const Game = {
     const p = Player.body;
     // authoritative world + entity simulation (skip local Player input; the host isn't
     // moving while unfocused, and rendering is pointless on a hidden tab)
-    World.update(p.x, p.z, 1);
+    World.update(p.x, p.z, 1, p.y);
     Water.update(dt); Lava.update(dt);
     Drops.update(dt); Mobs.update(dt);
     Vehicles.update(dt); Vehicles.updateBoard(dt);
@@ -262,7 +263,7 @@ const Game = {
     on('quitGameBtn', 'click', () => this.quitGame());
     on('backToMainBtn', 'click', (e) => {
       e.stopPropagation();
-      if (World.ready) Save.saveCurrent();
+      if (World.ready) Save.saveCurrent({ force: true });
       location.reload();
     });
 
@@ -343,7 +344,7 @@ const Game = {
     World.init(this.scene, seed);
     if (!saveData && typeof Dimensions !== 'undefined') {
       Dimensions.current = 'overworld';
-      Dimensions.data = { overworld: Dimensions.emptyState('overworld'), merry: Dimensions.emptyState('merry') };
+      Dimensions.data = { overworld: Dimensions.emptyState('overworld') };
       Dimensions.returnPortal = null;
       World.dimensionId = 'overworld';
     }
@@ -374,10 +375,55 @@ const Game = {
       Player.body.y = (+hp.y || spawn.y) + 0.1;
       Player.body.z = (+hp.z || spawn.z) + 1.2;
     }
+    this.warmupRuntimeAssets();
 
     this.updateDayNight(0);
     this.loading = true;
     this.inWorld = true;
+  },
+
+  disposeWarmupObject(obj) {
+    if (!obj) return;
+    obj.traverse(o => {
+      if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const m of mats) {
+        if (m.map && m.map.dispose) m.map.dispose();
+        if (m.dispose) m.dispose();
+      }
+    });
+  },
+
+  warmupRuntimeAssets() {
+    if (this._runtimeWarmed || !this.renderer || !this.scene || !this.camera || typeof Vehicles === 'undefined') return;
+    this._runtimeWarmed = true;
+    const temps = [];
+    try {
+      const built = [
+        Vehicles.buildCarMesh && Vehicles.buildCarMesh(),
+        Vehicles.buildSuperCarMesh && Vehicles.buildSuperCarMesh(),
+        Vehicles.buildPlaneMesh && Vehicles.buildPlaneMesh(),
+        Vehicles.buildBoatMesh && Vehicles.buildBoatMesh(false),
+        Vehicles.buildBoatMesh && Vehicles.buildBoatMesh(true),
+        Vehicles.buildBoardMesh && { group: Vehicles.buildBoardMesh() },
+      ].filter(Boolean);
+      for (const entry of built) {
+        const group = entry.group || entry;
+        if (!group) continue;
+        group.visible = false;
+        group.position.set(0, -9999, 0);
+        this.scene.add(group);
+        temps.push(group);
+      }
+      if (this.renderer.compile) this.renderer.compile(this.scene, this.camera);
+    } catch (e) {
+      console.warn('Warmup skipped:', e);
+    } finally {
+      for (const obj of temps) {
+        this.scene.remove(obj);
+        this.disposeWarmupObject(obj);
+      }
+    }
   },
 
   finishLoading() {
@@ -408,7 +454,7 @@ const Game = {
     }
     UI.updateHotbar(); UI.updateStats(); UI.updateXp(); UI.updateModeLabel();
     if (!this.started) this.started = true;
-    UI.chat('Welcome to F_Floop Craft v 1.0.5!', '#ffd700');
+    UI.chat('Welcome to F_Floop Craft v 1.0.47!', '#ffd700');
     if (typeof Multiplayer !== 'undefined') {
       if (Multiplayer.role === 'host') Multiplayer.finishHostWorld();
       Multiplayer.updatePauseCode();
@@ -421,6 +467,12 @@ const Game = {
 
   wirePointerLock() {
     document.addEventListener('keydown', (e) => {
+      if (e.code === 'F3') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.toggleChunkBorders();
+        return;
+      }
       if (e.code !== 'Escape') return;
       // First Esc still lets the browser leave pointer lock and pause the game.
       // When the pause menu is already open, Esc acts like Resume.
@@ -467,6 +519,108 @@ const Game = {
     });
   },
 
+  toggleChunkBorders() {
+    this.debugChunkBorders = !this.debugChunkBorders;
+    this.chunkBorderKey = '';
+    if (!this.debugChunkBorders && this.chunkBorderMesh) this.chunkBorderMesh.visible = false;
+    if (this.debugChunkBorders) this.updateChunkBorders(true);
+    if (typeof UI !== 'undefined') UI.chat('Chunk borders ' + (this.debugChunkBorders ? 'shown' : 'hidden') + ' (16x16x16 layers).', '#7df5ec');
+  },
+
+  ensureChunkBorderMesh() {
+    if (this.chunkBorderMesh) return this.chunkBorderMesh;
+    this.chunkBorderMesh = new THREE.Group();
+    this.chunkBorderMesh.renderOrder = 9999;
+    this.chunkBorderMesh.visible = false;
+    this.scene.add(this.chunkBorderMesh);
+    return this.chunkBorderMesh;
+  },
+
+  updateChunkBorders(force) {
+    if (!this.debugChunkBorders || !this.inWorld || !World || !Player || !Player.body) {
+      if (this.chunkBorderMesh) this.chunkBorderMesh.visible = false;
+      return;
+    }
+    const p = Player.body;
+    const cx = Math.floor(p.x) >> 4;
+    const cy = Math.floor(p.y / 16);
+    const cz = Math.floor(p.z) >> 4;
+    const key = cx + ',' + cy + ',' + cz;
+    const mesh = this.ensureChunkBorderMesh();
+    mesh.visible = true;
+    if (!force && key === this.chunkBorderKey) return;
+    this.chunkBorderKey = key;
+
+    while (mesh.children.length) {
+      const ch = mesh.children[0];
+      mesh.remove(ch);
+      if (ch.geometry) ch.geometry.dispose();
+      if (ch.material) ch.material.dispose();
+    }
+
+    const faceOther = [], lineOther = [], faceCurrent = [], lineCurrent = [];
+    const pushTri = (arr, a, b, c) => arr.push(...a, ...b, ...c);
+    const addLine = (arr, a, b) => arr.push(...a, ...b);
+    const addFace = (faceArr, lineArr, quad) => {
+      pushTri(faceArr, quad[0], quad[1], quad[2]);
+      pushTri(faceArr, quad[0], quad[2], quad[3]);
+      const constAxis = [0, 1, 2].find(i => quad.every(v => Math.abs(v[i] - quad[0][i]) < 0.0001));
+      if (constAxis === undefined) return;
+      const axes = [0, 1, 2].filter(i => i !== constAxis);
+      const u = axes[0], v = axes[1], fixed = quad[0][constAxis];
+      const uVals = quad.map(p => p[u]), vVals = quad.map(p => p[v]);
+      const u0 = Math.min(...uVals), u1 = Math.max(...uVals);
+      const v0 = Math.min(...vVals), v1 = Math.max(...vVals);
+      const pt = (uu, vv) => {
+        const p3 = [0, 0, 0];
+        p3[constAxis] = fixed; p3[u] = uu; p3[v] = vv;
+        return p3;
+      };
+      for (let uu = Math.ceil(u0); uu <= Math.floor(u1); uu++) addLine(lineArr, pt(uu, v0), pt(uu, v1));
+      for (let vv = Math.ceil(v0); vv <= Math.floor(v1); vv++) addLine(lineArr, pt(u0, vv), pt(u1, vv));
+    };
+    const box = (x0, y0, z0, x1, y1, z1, current) => {
+      const f = current ? faceCurrent : faceOther;
+      const l = current ? lineCurrent : lineOther;
+      addFace(f, l, [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]]);
+      addFace(f, l, [[x1, y0, z1], [x1, y1, z1], [x1, y1, z0], [x1, y0, z0]]);
+      addFace(f, l, [[x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]]);
+      addFace(f, l, [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]]);
+      addFace(f, l, [[x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z0]]);
+      addFace(f, l, [[x0, y0, z1], [x0, y1, z1], [x1, y1, z1], [x1, y0, z1]]);
+    };
+    const yMinLayer = cy - 2;
+    const yMaxLayer = cy + 2;
+    for (let gx = cx - 2; gx <= cx + 2; gx++) {
+      for (let gz = cz - 2; gz <= cz + 2; gz++) {
+        for (let gy = yMinLayer; gy <= yMaxLayer; gy++) {
+          const x0 = gx * 16, z0 = gz * 16, y0 = gy * 16;
+          box(x0, y0, z0, x0 + 16, y0 + 16, z0 + 16, gx === cx && gy === cy && gz === cz);
+        }
+      }
+    }
+    const addBuffers = (faceArr, lineArr, faceColor, lineColor, faceOpacity, lineOpacity) => {
+      if (faceArr.length) {
+        const fg = new THREE.BufferGeometry();
+        fg.setAttribute('position', new THREE.Float32BufferAttribute(faceArr, 3));
+        const fm = new THREE.MeshBasicMaterial({ color: faceColor, transparent: true, opacity: faceOpacity, side: THREE.DoubleSide, depthTest: true, depthWrite: false, fog: false });
+        const fmsh = new THREE.Mesh(fg, fm);
+        fmsh.renderOrder = 9997;
+        mesh.add(fmsh);
+      }
+      if (lineArr.length) {
+        const lg = new THREE.BufferGeometry();
+        lg.setAttribute('position', new THREE.Float32BufferAttribute(lineArr, 3));
+        const lm = new THREE.LineBasicMaterial({ color: lineColor, transparent: true, opacity: lineOpacity, depthTest: true, depthWrite: false, fog: false });
+        const lines = new THREE.LineSegments(lg, lm);
+        lines.renderOrder = 9998;
+        mesh.add(lines);
+      }
+    };
+    addBuffers(faceOther, lineOther, 0x1b8cff, 0x57d8ff, 0.035, 0.28);
+    addBuffers(faceCurrent, lineCurrent, 0xffe45c, 0xffff66, 0.14, 0.95);
+  },
+
   requestLock() {
     const el = this.renderer.domElement;
     try {
@@ -486,6 +640,7 @@ const Game = {
     } else {
       this.time = (Math.floor(frac) + 1) * this.dayLen + this.dayLen * 0.02;
       UI.chat('You sleep through the night. Merry morning!' + (spawnSet ? ' Spawn point set.' : ''), '#ffd97a');
+      if (typeof Dynamics !== 'undefined' && Dynamics.clearSleepEvents) Dynamics.clearSleepEvents();
     }
     overlay.style.opacity = 0;
     if (typeof afterFadeOut === 'function') {
@@ -502,6 +657,8 @@ const Game = {
     Player.mining = false;
     Player.mineTarget = null;
     Player.mineProgress = 0;
+    Player.swingIntentT = 0;
+    Player.swingLoopT = 0;
   },
 
   endSleepCinematicHold() {
@@ -626,7 +783,8 @@ const Game = {
     if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client') {
       UI.chat('Only the host can sleep in multiplayer.', '#ff8080'); return;
     }
-    if (!toNight && !this.isNight) { UI.chat('You can only sleep at night. The sun disapproves.', '#ff8080'); return; }
+    const stormSleep = !toNight && typeof Dynamics !== 'undefined' && Dynamics.weather === 'thunder';
+    if (!toNight && !this.isNight && !stormSleep) { UI.chat('You can only sleep at night or during thunderstorms. The sun disapproves.', '#ff8080'); return; }
     if (toNight && this.isNight) { UI.chat('The SunBed only works in daylight. It runs on sun. Obviously.', '#ff8080'); return; }
     this.sleepLock = 3;
 
@@ -744,7 +902,7 @@ const Game = {
       const id = World.getBlock(x, y, z);
       if (id !== c.id || !isCrop(id)) { World.crops.delete(key); continue; }
       if (cropStage(id) >= 3) { World.crops.delete(key); continue; }
-      const weather = (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') ? 'clear' : (typeof Dynamics !== 'undefined' ? Dynamics.weather : 'clear');
+      const weather = (typeof Dynamics !== 'undefined' ? Dynamics.weather : 'clear');
       const growthMult = weather === 'thunder' ? 2.5 : weather === 'rain' ? 2.0 : 1.0;
       c.t -= 1.4 * growthMult;
       if (c.t <= 0) {
@@ -756,7 +914,7 @@ const Game = {
   updateGrassSpread(dt) {
     this.grassT -= dt;
     if (this.grassT > 0) return;
-    const weather = (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') ? 'clear' : (typeof Dynamics !== 'undefined' ? Dynamics.weather : 'clear');
+    const weather = (typeof Dynamics !== 'undefined' ? Dynamics.weather : 'clear');
     const weatherMult = weather === 'thunder' ? 2.5 : weather === 'rain' ? 2.0 : 1.0;
     // Deterministic chunk sweep: every nearby loaded grass/dirt block gets
     // checked as its chunk comes up in the rotation. Rain/thunder sweep more
@@ -787,7 +945,7 @@ const Game = {
     if (newDay !== this.dayCount) {
       this.dayCount = newDay;
       UI.chat('Day ' + newDay + ' — Mr Floop wishes you a merry christmas.', '#ffd700');
-      if (!(typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') && newDay >= 5 && !this.humbugAnnounced) {
+      if (newDay >= 5 && !this.humbugAnnounced) {
         this.humbugAnnounced = true;
         UI.chat('A joyless gray presence creeps into the world... the HUMBUGS have arrived.', '#ff8080');
         UI.chat('<Mr Floop> oh no. oh no no no. patapim.', '#7CFC00');
@@ -796,7 +954,7 @@ const Game = {
     const ang = t * Math.PI * 2;
     const sunH = Math.sin(ang);
     this.isNight = sunH < -0.06;
-    if (this.isNight && !this.wasNight && !(typeof Dimensions !== 'undefined' && Dimensions.current === 'merry')) Dynamics.maybeStartStarfall();
+    if (this.isNight && !this.wasNight) Dynamics.maybeStartStarfall();
     this.wasNight = this.isNight;
 
     let dayF = Math.max(0, Math.min(1, (sunH + 0.12) * 4));
@@ -847,8 +1005,13 @@ const Game = {
       this.weather === 'thunder' ? ' ⛈' : ' 🌧';
     document.getElementById('dayLabel').textContent =
       (this.isNight ? '☾ ' : '☀ ') + 'Day ' + this.dayCount + wIcon;
-    document.getElementById('coords').textContent =
-      `${(typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') ? 'MERRY DIM  ' : ''}x ${p.x.toFixed(0)}  y ${p.y.toFixed(0)}  z ${p.z.toFixed(0)}`;
+    let coordText = `x ${p.x.toFixed(0)}  y ${p.y.toFixed(0)}  z ${p.z.toFixed(0)}`;
+    if (this.debugChunkBorders) {
+      const cx = Math.floor(p.x) >> 4, cy = Math.floor(p.y / 16), cz = Math.floor(p.z) >> 4;
+      const lx = ((Math.floor(p.x) % 16) + 16) % 16, ly = ((Math.floor(p.y) % 16) + 16) % 16, lz = ((Math.floor(p.z) % 16) + 16) % 16;
+      coordText += `  chunk ${cx},${cy},${cz}  local ${lx},${ly},${lz}`;
+    }
+    document.getElementById('coords').textContent = coordText;
   },
 
   // ---------------- main loop ----------------
@@ -862,8 +1025,8 @@ const Game = {
     const p = Player.body;
 
     if (this.loading) {
-      World.update(p.x, p.z, 8);
-      const { missing, total } = World.countMissing(p.x, p.z);
+      World.update(p.x, p.z, 8, p.y);
+      const { missing, total } = World.countMissing(p.x, p.z, 2);
       document.getElementById('loadBar').style.width = Math.round((1 - missing / total) * 100) + '%';
       if (missing === 0) this.finishLoading();
       this.renderer.render(this.scene, this.camera);
@@ -886,7 +1049,7 @@ const Game = {
     }
 
     Player.update(dt);
-    World.update(p.x, p.z, 1); // one gen + one mesh per frame keeps exploration smooth
+    World.update(p.x, p.z, 1, p.y); // one gen + one mesh per frame keeps exploration smooth
     Water.update(dt);
     Lava.update(dt);
     Drops.update(dt);
@@ -904,6 +1067,7 @@ const Game = {
     this.updateGrassSpread(dt);
     this.updateStocks(dt);
     this.updateDayNight(dt);
+    this.updateChunkBorders();
 
     // autosave: less often, and never while chunks are streaming in —
     // the synchronous JSON+localStorage write was the mystery multi-second freeze
@@ -912,7 +1076,7 @@ const Game = {
       const { missing } = World.countMissing(p.x, p.z);
       if (missing === 0 && World.ready) {
         this.saveT = 0;
-        Save.saveCurrent();
+        Save.saveCurrent({ auto: true });
       } else {
         this.saveT = 40; // busy — try again shortly
       }

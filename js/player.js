@@ -35,6 +35,7 @@ const Player = {
   verticalSlabMode: false,
   wasInWater: false,
   vmGroup: null, vmMesh: null, vmHeld: -999, vmSwing: 0, vmBob: 0,
+  swingSeq: 0, swingIntentT: 0, swingLoopT: 0,
 
   init(camera, spawn) {
     this.camera = camera;
@@ -152,21 +153,37 @@ const Player = {
   },
 
   // ---------------- inventory ----------------
-  addItem(id, count) {
+  cloneStackData(data) {
+    return data === undefined ? undefined : JSON.parse(JSON.stringify(data));
+  },
+
+  stackDataKey(data) {
+    return data === undefined ? '' : JSON.stringify(data);
+  },
+
+  addItem(id, count, dur, data) {
     const def = Reg[id];
     if (!def) return count;
-    let left = count;
-    for (let i = 0; i < 36 && left > 0; i++) {
-      const s = this.inv[i];
-      if (s && s.id === id && s.count < def.stack) {
-        const take = Math.min(def.stack - s.count, left);
-        s.count += take; left -= take;
+    let left = Math.max(0, Math.floor(count || 0));
+    const hasData = data !== undefined;
+    const dataKey = this.stackDataKey(data);
+    const canStack = (s) => s && s.id === id && this.stackDataKey(s.data) === dataKey && s.count < def.stack && !Number.isFinite(+dur);
+    if (!hasData && !Number.isFinite(+dur)) {
+      for (let i = 0; i < 36 && left > 0; i++) {
+        const s = this.inv[i];
+        if (canStack(s)) {
+          const take = Math.min(def.stack - s.count, left);
+          s.count += take; left -= take;
+        }
       }
     }
     for (let i = 0; i < 36 && left > 0; i++) {
       if (!this.inv[i]) {
         const take = Math.min(def.stack, left);
-        this.inv[i] = { id, count: take };
+        const stack = { id, count: take };
+        if (Number.isFinite(+dur)) stack.dur = +dur;
+        if (hasData) stack.data = this.cloneStackData(data);
+        this.inv[i] = stack;
         left -= take;
       }
     }
@@ -281,7 +298,7 @@ const Player = {
       const a = this.armor[i];
       const def = a && Reg[a.id];
       if (!def || !def.armor || def.armor.slot !== i) {
-        if (a && def) this.addItem(a.id, a.count || 1, a.dur);
+        if (a && def) this.addItem(a.id, a.count || 1, a.dur, a.data);
         this.armor[i] = null;
       } else {
         a.count = 1;
@@ -305,7 +322,7 @@ const Player = {
             const n = e.ctrlKey ? s.count : 1;
             const dir = this.lookDir();
             Drops.spawn(this.body.x + dir.x * 0.6, this.body.y + 1.4, this.body.z + dir.z * 0.6,
-              s.id, n, [dir.x * 5.5, 1.8, dir.z * 5.5], s.dur);
+              s.id, n, [dir.x * 5.5, 1.8, dir.z * 5.5], s.dur, s.data);
             s.count -= n;
             UI.hoverSlot.set(s.count > 0 ? s : null);
             SFX.pop();
@@ -385,7 +402,7 @@ const Player = {
       if (e.button === 2) { this.rmb = true; this.rmbFresh = true; this.placeT = 0; }
     });
     document.addEventListener('mouseup', e => {
-      if (e.button === 0) { this.lmb = false; this.mineProgress = 0; this.mineTarget = null; }
+      if (e.button === 0) { this.lmb = false; this.mining = false; this.mineProgress = 0; this.mineTarget = null; this.swingLoopT = 0; }
       if (e.button === 2) this.rmb = false;
     });
     document.addEventListener('wheel', e => {
@@ -417,11 +434,26 @@ const Player = {
     else if (pick === B.FURNACE_LIT) pick = B.FURNACE;
     else if (isSnowSheet(pick)) pick = B.SNOW_SHEET_1;
     else if (pick === B.FIRE) return;
-    // already in the hotbar? select it
-    for (let i = 0; i < 9; i++) {
-      if (this.inv[i] && this.inv[i].id === pick) { this.sel = i; UI.updateHotbar(); UI.showItemName(); return; }
+
+    // Data-bearing blocks must be copied like data-bearing blocks, not like
+    // plain stone. A picked Jelly House keeps only its stored/inside residents;
+    // outside Jelly People are live entities and are not cloned into the item.
+    let pickData;
+    if (pick === B.JELLY_HOUSE && typeof Jelly !== 'undefined' && Jelly.itemDataForPlacedHouse) {
+      pickData = Jelly.itemDataForPlacedHouse(hit.bx, hit.by, hit.bz);
     }
-    this.inv[this.sel] = { id: pick, count: Reg[pick].stack };
+
+    // already in the hotbar? select the exact matching stack; for data-bearing
+    // Jelly Houses, a plain/default house is NOT equivalent to this copied one.
+    const pickDataKey = pickData === undefined ? '' : JSON.stringify(pickData);
+    for (let i = 0; i < 9; i++) {
+      const st = this.inv[i];
+      if (st && st.id === pick) {
+        const stKey = st.data === undefined ? '' : JSON.stringify(st.data);
+        if (!pickData || stKey === pickDataKey) { this.sel = i; UI.updateHotbar(); UI.showItemName(); return; }
+      }
+    }
+    this.inv[this.sel] = { id: pick, count: Reg[pick].stack, ...(pickData !== undefined ? { data: pickData } : {}) };
     UI.updateHotbar();
     UI.showItemName();
     SFX.click();
@@ -434,7 +466,7 @@ const Player = {
     const dir = this.lookDir();
     Drops.spawn(
       this.body.x + dir.x * 0.6, this.body.y + 1.4, this.body.z + dir.z * 0.6,
-      s.id, n, [dir.x * 5.5, 1.8, dir.z * 5.5], s.dur
+      s.id, n, [dir.x * 5.5, 1.8, dir.z * 5.5], s.dur, s.data
     );
     s.count -= n;
     if (s.count <= 0) this.inv[this.sel] = null;
@@ -500,6 +532,11 @@ const Player = {
     const vHit = Vehicles.rayVehicle(this.body.x, this.eyeY(), this.body.z, d.x, d.y, d.z, 4);
     if (vHit && (!hit || vHit.dist < hit.dist)) {
       if (this.sneaking) {
+        if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client') {
+          if (Multiplayer.requestVehiclePickup) Multiplayer.requestVehiclePickup(vHit.v);
+          else UI.chat('Vehicle pickup must be approved by the host.', '#ffb347');
+          return true;
+        }
         Vehicles.remove(vHit.v);
         this.addItem(vHit.v.item, 1);
         UI.chat(Reg[vHit.v.item].name + ' picked up.', '#aaa');
@@ -526,18 +563,38 @@ const Player = {
       if (def.interact === 'furnace') { UI.open('furnace', hit); return true; }
       if (def.interact === 'stocks') { UI.open('stocks'); return true; }
       if (def.interact === 'sign') { UI.open('sign', hit); return true; }
+      if (def.interact === 'dungeonDoor') { this.openDungeonDoor(hit); return true; }
       if (def.interact === 'door') { this.toggleDoor(hit); return true; }
       if (def.interact === 'bed') { Game.trySleep(false, hit); return true; }
       if (def.interact === 'sunbed') { Game.trySleep(true, hit); return true; }
-      if (def.interact === 'chest') { UI.open('chest', hit); return true; }
+      if (def.interact === 'chest') {
+        if (hit.id === B.JELLY_CHEST && typeof Jelly !== 'undefined' && !(typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client')) Jelly.onChestAccess({ x: hit.bx, y: hit.by, z: hit.bz, mode: 'open' });
+        UI.open('chest', hit); return true;
+      }
+      if (def.interact === 'jellyHouse') {
+        const info = (typeof Jelly !== 'undefined') ? Jelly.describeHouseAt(hit.bx, hit.by, hit.bz) : { inside: 0, outside: 0 };
+        UI.chat('Jelly House: ' + info.inside + ' inside, ' + info.outside + ' outside/linked.', '#ffb8ea');
+        return true;
+      }
     }
 
     if (!s) return false;
+    const heldReg = Reg[s.id];
 
     // spawn eggs
-    if (Reg[s.id].spawnEgg && hit) {
-      Mobs.spawn(Reg[s.id].spawnEgg, hit.bx + 0.5, hit.by + 1.02, hit.bz + 0.5,
-        Reg[s.id].spawnEgg === 'humbug' ? Mobs.humbugGun() : null);
+    if (heldReg && heldReg.spawnEgg && hit) {
+      heldReg.spawnEgg === 'jelly' && typeof Jelly !== 'undefined' ? Jelly.spawnSmallJellyAt(hit.bx + 0.5, hit.by + 1.02, hit.bz + 0.5, null, 'spawn_egg') :
+        (heldReg.spawnEgg === 'big_jelly' && typeof Jelly !== 'undefined' ? Jelly.spawnBigJellyAt(hit.bx + 0.5, hit.by + 1.02, hit.bz + 0.5, null, 'spawn_egg') :
+        Mobs.spawn(heldReg.spawnEgg, hit.bx + 0.5, hit.by + 1.02, hit.bz + 0.5, heldReg.spawnEgg === 'humbug' ? Mobs.humbugGun() : null));
+      this.consumeHeld(1);
+      SFX.pop();
+      return true;
+    }
+
+    // placeable crafted Jelly People (not spawn eggs; made in the Extreme Crafting Table)
+    if (heldReg && heldReg.placeJelly && hit) {
+      const color = heldReg.placeJelly || 'pink';
+      (typeof Jelly !== 'undefined' ? Jelly.spawnSmallJellyAt(hit.bx + 0.5, hit.by + 1.02, hit.bz + 0.5, color, 'crafted') : Mobs.spawn('jelly', hit.bx + 0.5, hit.by + 1.02, hit.bz + 0.5, null, color));
       this.consumeHeld(1);
       SFX.pop();
       return true;
@@ -593,6 +650,12 @@ const Player = {
     }
     if (s.id === I.SUPER_CAR && hit && hit.ny === 1) {
       Vehicles.placeSuperCar(hit.bx + 0.5, hit.by + 1.02, hit.bz + 0.5, this.yaw);
+      this.consumeHeld(1);
+      SFX.place();
+      return true;
+    }
+    if (s.id === I.PLANE && hit && hit.ny === 1) {
+      Vehicles.placePlane(hit.bx + 0.5, hit.by + 1.25, hit.bz + 0.5, this.yaw);
       this.consumeHeld(1);
       SFX.place();
       return true;
@@ -700,6 +763,76 @@ const Player = {
     SFX.doorSound();
   },
 
+  dungeonGateForHit(hit) {
+    if (!hit || !isDungeonDoor(hit.id)) return null;
+    const id = hit.id;
+    let best = null;
+    const scan = (plane) => {
+      const center = plane === 'x' ? hit.bz : hit.bx;
+      for (let y0 = hit.by - 2; y0 <= hit.by; y0++) {
+        if (y0 < 0 || y0 + 2 >= World.H) continue;
+        for (let s0 = center - 2; s0 <= center; s0++) {
+          const cells = [], lower = [], top = [];
+          let same = 0, topSame = 0, lowerSame = 0, hitInside = false;
+          for (let dy = 0; dy < 3; dy++) {
+            for (let ds = 0; ds < 3; ds++) {
+              const x = plane === 'x' ? hit.bx : s0 + ds;
+              const z = plane === 'x' ? s0 + ds : hit.bz;
+              const y = y0 + dy;
+              const bid = World.getBlock(x, y, z);
+              if (x === hit.bx && y === hit.by && z === hit.bz) hitInside = true;
+              const cell = [x, y, z];
+              if (bid === id) {
+                same++;
+                cells.push(cell);
+                if (dy === 2) topSame++;
+                else lowerSame++;
+              }
+              if (dy === 2) top.push(cell);
+              else lower.push(cell);
+            }
+          }
+          if (!hitInside) continue;
+          const closed = same === 9;
+          const open = topSame === 3 && lowerSame === 0;
+          if (!closed && !open) continue;
+          const gate = { id, plane, y0, s0, closed, open, cells, lower, top };
+          if (closed) return gate;
+          best = best || gate;
+        }
+      }
+      return null;
+    };
+    return scan('x') || scan('z') || best;
+  },
+
+  openDungeonDoor(hit) {
+    const keyId = dungeonDoorKeyForId(hit.id);
+    const rankName = dungeonDoorNameForId(hit.id);
+    if (!keyId) return false;
+    const gate = this.dungeonGateForHit(hit);
+    if (!gate) {
+      UI.chat('This dungeon gate is incomplete.', '#ff8080');
+      return false;
+    }
+    if (gate.open) {
+      UI.chat(rankName + ' Dungeon Gate is already open.', '#c77dff');
+      return true;
+    }
+    if (this.gamemode !== 'creative' && !this.removeItems(keyId, 1)) {
+      UI.chat('Requires a ' + rankName + ' Dungeon Key.', '#ff8080');
+      return false;
+    }
+    for (const [x, y, z] of gate.lower) {
+      if (World.getBlock(x, y, z) === hit.id) World.setBlock(x, y, z, B.AIR, { noUpdate: true, skipPortalCheck: true });
+    }
+    if (World.remeshCellsNow) World.remeshCellsNow(gate.lower.concat(gate.top), 6);
+    else if (World.remeshDirtyNow) World.remeshDirtyNow(hit.bx, hit.bz, 6, 1);
+    SFX.doorSound();
+    UI.chat(rankName + ' Dungeon Gate opened.', '#c77dff');
+    return true;
+  },
+
   placementBlockedByBodies(placeId, bx, by, bz) {
     if (Physics.placementBlocked(placeId, bx, by, bz, this.body)) return true;
     for (const m of Mobs.list) {
@@ -784,7 +917,7 @@ const Player = {
 
   tryPlace(s, hit) {
     let bx = hit.bx + hit.nx, by = hit.by + hit.ny, bz = hit.bz + hit.nz;
-    if (by < 0 || by >= World.H) return false;
+    if (by < 0) return false;
 
     // snow sheets stack in place
     if (s.id === B.SNOW_SHEET_1 && isSnowSheet(hit.id)) {
@@ -942,6 +1075,14 @@ const Player = {
       } else return false;
     } else if (s.id === B.SNOW_SHEET_1) {
       if (!Physics.solidAt(bx + 0.5, by - 0.5, bz + 0.5)) return false;
+    } else if (s.id === B.MEGA_TORCH) {
+      // must stand on solid, full-cube ground — not in the air, and not on another mega
+      // torch / partial / transparent block
+      const belowDef = Reg[World.getBlock(bx, by - 1, bz)];
+      if (!(belowDef && belowDef.block && belowDef.solid && belowDef.opaque && belowDef.shape === 'cube')) {
+        UI.chat('The Mega Torch needs solid ground beneath it.', '#ff8080');
+        return false;
+      }
     } else if (Reg[s.id].needsSupport && !Physics.solidAt(bx + 0.5, by - 0.5, bz + 0.5)) {
       return false;
     }
@@ -954,7 +1095,33 @@ const Player = {
       return false;
     }
 
-    World.setBlock(bx, by, bz, placeId);
+    const placeOpts = {};
+    const storedJellyHouse = (placeId === B.JELLY_HOUSE && typeof Jelly !== 'undefined') ? Jelly.readHouseItemData(s.data) : null;
+    if (placeId === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
+      if (storedJellyHouse) {
+        const canonicalJellyHouseItem = Jelly.serializeHouseItem(storedJellyHouse.stored);
+        placeOpts.jellyHouse = canonicalJellyHouseItem;
+        placeOpts.itemData = canonicalJellyHouseItem;
+        placeOpts.stored = storedJellyHouse.stored;
+        placeOpts.source = 'player_item';
+      } else {
+        placeOpts.source = 'player_item_empty';
+        placeOpts.stored = [];
+      }
+    }
+    World.setBlock(bx, by, bz, placeId, Object.keys(placeOpts).length ? placeOpts : undefined);
+    // Safety invariant: after placing any Jelly House item, the placed block
+    // record must be created/overwritten from that item path, not from stale
+    // records or legacy defaults.
+    if (placeId === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
+      const hk = World.pkey(bx, by, bz);
+      const existingHouse = Jelly.getHouseByKey(hk);
+      if (storedJellyHouse) {
+        Jelly.setHouse(hk, Object.assign({}, existingHouse || {}, { key: hk, stored: storedJellyHouse.stored, source: 'player_item_verified' }));
+      } else {
+        Jelly.setHouse(hk, Object.assign({}, existingHouse || {}, { key: hk, stored: [], source: 'player_item_empty_verified' }));
+      }
+    }
     if (isStairs(placeId)) {
       if (sidewaysStairData && World.stairSideways) World.stairSideways.set(placeKey, sidewaysStairData);
       else if (World.stairSideways) World.stairSideways.delete(placeKey);
@@ -1259,6 +1426,12 @@ const Player = {
     } else if (isDoor(id)) {
       kind = 'door';
       cells = this.doorGroupForHit(hit.bx, hit.by, hit.bz, id);
+    } else if (isDungeonDoor(id)) {
+      const gate = this.dungeonGateForHit(hit);
+      if (gate && gate.cells && gate.cells.length) {
+        kind = 'dungeonGate';
+        cells = gate.cells;
+      }
     }
 
     if (kind === 'single') {
@@ -1657,7 +1830,8 @@ const Player = {
 
       const def = Reg[hit.id];
       // creative smashes bedrock too
-      canMine = !!(this.lmb && def && (def.hard !== Infinity || this.gamemode === 'creative'));
+      const dungeonProtected = this.gamemode !== 'creative' && World.isProtectedDungeonBlock && World.isProtectedDungeonBlock(hit.bx, hit.by, hit.bz, hit.id);
+      canMine = !!(this.lmb && def && !dungeonProtected && (def.hard !== Infinity || this.gamemode === 'creative'));
       if (canMine) ({ time, toolOk } = this.miningStats(hit.id));
     }
 
@@ -1667,8 +1841,10 @@ const Player = {
     this.syncBreakDamageToNet();
 
     if (!canMine) {
+      this.mining = false;
       this.mineTarget = null;
       this.mineProgress = entry ? entry.progress : 0;
+      if (this.lmb) this.keepActionSwinging(dt, 0.24);
       if (hit && target && entry && entry.progress > 0) {
         entry.vis = this.snapshotBreakTarget(target);
         entry.sig = target.key;
@@ -1705,6 +1881,8 @@ const Player = {
     entry.vis = this.snapshotBreakTarget(target);
 
     this.mineTarget = key;
+    this.mining = true;
+    this.keepActionSwinging(dt, 0.24);
     const prevWearStage = Number.isFinite(entry.wearStage) ? entry.wearStage : -1;
     entry.progress += dt / time;
     const newWearStage = this.crackStageForProgress(entry.progress);
@@ -1719,15 +1897,25 @@ const Player = {
 
     if (entry.progress >= 1) {
       this.mineDamage.delete(key);
+      this.mining = false;
       this.mineProgress = 0;
       this.mineTarget = null;
       this.breakOverlay.visible = false;
+      const remeshCells = target && target.cells && target.cells.length
+        ? target.cells.map(c => [c[0], c[1], c[2]])
+        : [[hit.bx, hit.by, hit.bz]];
       this.breakBlockAt(hit.bx, hit.by, hit.bz, hit.id, toolOk, hit);
+      if (World.remeshCellsNow) World.remeshCellsNow(remeshCells, 4);
+      else if (World.remeshDirtyNow) World.remeshDirtyNow(hit.bx, hit.bz, 4, 1);
       this.renderStoredBreakDamage(null);
     }
   },
 
   breakOne(bx, by, bz, id, toolOk, noUpdate) {
+    if (this.gamemode !== 'creative' && World.isProtectedDungeonBlock && World.isProtectedDungeonBlock(bx, by, bz, id)) {
+      UI.chat('The dungeon is still active. Break its core first.', '#ff8080');
+      return;
+    }
     const mb = World.multiblockGroupFor && World.multiblockGroupFor(bx, by, bz);
     if (mb) {
       World.destroyMultiblockAt(bx, by, bz, { drop: this.gamemode !== 'creative' && toolOk, particles: true });
@@ -1735,7 +1923,38 @@ const Player = {
       if (toolOk && Reg[id].xp) this.addXp(Reg[id].xp);
       return;
     }
-    World.setBlock(bx, by, bz, B.AIR, noUpdate ? { noUpdate: true } : undefined);
+    if (id === B.DUNGEON_CORE) {
+      World.setBlock(bx, by, bz, B.DUNGEON_BRICK_INACTIVE, Object.assign(noUpdate ? { noUpdate: true } : {}, { skipPortalCheck: true }));
+      if (World.deactivateDungeonAt) World.deactivateDungeonAt(bx, by, bz);
+      Particles.blockBurst(bx, by, bz, id);
+      if (Reg[id].hard > 0.1) this.damageHeld(1);
+      if (this.gamemode !== 'creative' && toolOk) Drops.spawn(bx + 0.5, by + 0.55, bz + 0.5, I.DUNGEON_CORE_SHARD, 1);
+      if (toolOk && Reg[id].xp) this.addXp(Reg[id].xp);
+      return;
+    }
+    if (id === B.JELLY_HOUSE) {
+      // Snapshot the house item NBT before any block mutation can delete/repair
+      // registries. This is the authoritative singleplayer/host path for the
+      // dropped Jelly House item.
+      const preBreakItemData = (typeof Jelly !== 'undefined' && Jelly.itemDataForPlacedHouse)
+        ? Jelly.itemDataForPlacedHouse(bx, by, bz) : null;
+      const res = (typeof Jelly !== 'undefined') ? Jelly.breakHouseAt(bx, by, bz, { reason: 'player_mine' }) : null;
+      const dropData = (res && res.itemData) || preBreakItemData || (typeof Jelly !== 'undefined' ? Jelly.serializeHouseItem([]) : { jellyRoster: [] });
+      World.setBlock(bx, by, bz, B.AIR, Object.assign(noUpdate ? { noUpdate: true } : {}, { jellyHouseBreakHandled: true }));
+      Particles.blockBurst(bx, by, bz, id);
+      if (Reg[id].hard > 0.1) this.damageHeld(1);
+      if (this.gamemode !== 'creative' && toolOk) {
+        Drops.spawn(bx + 0.5, by + 0.4, bz + 0.5, B.JELLY_HOUSE, 1, null, undefined, dropData);
+      }
+      if (toolOk && Reg[id].xp) this.addXp(Reg[id].xp);
+      return;
+    }
+    const breakOpts = noUpdate ? { noUpdate: true } : {};
+    if (id === B.JELLY_CHEST && typeof Jelly !== 'undefined' && !(typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client')) {
+      Jelly.onChestAccess({ x: bx, y: by, z: bz, mode: 'break', wasJellyChest: true, oldId: id });
+      breakOpts.jellyChestBreakHandled = true;
+    }
+    World.setBlock(bx, by, bz, B.AIR, breakOpts);
     Particles.blockBurst(bx, by, bz, id);
     if (Reg[id].hard > 0.1) this.damageHeld(1); // trivial blocks don't wear tools
     if (id === B.LOG || id === B.BIRCH_LOG || id === B.SPRUCE_LOG || id === B.OASIS_LOG) Dynamics.queueLeafDecay(bx, by, bz);
@@ -1889,14 +2108,14 @@ const Player = {
       const s = this.inv[i];
       if (s) {
         Drops.spawn(this.body.x, this.body.y + 1, this.body.z, s.id, s.count,
-          [(Math.random() - 0.5) * 5, 2 + Math.random() * 3, (Math.random() - 0.5) * 5], s.dur);
+          [(Math.random() - 0.5) * 5, 2 + Math.random() * 3, (Math.random() - 0.5) * 5], s.dur, s.data);
         this.inv[i] = null;
       }
     }
     for (let i = 0; i < 4; i++) {
       if (this.armor[i]) {
         Drops.spawn(this.body.x, this.body.y + 1, this.body.z, this.armor[i].id, 1,
-          null, this.armor[i].dur);
+          null, this.armor[i].dur, this.armor[i].data);
         this.armor[i] = null;
       }
     }
@@ -1910,9 +2129,9 @@ const Player = {
     this.fallDist = 0;
     this.swimming = false;
     this.body.h = 1.8;
-    // respawn in the spawn point's OWN dimension — dying in another dimension must send
-    // you home, not drop you at your home coordinates in the wrong world (void fall).
-    const spawnDim = this.spawn.dim || 'overworld';
+    // Old saved dimension bed spawns normalize back to the overworld.
+    const spawnDim = 'overworld';
+    if (this.spawn) this.spawn.dim = 'overworld';
     if (typeof Dimensions !== 'undefined' && Dimensions.current !== spawnDim && Dimensions.switchTo) {
       Dimensions.travelCooldown = 0;
       Dimensions.switchTo(spawnDim, { x: this.spawn.x, y: this.spawn.y, z: this.spawn.z });
@@ -2145,7 +2364,22 @@ const Player = {
     });
   },
 
-  swingViewmodel() { this.vmSwing = 1; },
+  swingViewmodel() {
+    this.vmSwing = 1;
+    this.swingSeq = ((this.swingSeq || 0) + 1) % 1000000;
+    this.swingIntentT = 0.35;
+    this.swingLoopT = 0.24;
+  },
+
+  keepActionSwinging(dt, period) {
+    const p = period || 0.24;
+    this.swingIntentT = Math.max(this.swingIntentT || 0, p + 0.1);
+    this.swingLoopT = Math.max(0, (this.swingLoopT || 0) - dt);
+    if (this.swingLoopT <= 0) {
+      this.swingViewmodel();
+      this.swingLoopT = p;
+    }
+  },
 
   updateViewmodel(dt) {
     this.updateViewmodelItem();
@@ -2177,6 +2411,8 @@ const Player = {
     if (this.invulnT > 0) this.invulnT -= dt;
     if (this.attackT > 0) this.attackT -= dt;
     if (this.eatT > 0) this.eatT -= dt;
+    if (this.swingIntentT > 0) this.swingIntentT = Math.max(0, this.swingIntentT - dt);
+    if (!this.lmb) this.swingLoopT = 0;
 
     const b = this.body;
     if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) {
@@ -2231,6 +2467,7 @@ const Player = {
 
     if (driving) {
       // vehicle handles it
+      this.fallDist = 0;
     } else if (this.flying && this.gamemode === 'creative') {
       const speed = this.sprinting ? 19 : 11;
       b.vx += (mx * speed - b.vx) * Math.min(1, 10 * dt);
@@ -2337,7 +2574,9 @@ const Player = {
         if (fallingBefore && wasY > b.y) this.fallDist += wasY - b.y;
         if (b.onGround) {
           if (this.fallDist > 3.2) {
-            const dmg = Math.floor(this.fallDist - 3);
+            const boots = this.armor && this.armor[3] && Reg[this.armor[3].id];
+            const fallFactor = boots && boots.armor && boots.armor.fallFactor ? boots.armor.fallFactor : 1;
+            const dmg = Math.floor((this.fallDist - 3) * fallFactor);
             if (dmg > 0) this.hurt(dmg, 0, 0, { pierce: true });
           }
           this.fallDist = 0;
@@ -2346,7 +2585,7 @@ const Player = {
     }
 
     if (b.y < -12 && !this.dead) {
-      UI.chat((typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') ? 'The Merry void eats you instantly.' : 'The void eats you instantly.', '#ff8080');
+      UI.chat('The void eats you instantly.', '#ff8080');
       this.die();
       return;
     }
@@ -2387,9 +2626,13 @@ const Player = {
         }
       }
     } else {
+      this.mining = false;
+      this.swingLoopT = 0;
+      this.tickMineDamage(dt, null);
+      this.syncBreakDamageToNet();
       this.highlight.visible = false;
       this.breakOverlay.visible = false;
-      if (this.breakDamageOverlays) for (const m of this.breakDamageOverlays) m.visible = false;
+      this.renderStoredBreakDamage(null);
     }
 
     this.updateViewmodel(dt);

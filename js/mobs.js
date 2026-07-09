@@ -37,10 +37,17 @@ const FLOOP_LINES_HURT = [
   'i bruise green, you know.',
 ];
 const HUMBUG_LINES = ['no.', 'bah.', 'christmas is CANCELLED.', 'patapim is propaganda.', 'hand over the diamonds.', 'joy detected. eliminating.'];
+const JELLY_COLORS = (typeof JELLY_COLORS_ALL !== 'undefined') ? JELLY_COLORS_ALL : ['pink', 'cyan', 'lime', 'grape', 'orange', 'yellow'];
+const JELLY_COLOR_HEX = { pink: 0xff7fd4, cyan: 0x6ee8ff, lime: 0x9cff6e, grape: 0xc77dff, orange: 0xff9d4a, yellow: 0xffe86e };
+const JELLY_MOB_TYPES = ['jelly', 'big_jelly'];
 
-const MOB_XP = { creeper: 5, skeleton: 5, spider: 4, humbug: 8, sheep: 1, floop: 0, chicken: 1, camel: 2, tung: 12 };
-const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36 };
-const HOSTILES = ['creeper', 'skeleton', 'spider', 'humbug', 'tung'];
+const MOB_XP = { creeper: 5, skeleton: 5, spider: 4, humbug: 8, sheep: 1, floop: 0, chicken: 1, camel: 2, tung: 12, jelly: 1, big_jelly: 3 };
+const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36, jelly: 8, big_jelly: 20 };
+const MOB_HEIGHTS = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4, jelly: 0.95, big_jelly: 1.8 };
+const MOB_WIDTHS = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4, jelly: 0.24, big_jelly: 0.34 };
+const HOSTILES = ['creeper', 'skeleton', 'humbug', 'tung'];
+const MOB_TARGET_MEMORY = 30; // seconds: mobs remember a target after LOS breaks, but only acquire targets through LOS
+const MOB_TARGET_FORGET_DIST = 34;
 
 function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -113,6 +120,51 @@ const Mobs = {
     return cv;
   },
 
+  jellyPartCanvas(color, part) {
+    const cv = document.createElement('canvas');
+    cv.width = 16; cv.height = 16;
+    const c = cv.getContext('2d');
+    const hex = JELLY_COLOR_HEX[color] || 0xff7fd4;
+    const base = '#' + hex.toString(16).padStart(6, '0');
+    const light = { pink:'#ffb8ea', cyan:'#bcf6ff', lime:'#d5ffc1', grape:'#e2bfff', orange:'#ffd0a0', yellow:'#fff6b8' }[color] || '#ffb8ea';
+    const dark = { pink:'#b83b99', cyan:'#268ba8', lime:'#459a31', grape:'#7430b0', orange:'#a74b19', yellow:'#aa8f1f' }[color] || '#b83b99';
+    c.fillStyle = base; c.fillRect(0, 0, 16, 16);
+    c.fillStyle = 'rgba(0,0,0,0.12)'; c.fillRect(0, 11, 16, 5);
+    c.fillStyle = light; c.fillRect(2, 2, 5, 2); c.fillRect(3, 4, 2, 1);
+    c.fillStyle = 'rgba(255,255,255,0.23)'; c.fillRect(10, 3, 2, 8);
+    c.fillStyle = dark; c.fillRect(0, 15, 16, 1); c.fillRect(0, 0, 1, 16); c.fillRect(15, 0, 1, 16);
+    const seed = (part || 'jelly').length + (color || 'pink').length * 11;
+    for (let i = 0; i < 22; i++) {
+      const x = (i * 7 + seed) % 16, y = (i * 5 + seed * 3) % 16;
+      c.fillStyle = (i % 3 === 0) ? light : (i % 3 === 1 ? base : dark);
+      c.globalAlpha = i % 3 === 0 ? 0.55 : 0.28;
+      c.fillRect(x, y, 1, 1);
+    }
+    c.globalAlpha = 1;
+    if (part === 'head_face') {
+      c.fillStyle = '#1a1a1a'; c.fillRect(3, 6, 2, 2); c.fillRect(11, 6, 2, 2); c.fillRect(5, 11, 6, 1);
+    }
+    return cv;
+  },
+
+  jellyBox(w, h, d, color, part) {
+    const g = new THREE.BoxGeometry(w, h, d);
+    const makeMat = (partName) => {
+      const tex = new THREE.CanvasTexture(this.jellyPartCanvas(color, partName));
+      tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+      const mat = new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.88 });
+      mat.userData.mobBaseCol = new THREE.Color(0xffffff);
+      return mat;
+    };
+    if (part === 'head') {
+      const plain = makeMat('head');
+      const face = makeMat('head_face');
+      // BoxGeometry material index 4 is the forward/front face, same convention as the other mob heads.
+      return new THREE.Mesh(g, [plain, plain, plain, plain, face, plain]);
+    }
+    return new THREE.Mesh(g, makeMat(part));
+  },
+
   frogFace() {
     return this.faceCanvas(c => {
       c.fillStyle = '#4db843'; c.fillRect(0, 0, 8, 8);
@@ -175,6 +227,16 @@ const Mobs = {
       c.fillStyle = '#000'; c.fillRect(1, 2, 1, 1); c.fillRect(6, 2, 1, 1);
       c.fillStyle = '#ff9d2e'; c.fillRect(3, 4, 2, 2); // beak
       c.fillStyle = '#c02020'; c.fillRect(3, 6, 2, 2); // wattle
+    });
+  },
+
+  jellyFace(color) {
+    return this.faceCanvas(c => {
+      const hex = JELLY_COLOR_HEX[color] || 0xff7fd4;
+      c.fillStyle = '#' + hex.toString(16).padStart(6, '0'); c.fillRect(0, 0, 8, 8);
+      c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillRect(1, 1, 3, 1);
+      c.fillStyle = '#1a1a1a'; c.fillRect(1, 3, 1, 1); c.fillRect(6, 3, 1, 1);
+      c.fillRect(2, 6, 4, 1);
     });
   },
 
@@ -279,6 +341,25 @@ const Mobs = {
         const wing = this.box(0.08, 0.3, 0.4, 0xe8e8e8);
         wing.position.set(side * 0.3, 0.55, 0);
         g.add(wing); parts.legs.push(wing);
+      }
+    } else if (type === 'jelly' || type === 'big_jelly') {
+      parts.arms = [];
+      const big = type === 'big_jelly';
+      const body = this.jellyBox(big ? 0.62 : 0.34, big ? 0.78 : 0.38, big ? 0.34 : 0.22, color, 'body');
+      body.position.y = big ? 0.86 : 0.48;
+      const head = this.jellyBox(big ? 0.54 : 0.34, big ? 0.48 : 0.30, big ? 0.54 : 0.34, color, 'head');
+      head.position.y = big ? 1.49 : 0.82;
+      g.add(body, head);
+      parts.head = head;
+      for (const px of (big ? [-0.17, 0.17] : [-0.09, 0.09])) {
+        const leg = this.jellyBox(big ? 0.18 : 0.12, big ? 0.72 : 0.32, big ? 0.16 : 0.12, color, 'leg');
+        leg.position.set(px, big ? 0.36 : 0.16, 0);
+        g.add(leg); parts.legs.push(leg);
+      }
+      for (const px of (big ? [-0.43, 0.43] : [-0.24, 0.24])) {
+        const arm = this.jellyBox(big ? 0.15 : 0.09, big ? 0.70 : 0.32, big ? 0.14 : 0.09, color, 'arm');
+        arm.position.set(px, big ? 0.90 : 0.49, 0);
+        g.add(arm); parts.arms.push(arm); parts.legs.push(arm);
       }
     } else if (type === 'camel') {
       const tan = 0xd2a24c;
@@ -400,15 +481,14 @@ const Mobs = {
       const existing = this.liveFloops()[0];
       if (existing) return existing;
     }
+    if ((type === 'jelly' || type === 'big_jelly') && !color) color = JELLY_COLORS[(Math.random() * JELLY_COLORS.length) | 0];
     const { group, parts } = this.buildModel(type, gunId, color);
     group.position.set(x, y, z);
     this.scene.add(group);
-    const heights = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4 };
-    const widths = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4 };
     const hps = MOB_MAX_HP;
     const mob = {
       type, group, parts, gunId: gunId || null, color: color || null,
-      body: { x, y, z, vx: 0, vy: 0, vz: 0, w: widths[type], h: heights[type], onGround: false, hitH: false },
+      body: { x, y, z, vx: 0, vy: 0, vz: 0, w: MOB_WIDTHS[type] || 0.35, h: MOB_HEIGHTS[type] || 1.8, onGround: false, hitH: false },
       hp: hps[type],
       yaw: Math.random() * Math.PI * 2, targetYaw: 0,
       state: 'wander', stateT: 1 + Math.random() * 3,
@@ -431,6 +511,7 @@ const Mobs = {
       for (const mat of mats) if (mat.color && !mat.userData.mobBaseCol) mat.userData.mobBaseCol = mat.color.clone();
     });
     mob.targetYaw = mob.yaw;
+    if ((type === 'jelly' || type === 'big_jelly') && typeof Jelly !== 'undefined') Jelly.initMob(mob, 'spawned');
     this.list.push(mob);
     return mob;
   },
@@ -513,6 +594,42 @@ const Mobs = {
     return mob.hp;
   },
 
+  updateMobBreathingAndSuffocation(mob, dt) {
+    if (!mob || !mob.body || typeof Physics === 'undefined') return false;
+    const b = mob.body;
+    const headOff = Math.max(0.45, (b.h || 1) * 0.82);
+    const headWater = Physics.inWater(b, headOff);
+    if (headWater) {
+      mob.air = Math.max(0, Number.isFinite(+mob.air) ? +mob.air - dt : 10 - dt);
+      if (mob.air <= 0) {
+        mob.drownT = (mob.drownT || 0) - dt;
+        if (mob.drownT <= 0) {
+          mob.drownT = 1.0;
+          this.hurt(mob, 2, 0, 0, 'drown');
+          if (typeof Particles !== 'undefined') Particles.burst(b.x, b.y + headOff, b.z, [0.45, 0.65, 1], 5, 1.2);
+        }
+      }
+    } else {
+      mob.air = 10;
+      mob.drownT = 0;
+    }
+
+    const stuckInSolid = Physics.boxHit(
+      b.x - (b.w || 0.3) * 0.85, b.y + 0.12, b.z - (b.w || 0.3) * 0.85,
+      b.x + (b.w || 0.3) * 0.85, b.y + Math.max(0.45, (b.h || 1) - 0.08), b.z + (b.w || 0.3) * 0.85
+    );
+    if (stuckInSolid) {
+      mob.suffocateT = (mob.suffocateT || 0) - dt;
+      if (mob.suffocateT <= 0) {
+        mob.suffocateT = 0.5;
+        this.hurt(mob, 1, 0, 0, 'suffocate');
+      }
+    } else {
+      mob.suffocateT = 0;
+    }
+    return !!mob.dead || mob.hp <= 0;
+  },
+
   cleanDamage(dmg) {
     const n = +dmg;
     if (!Number.isFinite(n) || n <= 0) return 0;
@@ -547,7 +664,15 @@ const Mobs = {
     }
     SFX.mobHurt({ x: mob.body.x, y: mob.body.y + mob.body.h * 0.7, z: mob.body.z });
     this.tryFloopHurtSpeech(mob, src);
-    if (mob.type === 'sheep' || mob.type === 'chicken' || mob.type === 'camel') { mob.fleeT = 4; if (mob.type === 'sheep') SFX.sheep({ x: mob.body.x, y: mob.body.y + 0.8, z: mob.body.z }); }
+    if (mob.type === 'jelly' || mob.type === 'big_jelly') {
+      mob.fleeT = 0;
+      if (src === 'player') { mob.angryPlayerT = mob.type === 'big_jelly' ? 18 : 12; this.panicJellyHouse(mob.jellyHome || mob.fromSpawner, 10, true); }
+      else if (src && typeof src === 'object' && src !== mob && !src.dead) { mob.angryAt = src; this.panicJellyHouse(mob.jellyHome || mob.fromSpawner, 10, false); }
+      else this.panicJellyHouse(mob.jellyHome || mob.fromSpawner, 10, false);
+    } else if (mob.type === 'sheep' || mob.type === 'chicken' || mob.type === 'camel') {
+      mob.fleeT = 4;
+      if (mob.type === 'sheep') SFX.sheep({ x: mob.body.x, y: mob.body.y + 0.8, z: mob.body.z });
+    }
     if (mob.hp <= 0) this.kill(mob);
   },
 
@@ -568,8 +693,9 @@ const Mobs = {
     } else if (mob.type === 'chicken') {
       Drops.spawn(b.x, b.y + 0.5, b.z, I.FEATHER, 1 + ((Math.random() * 2) | 0));
       Drops.spawn(b.x, b.y + 0.5, b.z, I.RAW_CHICKEN, 1);
-    } else if (mob.type === 'spider') {
-      Drops.spawn(b.x, b.y + 0.5, b.z, I.STRING, (Math.random() * 3) | 0 || 1);
+    } else if (mob.type === 'jelly' || mob.type === 'big_jelly') {
+      const globId = (typeof JELLY_GLOB_BY_COLOR !== 'undefined' && JELLY_GLOB_BY_COLOR[mob.color]) ? JELLY_GLOB_BY_COLOR[mob.color] : I.JELLY_GLOB_PINK;
+      Drops.spawn(b.x, b.y + 0.35, b.z, globId, mob.type === 'big_jelly' ? 5 + ((Math.random() * 2) | 0) : 1);
     } else if (mob.type === 'tung') {
       Drops.spawn(b.x, b.y + 0.5, b.z, B.LOG, 1 + ((Math.random() * 2) | 0));
       if (Math.random() < 0.25) Drops.spawn(b.x, b.y + 0.5, b.z, I.BAT, 1);
@@ -711,27 +837,276 @@ const Mobs = {
     return out;
   },
 
-  // current target for a hostile mob: a feud rival, else the (non-creative) player
-  targetOf(m) {
-    if (m.angryAt) {
-      if (m.angryAt.dead) m.angryAt = null;
-      else {
-        const b = m.angryAt.body;
-        const d = Math.sqrt((b.x - m.body.x) ** 2 + (b.z - m.body.z) ** 2);
-        if (d > 30) m.angryAt = null;
-        else return { x: b.x, y: b.y, z: b.z, h: b.h, mob: m.angryAt, isPlayer: false };
-      }
-    }
-    if (!Player.dead && Player.gamemode !== 'creative') {
-      const p = Player.body;
-      return { x: p.x, y: p.y, z: p.z, h: p.h, mob: null, isPlayer: true };
-    }
+  mobUid(m) {
+    if (!m) return '';
+    if (!m._uid) m._uid = 'lm' + Math.random().toString(36).slice(2, 10);
+    return m.mpId || m._uid;
+  },
+
+  makeTargetForMob(o) {
+    if (!o || o.dead || !o.body) return null;
+    const b = o.body;
+    return { x: b.x, y: b.y, z: b.z, h: b.h, mob: o, isPlayer: false };
+  },
+
+  makePlayerTarget() {
+    if (typeof Player === 'undefined' || Player.dead || Player.gamemode === 'creative' || !Player.body) return null;
+    const p = Player.body;
+    return { x: p.x, y: p.y, z: p.z, h: p.h, mob: null, isPlayer: true };
+  },
+
+  targetKey(tgt) {
+    if (!tgt) return '';
+    if (tgt.isPlayer) return 'player';
+    if (tgt.mob) return 'mob:' + this.mobUid(tgt.mob);
+    return '';
+  },
+
+  canSeeTarget(m, tgt) {
+    if (!m || !m.body || !tgt) return false;
+    if (tgt.isPlayer && (typeof Player === 'undefined' || Player.dead || Player.gamemode === 'creative')) return false;
+    if (tgt.mob && (tgt.mob.dead || !tgt.mob.body)) return false;
+    if (!tgt.isPlayer && !tgt.mob && !Number.isFinite(tgt.x)) return false;
+    if (typeof World === 'undefined' || !World.lineOfSight) return true;
+    const b = m.body;
+    const tx = tgt.isPlayer ? Player.body.x : (tgt.mob ? tgt.mob.body.x : tgt.x);
+    const tyBase = tgt.isPlayer ? Player.body.y : (tgt.mob ? tgt.mob.body.y : tgt.y);
+    const tz = tgt.isPlayer ? Player.body.z : (tgt.mob ? tgt.mob.body.z : tgt.z);
+    const th = tgt.isPlayer ? (Player.body.h || tgt.h || 1.8) : (tgt.mob ? (tgt.mob.body.h || tgt.h || 1) : (tgt.h || 1));
+    // Try eyes first, then chest. A thin tree/leaf/step should not make mobs blind,
+    // but solid terrain between caves should block target acquisition.
+    const sx = b.x, sz = b.z;
+    const syEye = b.y + Math.max(0.35, b.h * 0.82);
+    const syChest = b.y + Math.max(0.25, b.h * 0.55);
+    const tyEye = tyBase + Math.max(0.30, th * 0.82);
+    const tyChest = tyBase + Math.max(0.20, th * 0.55);
+    return !!(World.lineOfSight(sx, syEye, sz, tx, tyEye, tz) || World.lineOfSight(sx, syChest, sz, tx, tyChest, tz));
+  },
+
+  rememberTarget(m, tgt) {
+    if (!m || !tgt) return;
+    const key = this.targetKey(tgt);
+    if (!key) return;
+    m.targetMemoryKey = key;
+    m.targetMemoryT = MOB_TARGET_MEMORY;
+    m.targetLastSeen = {
+      x: tgt.x, y: tgt.y, z: tgt.z, h: tgt.h || 1,
+      isPlayer: !!tgt.isPlayer,
+      mob: tgt.mob || null,
+      mobType: tgt.mob ? tgt.mob.type : (tgt.isPlayer ? 'player' : ''),
+    };
+  },
+
+  forgetTargetMemory(m) {
+    if (!m) return;
+    m.targetMemoryKey = '';
+    m.targetMemoryT = 0;
+    m.targetLastSeen = null;
+    if (m.path && m.path.length) m.path = null;
+    m.pathGoalKey = '';
+    m.pathSearchDir = null;
+    m.pathUnreachableT = 0;
+    m.pathRetryT = 0;
+  },
+
+  rememberedTarget(m, maxDist) {
+    if (!m || !m.body || !m.targetMemoryKey || !(m.targetMemoryT > 0) || !m.targetLastSeen) return null;
+
+    // Important: LOS memory is a LAST-SEEN POSITION, not magic wall-hack tracking.
+    // The old code returned the live mob/player body for 30 seconds after LOS broke,
+    // so idle NPCs would "remember" underground mobs and twitch/pathfind at the
+    // current cave position through solid terrain.  Now they walk to the last spot
+    // they actually saw, then forget unless they regain LOS.
+    const last = m.targetLastSeen;
+    const tx = +last.x, ty = +last.y, tz = +last.z;
+    if (!Number.isFinite(tx) || !Number.isFinite(ty) || !Number.isFinite(tz)) { this.forgetTargetMemory(m); return null; }
+
+    const d2 = (tx - m.body.x) ** 2 + (tz - m.body.z) ** 2 + ((ty - m.body.y) ** 2) * 0.25;
+    const lim = maxDist || MOB_TARGET_FORGET_DIST;
+    if (d2 > lim * lim) { this.forgetTargetMemory(m); return null; }
+
+    // Once the mob reaches the last-known spot, stop burning pathing/turning on it.
+    if (d2 < 0.85 * 0.85) { this.forgetTargetMemory(m); return null; }
+
+    return {
+      x: tx, y: ty, z: tz, h: last.h || 1,
+      isPlayer: false, mob: null,
+      memoryOnly: true,
+      memoryKey: m.targetMemoryKey,
+      memoryMobType: last.mobType || '',
+    };
+  },
+
+  visibleOrRememberedTarget(m, tgt, maxDist) {
+    if (!m || !tgt) return null;
+    if (this.canSeeTarget(m, tgt)) { this.rememberTarget(m, tgt); return tgt; }
+    const key = this.targetKey(tgt);
+    if (key && m.targetMemoryKey === key) return this.rememberedTarget(m, maxDist);
     return null;
   },
 
+  // current target for a hostile mob: a feud rival, else the nearest natural victim.
+  // Hostiles now require line-of-sight to ACQUIRE targets. Once they see someone,
+  // they remember for a short time so ducking behind a tree/corner does not instantly
+  // reset them, but underground mobs do not get targeted through terrain anymore.
+  targetOf(m) {
+    if (!m || !m.body) return null;
+    if (m.angryAt) {
+      if (m.angryAt.dead) m.angryAt = null;
+      else {
+        const angryTgt = this.makeTargetForMob(m.angryAt);
+        const kept = this.visibleOrRememberedTarget(m, angryTgt, 30);
+        if (kept) return kept;
+        // If a feud target has been hidden too long, stop burning pathfinding on it.
+        if (!(m.targetMemoryT > 0)) m.angryAt = null;
+      }
+    }
+
+    let best = null;
+    let bestD2 = Infinity;
+    const playerTgt = this.makePlayerTarget();
+    if (playerTgt && this.canSeeTarget(m, playerTgt)) {
+      const p = Player.body;
+      best = playerTgt;
+      bestD2 = (p.x - m.body.x) ** 2 + (p.z - m.body.z) ** 2 + ((p.y - m.body.y) ** 2) * 0.25;
+    }
+    for (const o of this.list) {
+      if (!o || o.dead || o === m || !JELLY_MOB_TYPES.includes(o.type)) continue;
+      const cand = this.makeTargetForMob(o);
+      if (!this.canSeeTarget(m, cand)) continue;
+      const ob = o.body;
+      const d2 = (ob.x - m.body.x) ** 2 + (ob.z - m.body.z) ** 2 + ((ob.y - m.body.y) ** 2) * 0.25;
+      // Do not make monsters path across half the world for a jelly, but do let
+      // them naturally pick nearby Jelly People over a farther player.
+      if (d2 < bestD2 && d2 < 28 * 28) {
+        bestD2 = d2;
+        best = cand;
+      }
+    }
+    if (best) { this.rememberTarget(m, best); return best; }
+    return this.rememberedTarget(m, 28);
+  },
+
   dmgTarget(tgt, dmg, kx, kz, src) {
+    if (!tgt || tgt.memoryOnly) return;
     if (tgt.isPlayer) Player.hurt(dmg, kx, kz);
-    else this.hurt(tgt.mob, dmg, kx, kz, src);
+    else if (tgt.mob && !tgt.mob.dead) this.hurt(tgt.mob, dmg, kx, kz, src);
+  },
+
+  panicJellyHouse(key, seconds, playerAnger) {
+    if (!key || typeof Jelly === 'undefined') return false;
+    if (typeof key === 'string' && key.indexOf(',') >= 0) return Jelly.panicHouseByKey(key, seconds, playerAnger);
+    const house = Jelly.getHouseById(key);
+    return house ? Jelly.panicHouseByKey(house.key, seconds, playerAnger) : false;
+  },
+
+  returnJellyHome(mob) {
+    return (typeof Jelly !== 'undefined') ? Jelly.enterHouse(mob, 'idle_return') : false;
+  },
+
+  adoptNearbyJellyHouse(m, radius = 10) {
+    return (typeof Jelly !== 'undefined') ? Jelly.tryAdoptNearest(m, radius) : false;
+  },
+
+  jellyTargetOf(m) {
+    if (!m || !m.body) return null;
+    if (m.angryAt) {
+      if (m.angryAt.dead) m.angryAt = null;
+      else {
+        const angryTgt = this.makeTargetForMob(m.angryAt);
+        const kept = this.visibleOrRememberedTarget(m, angryTgt, 18);
+        if (kept) return kept;
+        if (!(m.targetMemoryT > 0)) m.angryAt = null;
+      }
+    }
+    if (m.angryPlayerT > 0) {
+      const playerTgt = this.makePlayerTarget();
+      const kept = this.visibleOrRememberedTarget(m, playerTgt, 18);
+      if (kept) return kept;
+    }
+    let best = null, bestD = 12 * 12;
+    for (const o of this.list) {
+      if (!o || o.dead || o === m || !HOSTILES.includes(o.type)) continue;
+      const cand = this.makeTargetForMob(o);
+      if (!this.canSeeTarget(m, cand)) continue;
+      const ob = o.body;
+      const d2 = (ob.x - m.body.x) ** 2 + (ob.z - m.body.z) ** 2 + ((ob.y - m.body.y) ** 2) * 0.25;
+      if (d2 < bestD) { bestD = d2; best = cand; }
+    }
+    if (best) { this.rememberTarget(m, best); return best; }
+    return this.rememberedTarget(m, 14);
+  },
+
+  jellyDangerFrog(m, screechedOnly, radius) {
+    if (!m || !m.body) return null;
+    const rr = (radius || 7) * (radius || 7);
+    let best = null, bestD = rr;
+    for (const o of this.list) {
+      if (!o || o.dead || o.type !== 'creeper') continue;
+      if (screechedOnly && !o.screeched) continue;
+      const cand = this.makeTargetForMob(o);
+      if (!this.canSeeTarget(m, cand)) continue;
+      const ob = o.body;
+      const d2 = (ob.x - m.body.x) ** 2 + (ob.z - m.body.z) ** 2 + ((ob.y - m.body.y) ** 2) * 0.2;
+      if (d2 < bestD) { bestD = d2; best = o; }
+    }
+    return best;
+  },
+
+  jellyFleeFrom(m, threat, dist) {
+    if (!m || !m.body || !threat || !threat.body) return null;
+    const b = m.body, tb = threat.body;
+    const dx = b.x - tb.x, dz = b.z - tb.z;
+    const dl = Math.sqrt(dx * dx + dz * dz) || 1;
+    return this.safeMoveDir(m, [dx / dl, dz / dl], dist || 1.65) || [dx / dl, dz / dl];
+  },
+
+  updateJellyMerges(dt) {
+    this.jellyMergeT = (this.jellyMergeT || 0) - dt;
+    if (this.jellyMergeT > 0) return;
+    this.jellyMergeT = 0.30;
+    const normals = this.list.filter(m => m && !m.dead && m.type === 'jelly' && m.color);
+    if (normals.length < 4) return;
+    const used = new Set();
+    for (const base of normals) {
+      if (used.has(base) || base.dead) continue;
+      const bb = base.body;
+      const color = base.color || 'pink';
+      const group = [];
+      for (const o of normals) {
+        if (used.has(o) || o.dead || o.color !== color) continue;
+        const ob = o.body;
+        if (Math.abs(ob.x - bb.x) <= 1.5 && Math.abs(ob.z - bb.z) <= 1.5 && Math.abs((ob.y + ob.h * 0.5) - (bb.y + bb.h * 0.5)) <= 1.5) group.push(o);
+      }
+      if (group.length < 4) continue;
+      const chosen = group.slice(0, 4);
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const j of chosen) {
+        const jb = j.body;
+        minX = Math.min(minX, jb.x); maxX = Math.max(maxX, jb.x);
+        minY = Math.min(minY, jb.y); maxY = Math.max(maxY, jb.y);
+        minZ = Math.min(minZ, jb.z); maxZ = Math.max(maxZ, jb.z);
+      }
+      if (maxX - minX > 3.05 || maxY - minY > 3.05 || maxZ - minZ > 3.05) continue;
+
+      let sx = 0, sy = 0, sz = 0, angryAt = null, angryPlayerT = 0;
+      for (const j of chosen) {
+        used.add(j); sx += j.body.x; sy += j.body.y; sz += j.body.z;
+        if (!angryAt && j.angryAt && !j.angryAt.dead) angryAt = j.angryAt;
+        angryPlayerT = Math.max(angryPlayerT, j.angryPlayerT || 0);
+      }
+      if (typeof Jelly !== 'undefined') for (const j of chosen) Jelly.makeHomeless(j, 'merged');
+      for (const j of chosen) this.despawnSilent(j);
+      const big = this.spawn('big_jelly', sx / 4, sy / 4, sz / 4, null, color);
+      if (typeof Jelly !== 'undefined') Jelly.onMergeIntoBig(chosen, big);
+      big.angryAt = angryAt;
+      big.angryPlayerT = angryPlayerT;
+      big.meleeT = 0.2;
+      big.mergeBornT = 1.0;
+      Particles.burst(big.body.x, big.body.y + 1.0, big.body.z, [1, 0.55, 0.9], 28, 4.0);
+      UI.chat('Four ' + color + ' Jelly People merged into a Big Jelly Person!', '#ffb8ea');
+      return;
+    }
   },
 
   // ---------- basic grounded mob pathfinding ----------
@@ -748,6 +1123,20 @@ const Mobs = {
     };
   },
 
+  spawnFits(type, x, y, z) {
+    if (typeof Physics === 'undefined' || typeof World === 'undefined') return true;
+    if (!World.hasChunk || !World.hasChunk(Math.floor(x), Math.floor(z))) return false;
+    const w = MOB_WIDTHS[type] || 0.35;
+    const h = MOB_HEIGHTS[type] || 1.8;
+    if (y < 1 || y + h >= World.H - 1) return false;
+    if (Physics.boxesIn(x - w, y + 0.04, z - w, x + w, y + h - 0.04, z + w).length) return false;
+    const footId = World.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
+    const belowId = World.getBlock(Math.floor(x), Math.floor(y - 0.16), Math.floor(z));
+    if ((typeof isWater === 'function') && (isWater(footId) || isWater(belowId))) return true;
+    const supportW = Math.max(0.08, Math.min(w * 0.75, 0.48));
+    return Physics.boxHit(x - supportW, y - 0.18, z - supportW, x + supportW, y + 0.03, z + supportW);
+  },
+
   pathCanStand(mob, cx, y, cz) {
     if (typeof World === 'undefined' || !World.hasChunk || !World.hasChunk(cx, cz)) return false;
     if (y < 1 || y > World.H - 3) return false;
@@ -760,10 +1149,11 @@ const Mobs = {
     // width and height, so a 1.1-block-wide spider rejects one-block doorways.
     if (Physics.boxesIn(x - w, y + 0.04, z - w, x + w, y + h - 0.04, z + w).length) return false;
 
-    // No walking straight into lava cells on purpose.
+    // No walking straight into hazards on purpose.  Fire/lava/cactus still hurt
+    // if a mob is knocked into them, but pathfinding should not choose them.
     const footId = World.getBlock(cx, y, cz);
     const belowId = World.getBlock(cx, y - 1, cz);
-    if ((typeof isLava === 'function') && (isLava(footId) || isLava(belowId))) return false;
+    if (this.pathHazardNear(mob, x, y, z)) return false;
 
     // Grounded mobs need something below them. Water counts because swimming mobs
     // can still move, and this keeps paths usable across ponds instead of failing.
@@ -795,6 +1185,8 @@ const Mobs = {
     if (!mob) return 3.2;
     if (mob.type === 'tung') return 2.05;
     if (mob.type === 'spider') return 1.95;
+    if (mob.type === 'jelly') return 1.1;
+    if (mob.type === 'big_jelly') return 1.75;
     if (mob.type === 'creeper') return 3.2;
     if (mob.type === 'humbug' && !mob.gunId) return 1.95;
     if (mob.type === 'floop') return 2.1;
@@ -872,7 +1264,7 @@ const Mobs = {
       if (Physics.boxesIn(x - w, sy + 0.04, z - w, x + w, sy + h - 0.04, z + w).length) return false;
       const footId = World.getBlock(cx, sy, cz);
       const belowId = World.getBlock(cx, sy - 1, cz);
-      if ((typeof isLava === 'function') && (isLava(footId) || isLava(belowId))) return false;
+      if (this.pathHazardNear(mob, x, sy, z)) return false;
       const inWater = (typeof isWater === 'function') && (isWater(footId) || isWater(belowId));
       if (!inWater && !Physics.boxHit(x - w * 0.75, sy - 0.18, z - w * 0.75, x + w * 0.75, sy + 0.03, z + w * 0.75)) return false;
       lastY = sy;
@@ -1031,6 +1423,14 @@ const Mobs = {
         mob.pathRetryT = 0;
         mob.pathSearchT = 0;
         mob.pathSearchDir = null;
+      } else if (path && path.length === 0) {
+        // Already in the goal cell. Do not mark it unreachable; let the direct
+        // segment code below steer the mob smoothly within the cell.
+        mob.path = [];
+        mob.pathUnreachableT = 0;
+        mob.pathRetryT = 0;
+        mob.pathSearchT = 0;
+        mob.pathSearchDir = null;
       } else {
         this.markPathUnreachable(mob);
         return this.unreachablePathMove(mob, tgt, dt);
@@ -1089,6 +1489,89 @@ const Mobs = {
     mob.detourDir = null;
   },
 
+  pathHazardNear(mob, x, y, z) {
+    // Survival-instinct probe used by A* and wandering.  Mobs should not
+    // intentionally route through lava/fire or scrape cactus sides while idle.
+    if (!mob || typeof World === 'undefined' || typeof B === 'undefined') return false;
+    const dims = this.pathBodyDims(mob);
+    const pad = 0.18;
+    const minX = Math.floor(x - dims.w - pad), maxX = Math.floor(x + dims.w + pad);
+    const minY = Math.floor(y - 0.08), maxY = Math.floor(y + dims.h - 0.04);
+    const minZ = Math.floor(z - dims.w - pad), maxZ = Math.floor(z + dims.w + pad);
+    for (let yy = minY; yy <= maxY; yy++) for (let xx = minX; xx <= maxX; xx++) for (let zz = minZ; zz <= maxZ; zz++) {
+      const id = World.getBlock(xx, yy, zz);
+      if (id === B.FIRE || id === B.CACTUS || ((typeof isLava === 'function') && isLava(id))) return true;
+    }
+    return false;
+  },
+
+  chooseWanderDir(mob) {
+    if (!mob || !mob.body) return null;
+    // Try several directions and only keep one that the body can actually walk.
+    // This prevents idle mobs from deciding their new life goal is a wall/cactus.
+    const dirs = [];
+    if (mob.wanderDir) dirs.push(mob.wanderDir);
+    for (let i = 0; i < 10; i++) {
+      const a = Math.random() * Math.PI * 2;
+      dirs.push([Math.cos(a), Math.sin(a)]);
+    }
+    for (const d of dirs) {
+      const safe = this.safeMoveDir(mob, d, 1.35);
+      if (safe) return safe;
+    }
+    return null;
+  },
+
+  idleExactMoveClear(mob, dir, probeDist) {
+    if (!mob || !mob.body || !dir) return null;
+    let dx = dir[0] || 0, dz = dir[1] || 0;
+    const dl = Math.sqrt(dx * dx + dz * dz);
+    if (dl < 0.001) return null;
+    dx /= dl; dz /= dl;
+    const b = mob.body;
+    const dist = probeDist || 0.95;
+    return this.pathSegmentClear(mob, b.x, b.y, b.z, b.x + dx * dist, b.z + dz * dist, 1, 1) ? [dx, dz] : null;
+  },
+
+  sanitizeIdleMove(mob, dir, dt) {
+    if (!mob || !dir || !mob.body) return null;
+    if (mob.idlePauseT > 0) return null;
+
+    // If the requested idle direction is actually open, use it exactly.  The
+    // previous version ran safeMoveDir() every frame; when a wall/door/crowd was
+    // nearby it could return a different rotated fallback each frame, so the mob
+    // looked like it was twitching even without any target.
+    const exact = this.idleExactMoveClear(mob, dir, 0.95);
+    if (exact) {
+      mob.idleAvoidT = 0;
+      mob.idleAvoidDir = null;
+      return exact;
+    }
+
+    // Keep one chosen avoidance direction briefly instead of re-rolling left/right
+    // every frame. This makes idle wall/crowd avoidance look like a small detour
+    // instead of nervous jitter.
+    if (mob.idleAvoidT > 0 && mob.idleAvoidDir) {
+      const kept = this.idleExactMoveClear(mob, mob.idleAvoidDir, 0.85);
+      if (kept) return kept;
+    }
+
+    const safe = this.safeMoveDir(mob, dir, 1.10);
+    if (safe) {
+      mob.idleAvoidDir = safe;
+      mob.idleAvoidT = 0.55 + Math.random() * 0.35;
+      return safe;
+    }
+
+    // No safe idle move right now. Pause briefly so the brain does not instantly
+    // pick another bad goal and vibrate in place.
+    mob.idleAvoidDir = null;
+    mob.idleAvoidT = 0;
+    mob.idlePauseT = 0.35 + Math.random() * 0.35;
+    mob.wanderDir = null;
+    return null;
+  },
+
   safeMoveDir(mob, dir, probeDist) {
     if (!mob || !dir) return null;
     const b = mob.body;
@@ -1105,6 +1588,89 @@ const Mobs = {
       if (this.pathSegmentClear(mob, b.x, b.y, b.z, b.x + rx * dist, b.z + rz * dist, 1, 1)) return [rx, rz];
     }
     return null;
+  },
+
+
+  jellyHomeAlive(key) {
+    if (!key || typeof World === 'undefined' || !World.getBlock) return false;
+    if (typeof Jelly !== 'undefined') {
+      const house = Jelly.getHouseByKey(key) || Jelly.getHouseById(key);
+      return !!(house && Jelly.isHouseBlockAlive(house.key));
+    }
+    const pos = key.split(',').map(Number);
+    return pos.length === 3 && World.getBlock(pos[0], pos[1], pos[2]) === B.JELLY_HOUSE;
+  },
+
+  jellyHomeDelta(m) {
+    if (!m || !m.body) return null;
+    let key = m.jellyHome || '';
+    if ((!key || key.indexOf(',') < 0) && typeof Jelly !== 'undefined' && m.homeHouseId) key = Jelly.getHouseKeyById(m.homeHouseId) || '';
+    if (!this.jellyHomeAlive(key)) return null;
+    const p = key.split(',').map(Number);
+    return { x: p[0] + 0.5 - m.body.x, y: p[1] - m.body.y, z: p[2] + 0.5 - m.body.z, hx:p[0], hy:p[1], hz:p[2] };
+  },
+
+  chooseJellyIdleGoal(m) {
+    if (!m || !m.body || typeof World === 'undefined') return null;
+    if (m.idlePauseT > 0) return null;
+    const b = m.body;
+    let hx = Math.floor(b.x), hy = Math.floor(b.y), hz = Math.floor(b.z);
+    if (this.jellyHomeAlive(m.jellyHome)) {
+      const p = m.jellyHome.split(',').map(Number);
+      hx = p[0]; hy = p[1]; hz = p[2];
+    }
+    for (let tries = 0; tries < 14; tries++) {
+      const r = 1 + ((Math.random() * 4) | 0);
+      const ang = Math.random() * Math.PI * 2;
+      const cx = hx + Math.round(Math.cos(ang) * r);
+      const cz = hz + Math.round(Math.sin(ang) * r);
+      const cy = this.pathStandY(m, cx, hy, cz);
+      if (cy === null) continue;
+      const gx = cx + 0.5, gz = cz + 0.5;
+      // Keep idle points physically reachable enough to avoid wall-staring.
+      if (!this.pathSegmentClear(m, b.x, b.y, b.z, gx, gz, 1, 1)) {
+        const oldBudget = this.pathBudget;
+        this.pathBudget = Math.max(this.pathBudget || 0, 1);
+        const path = this.buildPath(m, { x: gx, y: cy, z: gz, h: b.h }, 8);
+        this.pathBudget = oldBudget;
+        if (!path) continue;
+      }
+      m.jellyIdleGoal = { x: gx, y: cy, z: gz, h: b.h };
+      m.jellyIdleT = 3 + Math.random() * 4;
+      return m.jellyIdleGoal;
+    }
+    m.jellyIdleGoal = null;
+    m.jellyIdleT = 1 + Math.random() * 2;
+    return null;
+  },
+
+  jellyIdleMove(m, dt) {
+    if (!m || !m.body) return null;
+    if (m.idlePauseT > 0) return null;
+    const b = m.body;
+    m.jellyIdleT = (m.jellyIdleT || 0) - dt;
+    let goal = m.jellyIdleGoal;
+    if (goal) {
+      const dx = goal.x - b.x, dz = goal.z - b.z;
+      if (dx * dx + dz * dz < 0.45 * 0.45 || m.jellyIdleT <= 0) goal = null;
+    }
+    if (!goal) goal = this.chooseJellyIdleGoal(m);
+    if (!goal) return null;
+    const dir = this.pathMove(m, goal, dt, 8, false);
+    if (!dir) {
+      m.jellyIdleGoal = null;
+      m.idlePauseT = 0.35 + Math.random() * 0.45;
+      return null;
+    }
+    const safe = this.sanitizeIdleMove(m, dir, dt);
+    if (!safe) {
+      // This idle goal is currently blocked by collision/crowding. Drop it
+      // instead of side-stepping forever and flicking back/forth.
+      m.jellyIdleGoal = null;
+      m.path = null;
+      m.pathGoalKey = '';
+    }
+    return safe || null;
   },
 
 
@@ -1141,9 +1707,101 @@ const Mobs = {
   },
 
   // ---------- per-frame ----------
+  bodyClearAt(m, x, z) {
+    if (!m || !m.body || typeof Physics === 'undefined') return false;
+    const b = m.body;
+    return Physics.boxesIn(x - b.w, b.y + 0.05, z - b.w, x + b.w, b.y + b.h - 0.05, z + b.w).length === 0;
+  },
+
+  bodyClearAtBody(b, x, z) {
+    if (!b || typeof Physics === 'undefined') return false;
+    return Physics.boxesIn(x - (b.w || 0.3), b.y + 0.05, z - (b.w || 0.3), x + (b.w || 0.3), b.y + (b.h || 1.8) - 0.05, z + (b.w || 0.3)).length === 0;
+  },
+
+  entityClearAt(e, x, z) {
+    if (!e) return false;
+    if (e.kind === 'mob') return this.bodyClearAt(e.mob, x, z);
+    return this.bodyClearAtBody(e.body, x, z);
+  },
+
+  separateMobs(dt) {
+    // Cheap horizontal crowd separation so swarms don't all occupy one exact point.
+    // This now includes the local player and remote player bodies too, so mobs can't
+    // stack inside players and players can't stand perfectly inside mobs/each other.
+    const ents = [];
+    for (const m of this.list) {
+      if (m && !m.dead && m.body && World.hasChunk(Math.floor(m.body.x), Math.floor(m.body.z))) {
+        ents.push({ kind: 'mob', mob: m, body: m.body, group: m.group, movable: true });
+      }
+    }
+    const localPlayerActive = typeof Player !== 'undefined' && Player.body && !Player.dead && !(typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating));
+    if (localPlayerActive && World.hasChunk(Math.floor(Player.body.x), Math.floor(Player.body.z))) {
+      ents.push({ kind: 'player', body: Player.body, group: null, movable: true, localPlayer: true });
+    }
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.remoteBodies) {
+      const rbs = Multiplayer.remoteBodies();
+      for (const rb of rbs) {
+        if (!rb || rb.dead || !World.hasChunk(Math.floor(rb.x), Math.floor(rb.z))) continue;
+        // Remote players are movement-authoritative on their own machines, so this
+        // copy is treated as solid but not shoved around by the local simulation.
+        ents.push({ kind: 'remotePlayer', body: rb, group: null, movable: false });
+      }
+    }
+
+    const maxPairs = 1200;
+    let pairs = 0;
+    let movedLocalPlayer = false;
+    for (let i = 0; i < ents.length; i++) {
+      const a = ents[i], ab = a.body;
+      for (let j = i + 1; j < ents.length; j++) {
+        if (++pairs > maxPairs) break;
+        const e2 = ents[j], bb = e2.body;
+        if (Math.abs((ab.y + (ab.h || 1.8) * 0.5) - (bb.y + (bb.h || 1.8) * 0.5)) > Math.max(ab.h || 1.8, bb.h || 1.8) * 0.65) continue;
+        let dx = ab.x - bb.x, dz = ab.z - bb.z;
+        let d2 = dx * dx + dz * dz;
+        const want = Math.max(0.18, (ab.w || 0.3) + (bb.w || 0.3) + 0.04);
+        if (d2 >= want * want) continue;
+        if (d2 < 0.0004) {
+          const ang = ((i * 29 + j * 17) % 360) * Math.PI / 180;
+          dx = Math.cos(ang) * 0.03; dz = Math.sin(ang) * 0.03; d2 = dx * dx + dz * dz;
+        }
+        const d = Math.sqrt(d2);
+        const nx = dx / d, nz = dz / d;
+        const overlap = want - d;
+        const bothMovable = a.movable && e2.movable;
+        const pushA = a.movable ? Math.min(0.15, overlap * (bothMovable ? 0.5 : 1.0) + 0.01) : 0;
+        const pushB = e2.movable ? Math.min(0.15, overlap * (bothMovable ? 0.5 : 1.0) + 0.01) : 0;
+        if (pushA > 0) {
+          const ax = ab.x + nx * pushA, az = ab.z + nz * pushA;
+          if (this.entityClearAt(a, ax, az)) {
+            ab.x = ax; ab.z = az; ab.vx = (ab.vx || 0) + nx * 0.10; ab.vz = (ab.vz || 0) + nz * 0.10;
+            if (a.localPlayer) movedLocalPlayer = true;
+          }
+        }
+        if (pushB > 0) {
+          const bx = bb.x - nx * pushB, bz = bb.z - nz * pushB;
+          if (this.entityClearAt(e2, bx, bz)) {
+            bb.x = bx; bb.z = bz; bb.vx = (bb.vx || 0) - nx * 0.10; bb.vz = (bb.vz || 0) - nz * 0.10;
+            if (e2.localPlayer) movedLocalPlayer = true;
+          }
+        }
+      }
+      if (pairs > maxPairs) break;
+    }
+    for (const e of ents) {
+      if (e.kind === 'mob' && e.group) e.group.position.set(e.body.x, e.body.y, e.body.z);
+    }
+    if (movedLocalPlayer && typeof Player !== 'undefined' && Player.camera) {
+      const driving = typeof Vehicles !== 'undefined' && (Vehicles.driving || Vehicles.boating);
+      Player.camera.position.set(Player.body.x, Player.eyeY() + (driving ? 0.15 : 0), Player.body.z);
+    }
+  },
+
   update(dt) {
+    this._lastDt = dt || 0;
     this.updateArrows(dt);
     this.spawnTick(dt);
+    this.updateJellyMerges(dt);
     this.enforceSingleFloop();
     const p = Player.body;
     this.pathBudget = 4; // cap A* searches per frame so mob brains stay cheap
@@ -1160,24 +1818,40 @@ const Mobs = {
       if (m.hp <= 0) { this.kill(m); continue; }
       const b = m.body;
       if (m.angryPlayerT > 0) m.angryPlayerT = Math.max(0, m.angryPlayerT - dt);
+      if (m.targetMemoryT > 0) m.targetMemoryT = Math.max(0, m.targetMemoryT - dt);
+      if (!(m.targetMemoryT > 0)) { m.targetMemoryKey = ''; m.targetLastSeen = null; }
+      // Idle steering timers. These are separate from combat/path target memory.
+      // They prevent NPCs from changing avoidance direction every single frame
+      // while wandering near walls/doors/crowds, which is the visible twitch.
+      if (m.idleAvoidT > 0) m.idleAvoidT = Math.max(0, m.idleAvoidT - dt);
+      if (m.idlePauseT > 0) m.idlePauseT = Math.max(0, m.idlePauseT - dt);
       const distPlayer = Math.sqrt((b.x - p.x) ** 2 + (b.z - p.z) ** 2);
       const nearAnyMultiplayerPlayer = (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'host' && Multiplayer.isEntityNearAnyPlayer)
         ? Multiplayer.isEntityNearAnyPlayer(b.x, b.y, b.z, 80) : false;
-      if (distPlayer > 80 && !nearAnyMultiplayerPlayer) { m.dead = true; continue; }
+      if (distPlayer > 80 && !nearAnyMultiplayerPlayer) {
+        if (m.type === 'jelly' && this.returnJellyHome(m)) continue;
+        m.dead = true; continue;
+      }
       if (m.floopHurtVoiceCd > 0) m.floopHurtVoiceCd = Math.max(0, m.floopHurtVoiceCd - dt);
       if (distPlayer > 52 || !World.hasChunk(Math.floor(b.x), Math.floor(b.z))) continue;
+      if (this.updateMobBreathingAndSuffocation(m, dt)) { if (!m.dead && m.hp <= 0) this.kill(m); continue; }
 
       m.stateT -= dt;
       if (m.stateT <= 0) {
         m.stateT = 2 + Math.random() * 3;
-        m.wanderDir = Math.random() < 0.6
-          ? [Math.cos(Math.random() * Math.PI * 2), Math.sin(Math.random() * Math.PI * 2)]
-          : null;
+        m.wanderDir = (m.idlePauseT > 0) ? null : (Math.random() < 0.6 ? this.chooseWanderDir(m) : null);
       }
 
-      const tgt = HOSTILES.includes(m.type) ? this.targetOf(m) : null;
-      const distT = tgt ? Math.sqrt((b.x - tgt.x) ** 2 + (b.z - tgt.z) ** 2) : 999;
-      const losT = () => tgt && World.lineOfSight(b.x, b.y + b.h * 0.85, b.z, tgt.x, tgt.y + tgt.h * 0.85, tgt.z);
+      let tgt = HOSTILES.includes(m.type) ? this.targetOf(m) : (JELLY_MOB_TYPES.includes(m.type) ? this.jellyTargetOf(m) : null);
+      let distT = tgt ? Math.sqrt((b.x - tgt.x) ** 2 + (b.z - tgt.z) ** 2) : 999;
+      // If this is only a last-known spot, do not let attack code treat it like a
+      // real body.  When reached, forget it and fall back to proper wandering.
+      if (tgt && tgt.memoryOnly && distT < 0.9) {
+        this.forgetTargetMemory(m);
+        tgt = null;
+        distT = 999;
+      }
+      const losT = () => tgt && !tgt.memoryOnly && this.canSeeTarget(m, tgt);
       let losMemo;
       const hasTargetLOS = () => { if (losMemo === undefined) losMemo = !!losT(); return losMemo; };
       const smartChase = (range) => {
@@ -1293,6 +1967,84 @@ const Mobs = {
           wantMove = m.wanderDir;
           speed = 2;
         }
+      } else if (m.type === 'jelly' || m.type === 'big_jelly') {
+        const isBigJelly = m.type === 'big_jelly';
+        // Jelly People are tiny and weak, so frogs/creepers need special survival
+        // logic.  They jab normal frogs, then sprint away; if a frog is already
+        // screeching, they stop trying to be brave and run immediately.
+        const screamingFrog = this.jellyDangerFrog(m, true, 8);
+        if (screamingFrog) {
+          m.angryAt = screamingFrog;
+          m.jellyFrogFleeT = Math.max(m.jellyFrogFleeT || 0, 1.35);
+          wantMove = this.jellyFleeFrom(m, screamingFrog, 2.0);
+          speed = isBigJelly ? 3.65 : 4.35;
+          faceTarget = false;
+          this.panicJellyHouse(m.jellyHome || m.fromSpawner, 5);
+        } else if (m.jellyFrogFleeT > 0 && m.angryAt && !m.angryAt.dead && m.angryAt.type === 'creeper') {
+          m.jellyFrogFleeT = Math.max(0, m.jellyFrogFleeT - dt);
+          wantMove = this.jellyFleeFrom(m, m.angryAt, 1.85);
+          speed = isBigJelly ? 3.45 : 4.0;
+          faceTarget = false;
+        } else if (tgt && distT < (isBigJelly ? 18 : 15)) {
+          const targetMob = (tgt && !tgt.memoryOnly) ? (tgt.mob || null) : null;
+          const targetIsFrog = targetMob && targetMob.type === 'creeper';
+          faceTarget = true;
+          const dx = (tgt.x - b.x) / (distT + 0.01), dz = (tgt.z - b.z) / (distT + 0.01);
+          if (targetIsFrog && distT < 2.35 && m.meleeT > 0.15) {
+            // After throwing a punch at a frog, kite away instead of body-blocking
+            // in front of the fuse like a senile little gummy bear.
+            wantMove = this.jellyFleeFrom(m, targetMob, 1.75);
+            speed = isBigJelly ? 3.25 : 3.95;
+            faceTarget = false;
+          } else {
+            const closeEnough = isBigJelly ? 1.20 : 0.85;
+            wantMove = distT > closeEnough ? (smartChase(isBigJelly ? 18 : 16) || [dx, dz]) : null;
+            speed = isBigJelly ? (targetIsFrog ? 3.1 : 2.85) : (targetIsFrog ? 3.75 : 3.35);
+          }
+          m.meleeT -= dt;
+          const hitReach = isBigJelly ? 1.55 : 1.15;
+          const yReach = isBigJelly ? 1.75 : 1.1;
+          if (distT < hitReach && Math.abs((b.y + b.h * 0.5) - (tgt.y + (tgt.h || 1) * 0.5)) < yReach && m.meleeT <= 0) {
+            m.meleeT = isBigJelly ? 0.80 : (targetIsFrog ? 0.75 : 0.55);
+            m.attackSwingT = isBigJelly ? 0.28 : 0.20;
+            this.dmgTarget(tgt, isBigJelly ? 2 : 1, dx * (isBigJelly ? 4.5 : 2.5), dz * (isBigJelly ? 4.5 : 2.5), m);
+            if (targetIsFrog) {
+              m.angryAt = targetMob;
+              m.jellyFrogFleeT = 1.1 + Math.random() * 0.45;
+              wantMove = this.jellyFleeFrom(m, targetMob, 1.8);
+              speed = isBigJelly ? 3.35 : 4.05;
+              faceTarget = false;
+            }
+            this.panicJellyHouse(m.jellyHome || m.fromSpawner, 6);
+          }
+        } else {
+          if (isBigJelly) {
+            wantMove = this.jellyIdleMove(m, dt);
+            speed = 1.35;
+          } else {
+          this.adoptNearbyJellyHouse(m, 10);
+          const hk = this.jellyHomeAlive(m.jellyHome) ? m.jellyHome : '';
+          if (!hk && m.jellyHome) { m.jellyHome = ''; m.fromSpawner = ''; m.jellyIdleGoal = null; }
+          if (hk) {
+            const [hx, hy, hz] = hk.split(',').map(Number);
+            const hxC = hx + 0.5, hzC = hz + 0.5;
+            const dh = Math.sqrt((b.x - hxC) ** 2 + (b.z - hzC) ** 2);
+            const outsideHomeBox = Math.abs(b.x - hxC) > 5 || Math.abs((b.y + b.h * 0.5) - (hy + 0.5)) > 5 || Math.abs(b.z - hzC) > 5;
+            if (outsideHomeBox || dh > 4.9) {
+              m.jellyIdleGoal = null;
+              wantMove = this.pathMove(m, { x: hxC, y: hy, z: hzC, h: b.h }, dt, 12, false) || this.safeMoveDir(m, [(hxC - b.x) / (dh + 0.01), (hzC - b.z) / (dh + 0.01)], 1.0);
+              speed = outsideHomeBox ? 2.05 : 1.55;
+            } else {
+              wantMove = this.jellyIdleMove(m, dt);
+              speed = 1.15;
+              if (dh < 1.6 && Math.random() < 0.004) { this.returnJellyHome(m); continue; }
+            }
+          } else {
+            wantMove = this.jellyIdleMove(m, dt);
+            speed = 1.05;
+          }
+          }
+        }
       } else if (m.type === 'sheep' || m.type === 'chicken' || m.type === 'camel') {
         if (m.fleeT > 0) {
           m.fleeT -= dt;
@@ -1348,9 +2100,12 @@ const Mobs = {
           const ab = m.angryAt.body;
           const d2 = Math.sqrt((b.x - ab.x) ** 2 + (b.z - ab.z) ** 2) + 0.01;
           if (d2 < 20) {
-            const floopTgt = { x: ab.x, y: ab.y, z: ab.z, h: ab.h || 1.8 };
-            const canSeeAngry = World.lineOfSight(b.x, b.y + b.h * 0.75, b.z, ab.x, ab.y + (ab.h || 1.8) * 0.75, ab.z);
-            wantMove = this.pathMove(m, floopTgt, dt, 22, canSeeAngry);
+            const floopTgt = { x: ab.x, y: ab.y, z: ab.z, h: ab.h || 1.8, mob: m.angryAt, isPlayer: false };
+            const canSeeAngry = this.canSeeTarget(m, floopTgt);
+            if (canSeeAngry) this.rememberTarget(m, floopTgt);
+            const keptFloopTgt = canSeeAngry ? floopTgt : this.rememberedTarget(m, 20);
+            if (!keptFloopTgt) { m.angryAt = null; }
+            else wantMove = this.pathMove(m, keptFloopTgt, dt, 22, canSeeAngry);
             speed = 2.4;
             faceTarget = false;
             m.meleeT -= dt;
@@ -1361,9 +2116,12 @@ const Mobs = {
           } else m.angryAt = null;
         } else if (m.state === 'approach') {
           if (distPlayer > 2.6) {
-            const floopPlayerTgt = { x: p.x, y: p.y, z: p.z, h: p.h || 1.8 };
-            const canSeePlayer = World.lineOfSight(b.x, b.y + b.h * 0.75, b.z, p.x, p.y + (p.h || 1.8) * 0.75, p.z);
-            wantMove = this.pathMove(m, floopPlayerTgt, dt, 12, canSeePlayer);
+            const floopPlayerTgt = this.makePlayerTarget();
+            const canSeePlayer = floopPlayerTgt && this.canSeeTarget(m, floopPlayerTgt);
+            if (canSeePlayer) this.rememberTarget(m, floopPlayerTgt);
+            const keptFloopPlayerTgt = canSeePlayer ? floopPlayerTgt : this.rememberedTarget(m, 12);
+            if (!keptFloopPlayerTgt) { m.state = 'wander'; wantMove = m.wanderDir; }
+            else wantMove = this.pathMove(m, keptFloopPlayerTgt, dt, 12, canSeePlayer);
             speed = 1.1;
           } else { m.state = 'chat'; m.stateT = 2 + Math.random() * 2; }
         } else if (m.state === 'chat') {
@@ -1391,6 +2149,12 @@ const Mobs = {
         }
       }
 
+      // If a mob is only wandering, never let the raw idle vector drive it into
+      // a wall, cactus, fire, lava, or cliff.  Chasing still uses A* above.
+      if (wantMove && !tgt && !frogHop) {
+        wantMove = this.sanitizeIdleMove(m, wantMove, dt);
+      }
+
       // ---- stuck detection + detour ----
       if (m.detourT > 0) {
         m.detourT -= dt;
@@ -1403,7 +2167,21 @@ const Mobs = {
           m.stuckPathHits = (m.stuckPathHits || 0) + 1;
           m.pathT = 0;
           m.pathFailT = 0;
-          if (this.mobShouldJump(m, wantMove)) this.mobJump(m);
+          if (!tgt) {
+            // Idle mobs should not detour-jitter at a wall forever.  Clear the
+            // bad wander/stroll choice and let the next brain tick pick a safe one.
+            m.jellyIdleGoal = null;
+            m.wanderDir = null;
+            m.idleAvoidDir = null;
+            m.idleAvoidT = 0;
+            m.idlePauseT = 0.45 + Math.random() * 0.45;
+            m.path = null;
+            m.pathGoalKey = '';
+            m.detourT = 0;
+            m.detourDir = null;
+            wantMove = null;
+          }
+          if (this.mobShouldJump(m, wantMove) && tgt) this.mobJump(m);
           if (m.stuckPathHits >= 3 && tgt) {
             // Repeatedly pushing into the same impossible low/wide clearance is
             // usually a bad goal, not a detour problem. Give up/search briefly
@@ -1411,7 +2189,7 @@ const Mobs = {
             this.markPathUnreachable(m, 2.4 + Math.random() * 1.8);
             wantMove = this.unreachablePathMove(m, tgt, dt);
             m.stuckPathHits = 0;
-          } else {
+          } else if (tgt && wantMove) {
             const sign = Math.random() < 0.5 ? 1 : -1;
             m.detourDir = [-wantMove[1] * sign, wantMove[0] * sign];
             m.detourT = 0.35 + Math.random() * 0.25;
@@ -1425,6 +2203,7 @@ const Mobs = {
       // ---- movement/physics (knockback wins for a beat) ----
       if (m.kbCd > 0) m.kbCd -= dt;
       const inWater = Physics.inWater(b, 0.3);
+      const bodyWater = Physics.inWater(b, 0.9);
       // lava cooks everyone, no exceptions. Route through hurt() so death,
       // drops, angry-state cleanup, and weird edge cases all use one path.
       if (Physics.inLava(b, 0.2)) {
@@ -1462,6 +2241,9 @@ const Mobs = {
       if (m.type === 'chicken') b.vy = Math.max(b.vy, -2.5); // flappy descent
       b.vy = Math.max(b.vy, -38);
       Physics.move(b, dt, { stepUp: m.type !== 'creeper', stepLift: 0.58 });
+      if ((inWater || bodyWater) && b.hitH && (wantMove || m.pathWantsJump || Math.abs(b.vx) + Math.abs(b.vz) > 0.05)) {
+        b.vy = Math.max(b.vy, 7.8);
+      }
       if (b.y < -12) {
         this.kill(m);
         continue;
@@ -1486,6 +2268,13 @@ const Mobs = {
         if (m.type === 'spider') leg.rotation.y = swing * (li % 2 ? 0.4 : -0.4);
         else if (m.type !== 'creeper') leg.rotation.x = swing * (li % 2 ? 1 : -1);
       });
+      if (JELLY_MOB_TYPES.includes(m.type) && m.parts.arms && m.parts.arms.length) {
+        if (m.attackSwingT > 0) m.attackSwingT = Math.max(0, m.attackSwingT - dt);
+        const punchWindow = m.type === 'big_jelly' ? 0.30 : 0.22;
+        const punch = m.attackSwingT > 0 ? Math.sin((m.attackSwingT / punchWindow) * Math.PI) * (m.type === 'big_jelly' ? 1.7 : 1.4) : 0;
+        m.parts.arms[0].rotation.x = -punch + swing * 0.35;
+        m.parts.arms[1].rotation.x = punch + swing * -0.35;
+      }
       if (m.type === 'creeper') {
         const fl = m.fuse > 0 ? (Math.sin(m.fuse * 26) > 0 ? 0.9 : 0) : 0;
         const sc = 1 + m.fuse * 0.2;
@@ -1523,6 +2312,7 @@ const Mobs = {
         }
       }
     }
+    this.separateMobs(dt);
   },
 
   setEmissive(m, intensity, color) {
@@ -1558,35 +2348,26 @@ const Mobs = {
 
     const hostiles = this.list.filter(m => HOSTILES.includes(m.type)).length;
     const floops = this.list.filter(m => m.type === 'floop').length;
-    const passive = this.list.filter(m => ['sheep', 'chicken', 'camel'].includes(m.type)).length;
+    const passive = this.list.filter(m => ['sheep', 'chicken', 'camel', 'jelly', 'big_jelly'].includes(m.type)).length;
     const tungs = this.list.filter(m => m.type === 'tung').length;
-
-    if (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry') {
-      // The Merry Christmas Floop Dimension should not import overworld mob
-      // ecology.  Only Mr. Floop may appear naturally here.
-      if (floops < 1 && Math.random() < 0.08) {
-        const pos = this.surfaceSpot(p, 14, 34);
-        if (pos && World.spawnAllowedAt(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z))) {
-          const m = this.spawn('floop', pos.x, pos.y, pos.z);
-          m.speechT = 2 + Math.random() * 4;
-        }
-      }
-      return;
-    }
 
     if (Game.isNight && hostiles < 10 && Math.random() < 0.55) {
       const pos = this.surfaceSpot(p, 20, 38);
       if (pos && World.spawnAllowedAt(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z))) {
         const humbugsUnlocked = Game.dayCount >= 5;
         const roll = Math.random();
-        if (tungs < 1 && roll < 0.05 && Game.dayCount >= 3) {
+        const type = tungs < 1 && roll < 0.05 && Game.dayCount >= 3 ? 'tung'
+          : humbugsUnlocked && roll < 0.28 ? 'humbug'
+          : roll < 0.56 ? 'creeper'
+          : 'skeleton';
+        if (!this.spawnFits(type, pos.x, pos.y, pos.z)) {
+          // picked a valid-looking surface column, but the actual mob body clips;
+          // wait for the next spawn tick instead of half-embedding it in terrain.
+        } else if (type === 'tung') {
           this.spawn('tung', pos.x, pos.y, pos.z);
           UI.chat('You hear it in the distance... tung. tung. tung.', '#d2a24c');
         }
-        else if (humbugsUnlocked && roll < 0.28) this.spawn('humbug', pos.x, pos.y, pos.z, this.humbugGun());
-        else if (roll < 0.52) this.spawn('creeper', pos.x, pos.y, pos.z);
-        else if (roll < 0.78) this.spawn('skeleton', pos.x, pos.y, pos.z);
-        else this.spawn('spider', pos.x, pos.y, pos.z);
+        else this.spawn(type, pos.x, pos.y, pos.z, type === 'humbug' ? this.humbugGun() : null);
       }
     }
     // dark caves spawn monsters any time of day.  Do several candidate checks
@@ -1607,7 +2388,8 @@ const Mobs = {
         const effectiveLight = Math.max(block, Math.floor(sky * (Game.isNight ? 0.15 : 0.55)));
         if (effectiveLight > 7) continue;
         const roll = Math.random();
-        const type = Game.dayCount >= 5 && roll < 0.3 ? 'humbug' : roll < 0.6 ? 'spider' : roll < 0.85 ? 'skeleton' : 'creeper';
+        const type = Game.dayCount >= 5 && roll < 0.3 ? 'humbug' : roll < 0.68 ? 'skeleton' : 'creeper';
+        if (!this.spawnFits(type, sx + 0.5, sy + 0.02, sz + 0.5)) continue;
         this.spawn(type, sx + 0.5, sy + 0.02, sz + 0.5, type === 'humbug' ? this.humbugGun() : null);
         break;
       }
@@ -1620,8 +2402,10 @@ const Mobs = {
         const d = Math.sqrt((s.x - p.x) ** 2 + (s.z - p.z) ** 2);
         if (d > 7 && World.getBlock(s.x, s.y, s.z) === B.AIR && World.spawnAllowedAt(s.x, s.y, s.z)) {
           const roll = Math.random();
-          const type = Game.dayCount >= 5 && roll < 0.4 ? 'humbug' : roll < 0.7 ? 'spider' : 'skeleton';
-          this.spawn(type, s.x + 0.5, s.y + 0.02, s.z + 0.5, type === 'humbug' ? this.humbugGun() : null);
+          const type = Game.dayCount >= 5 && roll < 0.4 ? 'humbug' : roll < 0.75 ? 'skeleton' : 'creeper';
+          if (this.spawnFits(type, s.x + 0.5, s.y + 0.02, s.z + 0.5)) {
+            this.spawn(type, s.x + 0.5, s.y + 0.02, s.z + 0.5, type === 'humbug' ? this.humbugGun() : null);
+          }
         }
       }
     }
@@ -1630,9 +2414,10 @@ const Mobs = {
       if (pos) {
         const biome = World.biomeAt(Math.floor(pos.x), Math.floor(pos.z));
         const ground = World.getBlock(Math.floor(pos.x), Math.floor(pos.y - 0.5), Math.floor(pos.z));
-        if (biome === 'desert' && ground === B.SAND) this.spawn('camel', pos.x, pos.y, pos.z);
+        if (biome === 'desert' && ground === B.SAND && this.spawnFits('camel', pos.x, pos.y, pos.z)) this.spawn('camel', pos.x, pos.y, pos.z);
         else if (ground === B.GRASS || ground === B.SNOWY_GRASS) {
-          this.spawn(Math.random() < 0.5 ? 'sheep' : 'chicken', pos.x, pos.y, pos.z);
+          const type = Math.random() < 0.5 ? 'sheep' : 'chicken';
+          if (this.spawnFits(type, pos.x, pos.y, pos.z)) this.spawn(type, pos.x, pos.y, pos.z);
         }
       }
     }
@@ -1646,7 +2431,7 @@ const Mobs = {
       } else {
         pos = this.surfaceSpot(p, 14, 30);
       }
-      if (pos) {
+      if (pos && this.spawnFits('floop', pos.x, pos.y, pos.z)) {
         const m = this.spawn('floop', pos.x, pos.y, pos.z);
         m.speechT = 2 + Math.random() * 4;
       }
@@ -1676,13 +2461,14 @@ const Mobs = {
     return this.list.filter(m => !m.dead).map(m => ({
       t: m.type, x: +m.body.x.toFixed(1), y: +m.body.y.toFixed(1), z: +m.body.z.toFixed(1),
       hp: Number.isFinite(+m.hp) ? +m.hp : this.mobMaxHp(m.type), g: m.gunId || 0, c: m.color || 0, apt: +(m.angryPlayerT || 0).toFixed(1),
+      home: m.jellyHome || '', jid: m.jellyId || '', hid: m.homeHouseId || '', mem: m.membership || '', jsrc: m.membershipSource || '',
     }));
   },
 
   deserialize(arr) {
     let loadedFloop = false;
     for (const s of arr || []) {
-      if (typeof Dimensions !== 'undefined' && Dimensions.current === 'merry' && s.t !== 'floop') continue;
+      if (s.t === 'spider') continue;
       if (s.t === 'floop') {
         if (loadedFloop || this.liveFloops().length > 0) continue;
         loadedFloop = true;
@@ -1691,6 +2477,17 @@ const Mobs = {
       m.hp = Number.isFinite(+s.hp) ? +s.hp : this.mobMaxHp(m.type);
       this.repairMobHealth(m);
       m.angryPlayerT = s.apt || 0;
+      if ((m.type === 'jelly' || m.type === 'big_jelly') && typeof Jelly !== 'undefined') {
+        m.jellyId = s.jid || m.jellyId || Jelly.newJellyId();
+        m.homeHouseId = s.hid || null;
+        m.membership = s.mem || (m.homeHouseId ? 'outside_member' : 'homeless');
+        m.membershipSource = s.jsrc || 'save';
+        if (!m.homeHouseId && s.home && Jelly.getHouseByKey(s.home)) m.homeHouseId = Jelly.getHouseByKey(s.home).id;
+        m.jellyHome = m.homeHouseId ? (Jelly.getHouseKeyById(m.homeHouseId) || '') : '';
+        if (m.type === 'big_jelly') Jelly.initMob(m, 'save_big');
+        else if (!m.homeHouseId) Jelly.makeHomeless(m, 'save');
+        m.fromSpawner = '';
+      }
     }
     this.enforceSingleFloop();
   },
