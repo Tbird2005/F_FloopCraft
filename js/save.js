@@ -279,7 +279,13 @@ const Save = {
         signDirs: [...World.signDirs.entries()],
         lore: [...World.loreMap.entries()],
         chests: [...World.chests.entries()].map(([k, slots]) => [k, slots.map(s => this.packStack(s))]),
-        spawners: [...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, sp.type, sp.roster || null, !!sp.insideOnly]),
+        spawners: [...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, {
+          type: sp.type, roster: sp.roster || null, insideOnly: !!sp.insideOnly,
+          rank: sp.rank || '', remaining: Number.isFinite(+sp.remaining) ? +sp.remaining : undefined,
+          max: Number.isFinite(+sp.max) ? +sp.max : undefined, spawned: Number.isFinite(+sp.spawned) ? +sp.spawned : undefined,
+          dungeonKey: sp.dungeonKey || '', liveCap: Number.isFinite(+sp.liveCap) ? +sp.liveCap : undefined,
+          pool: Array.isArray(sp.pool) ? sp.pool.slice(0, 12) : undefined,
+        }]),
         jellyHouses: (typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries() : []),
         dungeonConquered: [...(World.dungeonConquered || new Set()).values()],
         bedDirs: [...World.bedDirs.entries()],
@@ -348,9 +354,17 @@ const Save = {
       for (const dk of data.dungeonConquered || data.dungeonsConquered || []) World.dungeonConquered.add(String(dk));
     }
     for (const rec of data.spawners || []) {
-      const [k, type, roster, insideOnly] = rec;
-      if (type === 'jelly_house' && typeof Jelly !== 'undefined') { Jelly.migrateLegacySaveSpawners([rec]); continue; }
-      World.spawners.set(k, { type, cd: 3, roster: Array.isArray(roster) ? roster.slice(0, 64) : undefined, insideOnly: !!insideOnly });
+      const [k, raw, legacyRoster, legacyInsideOnly] = rec;
+      const obj = raw && typeof raw === 'object' ? raw : { type: raw, roster: legacyRoster, insideOnly: legacyInsideOnly };
+      if (obj.type === 'jelly_house' && typeof Jelly !== 'undefined') { Jelly.migrateLegacySaveSpawners([[k, obj.type, obj.roster]]); continue; }
+      World.spawners.set(k, {
+        type: obj.type, cd: Number.isFinite(+obj.cd) ? +obj.cd : 3,
+        roster: Array.isArray(obj.roster) ? obj.roster.slice(0, 64) : undefined, insideOnly: !!obj.insideOnly,
+        rank: obj.rank || '', remaining: Number.isFinite(+obj.remaining) ? +obj.remaining : undefined,
+        max: Number.isFinite(+obj.max) ? +obj.max : undefined, spawned: Number.isFinite(+obj.spawned) ? +obj.spawned : undefined,
+        dungeonKey: obj.dungeonKey || '', liveCap: Number.isFinite(+obj.liveCap) ? +obj.liveCap : undefined,
+        pool: Array.isArray(obj.pool) ? obj.pool.slice(0, 12) : undefined,
+      });
     }
     for (const [k, d] of data.bedDirs || []) World.bedDirs.set(k, d);
     for (const [k, d] of data.photoDirs || []) World.photoDirs.set(k, d);

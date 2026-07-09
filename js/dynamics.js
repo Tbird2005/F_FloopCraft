@@ -515,6 +515,39 @@ const Dynamics = {
   },
 
   // ---------------- monster spawners ----------------
+  normalizeSpawnerState(k, sp, blockId) {
+    if (!sp) sp = {};
+    const rank = (sp.rank || (typeof dungeonRankForSpawnerBlock === 'function' ? dungeonRankForSpawnerBlock(blockId) : '') || '').toLowerCase();
+    if (rank) {
+      const fresh = World.createDungeonSpawnerState ? World.createDungeonSpawnerState(rank, sp.dungeonKey || '') : { type: 'dungeon_spawner', rank, remaining: 4, max: 4, spawned: 0, liveCap: 2, pool: ['skeleton'] };
+      sp.type = 'dungeon_spawner';
+      sp.rank = rank;
+      if (!Number.isFinite(+sp.max) || +sp.max <= 0) sp.max = fresh.max;
+      if (!Number.isFinite(+sp.remaining)) sp.remaining = sp.max;
+      sp.remaining = Math.max(0, Math.floor(+sp.remaining));
+      sp.spawned = Math.max(0, Math.floor(+sp.spawned || 0));
+      sp.liveCap = Math.max(1, Math.floor(+sp.liveCap || fresh.liveCap || 2));
+      if (!Array.isArray(sp.pool) || !sp.pool.length) sp.pool = fresh.pool || ['skeleton'];
+      if (!sp.dungeonKey) {
+        const [x, y, z] = k.split(',').map(Number);
+        const dg = World.dungeonAtBlock && World.dungeonAtBlock(x, y, z);
+        sp.dungeonKey = dg && dg.key || '';
+      }
+    }
+    if (!Number.isFinite(+sp.cd)) sp.cd = 3;
+    return sp;
+  },
+
+  breakSpawner(k, x, y, z) {
+    World.spawners.delete(k);
+    if (World.getBlock(x, y, z) !== B.BROKEN_SPAWNER) World.setBlock(x, y, z, B.BROKEN_SPAWNER, { noUpdate: true, skipPortalCheck: true });
+    if (typeof SFX !== 'undefined') {
+      if (SFX.spawnerBreak) SFX.spawnerBreak({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
+      else if (SFX.breakBlk) SFX.breakBlk();
+    }
+    if (typeof Particles !== 'undefined') Particles.burst(x + 0.5, y + 0.7, z + 0.5, [0.45, 0.35, 0.7], 18, 3);
+  },
+
   updateSpawners(dt) {
     this.spawnerAcc = (this.spawnerAcc || 0) + dt;
     if (this.spawnerAcc < 1) return;
@@ -524,10 +557,22 @@ const Dynamics = {
     for (const [k, sp] of World.spawners) {
       const [x, y, z] = k.split(',').map(Number);
       if (!World.hasChunk(x, z)) continue;
-      const blockId = World.getBlock(x, y, z);
+      let blockId = World.getBlock(x, y, z);
       if (sp.type === 'jelly_house') { if (typeof Jelly !== 'undefined') Jelly.migrateLegacySpawners(); else World.spawners.delete(k); continue; }
       if (sp.type === 'spider') sp.type = Math.random() < 0.5 ? 'skeleton' : 'creeper';
-      if (blockId !== B.SPAWNER) { World.spawners.delete(k); continue; }
+      const ownedDungeon = World.dungeonAtBlock && World.dungeonAtBlock(x, y, z);
+      if (blockId === B.SPAWNER && ownedDungeon && typeof dungeonSpawnerBlockForRank === 'function') {
+        blockId = dungeonSpawnerBlockForRank(ownedDungeon.rank || 'green');
+        World.setBlock(x, y, z, blockId, { noUpdate: true, skipPortalCheck: true, dungeonKey: ownedDungeon.key });
+      }
+      const isSpawner = typeof isSpawnerBlock === 'function' ? isSpawnerBlock(blockId) : blockId === B.SPAWNER;
+      if (!isSpawner) { World.spawners.delete(k); continue; }
+      this.normalizeSpawnerState(k, sp, blockId);
+      if (sp.type === 'dungeon_spawner') {
+        if (sp.remaining <= 0) { this.breakSpawner(k, x, y, z); continue; }
+        const dg = ownedDungeon || (World.dungeonAtBlock && World.dungeonAtBlock(x, y, z));
+        if (!dg || !World.playerInsideDungeon || !World.playerInsideDungeon(dg, p)) continue;
+      }
       const d2 = (x - p.x) ** 2 + (y - p.y) ** 2 + (z - p.z) ** 2;
       if (d2 > 16 * 16 || d2 < 2 * 2) continue;
       sp.cd -= 1;
@@ -535,16 +580,21 @@ const Dynamics = {
       sp.cd = 4 + Math.random() * 4;
       let mine = 0;
       for (const m of Mobs.list) if (m.fromSpawner === k && !m.dead) mine++;
-      if (mine >= 3) continue; // per-spawner cap
+      if (mine >= (sp.liveCap || 3)) continue;
+      const spawnType = World.spawnerMobForState ? World.spawnerMobForState(sp) : sp.type;
       for (let tries = 0; tries < 6; tries++) {
         const sx = x + ((Math.random() * 5) | 0) - 2, sz = z + ((Math.random() * 5) | 0) - 2, sy = y;
         if (World.getBlock(sx, sy, sz) === B.AIR && World.getBlock(sx, sy + 1, sz) === B.AIR &&
             Physics.solidAt(sx + 0.5, sy - 0.5, sz + 0.5) &&
-            (!Mobs.spawnFits || Mobs.spawnFits(sp.type, sx + 0.5, sy + 0.02, sz + 0.5))) {
-          // spawners ignore light rules — that's their whole deal
-          const m = Mobs.spawn(sp.type, sx + 0.5, sy + 0.02, sz + 0.5, sp.type === 'humbug' ? Mobs.humbugGun() : null);
+            (!Mobs.spawnFits || Mobs.spawnFits(spawnType, sx + 0.5, sy + 0.02, sz + 0.5))) {
+          const m = Mobs.spawn(spawnType, sx + 0.5, sy + 0.02, sz + 0.5, spawnType === 'humbug' ? Mobs.humbugGun() : null);
           m.fromSpawner = k;
+          if (sp.type === 'dungeon_spawner') {
+            sp.spawned = Math.max(0, (sp.spawned || 0) + 1);
+            sp.remaining = Math.max(0, (sp.remaining || 0) - 1);
+          }
           Particles.burst(sx + 0.5, sy + 1, sz + 0.5, [0.8, 0.2, 0.2], 10, 2);
+          if (sp.type === 'dungeon_spawner' && sp.remaining <= 0) this.breakSpawner(k, x, y, z);
           break;
         }
       }

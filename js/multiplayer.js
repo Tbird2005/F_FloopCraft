@@ -569,7 +569,11 @@ const Multiplayer = {
       base.signDirs = [...World.signDirs.entries()];
       base.lore = [...World.loreMap.entries()];
       base.chests = [...World.chests.entries()].map(([k, slots]) => [k, slots.map(s => Save.packStack(s))]);
-      base.spawners = [...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, { type: sp.type, roster: sp.roster || null }]);
+      base.spawners = [...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, {
+          type: sp.type, roster: sp.roster || null, rank: sp.rank || '', remaining: sp.remaining,
+          max: sp.max, spawned: sp.spawned, dungeonKey: sp.dungeonKey || '', liveCap: sp.liveCap,
+          pool: Array.isArray(sp.pool) ? sp.pool.slice(0, 12) : undefined,
+        }]);
       base.jellyHouses = (typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries() : []);
       base.bedDirs = [...World.bedDirs.entries()];
       base.photoDirs = [...World.photoDirs.entries()];
@@ -1203,7 +1207,11 @@ const Multiplayer = {
         currentDimension: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
         signs:[...World.signs.entries()], signDirs:[...World.signDirs.entries()], lore:[...World.loreMap.entries()],
         chests:[...World.chests.entries()].map(([k, slots]) => [k, slots.map(pack)]),
-        spawners:[...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, { type: sp.type, roster: sp.roster || null }]),
+        spawners:[...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, {
+          type: sp.type, roster: sp.roster || null, rank: sp.rank || '', remaining: sp.remaining,
+          max: sp.max, spawned: sp.spawned, dungeonKey: sp.dungeonKey || '', liveCap: sp.liveCap,
+          pool: Array.isArray(sp.pool) ? sp.pool.slice(0, 12) : undefined,
+        }]),
         jellyHouses:(typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries() : []),
         bedDirs:[...World.bedDirs.entries()], photoDirs:[...World.photoDirs.entries()], stairSideways:[...World.stairSideways.entries()],
         crops:[...World.crops.entries()], plantationOrigins:[...World.plantationOrigins.entries()], plantationUnderSlabs:[...World.plantationUnderSlabs.entries()],
@@ -1270,7 +1278,14 @@ const Multiplayer = {
       try {
         World.signs = new Map(msg.signs || []); World.signDirs = new Map(msg.signDirs || []); World.loreMap = new Map(msg.lore || []);
         World.chests = new Map((msg.chests || []).map(([k, slots]) => [k, (slots || []).map(unpack)]));
-        World.spawners = new Map((msg.spawners || []).filter(([k, val]) => !val || (val.type || val) !== 'jelly_house').map(([k, val]) => { const obj = (val && typeof val === 'object') ? val : { type: val }; return [k, { type: obj.type, cd:3, roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined }]; }));
+        World.spawners = new Map((msg.spawners || []).filter(([k, val]) => !val || (val.type || val) !== 'jelly_house').map(([k, val]) => { const obj = (val && typeof val === 'object') ? val : { type: val }; return [k, {
+            type: obj.type, cd: Number.isFinite(+obj.cd) ? +obj.cd : 3,
+            roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined,
+            rank: obj.rank || '', remaining: Number.isFinite(+obj.remaining) ? +obj.remaining : undefined,
+            max: Number.isFinite(+obj.max) ? +obj.max : undefined, spawned: Number.isFinite(+obj.spawned) ? +obj.spawned : undefined,
+            dungeonKey: obj.dungeonKey || '', liveCap: Number.isFinite(+obj.liveCap) ? +obj.liveCap : undefined,
+            pool: Array.isArray(obj.pool) ? obj.pool.slice(0, 12) : undefined,
+          }]; }));
         if (typeof Jelly !== 'undefined') Jelly.loadHouseEntries(msg.jellyHouses || []);
         World.bedDirs = new Map(msg.bedDirs || []); World.photoDirs = new Map(msg.photoDirs || []); World.stairSideways = new Map(msg.stairSideways || []);
         World.crops = new Map(msg.crops || []); World.plantationOrigins = new Map(msg.plantationOrigins || []); World.plantationUnderSlabs = new Map(msg.plantationUnderSlabs || []);
@@ -4431,7 +4446,11 @@ const Multiplayer = {
         chests: [...World.chests.entries()].filter(([k]) => inChunk(k)).map(([k, slots]) => [k, stacks(slots)]),
         furnaces: [...World.furnaces.entries()].filter(([k]) => inChunk(k)).map(([k, f]) => [k, { i:pack(f.in), f:pack(f.fuel), o:pack(f.out), burn:f.burn || 0, burnMax:f.burnMax || 0, cook:f.cook || 0 }]),
         crops: [...World.crops.entries()].filter(([k]) => inChunk(k)),
-        spawners: [...World.spawners.entries()].filter(([k, sp]) => inChunk(k) && (!sp || sp.type !== 'jelly_house')).map(([k, sp]) => [k, { type: sp.type, roster: sp.roster || null }]),
+        spawners: [...World.spawners.entries()].filter(([k, sp]) => inChunk(k) && (!sp || sp.type !== 'jelly_house')).map(([k, sp]) => [k, {
+          type: sp.type, roster: sp.roster || null, rank: sp.rank || '', remaining: sp.remaining,
+          max: sp.max, spawned: sp.spawned, dungeonKey: sp.dungeonKey || '', liveCap: sp.liveCap,
+          pool: Array.isArray(sp.pool) ? sp.pool.slice(0, 12) : undefined,
+        }]),
         jellyHouses: (typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries().filter(([k]) => inChunk(k)) : []),
         bedDirs: [...World.bedDirs.entries()].filter(([k]) => inChunk(k)),
         photoDirs: [...World.photoDirs.entries()].filter(([k]) => inChunk(k)),
@@ -4481,7 +4500,14 @@ const Multiplayer = {
         putEntries(World.photoDirs, meta.photoDirs);
         putEntries(World.stairSideways, meta.stairSideways);
         putEntries(World.crops, meta.crops);
-        putEntries(World.spawners, (meta.spawners || []).filter(([k, val]) => !val || (val.type || val) !== 'jelly_house'), val => { const obj = (val && typeof val === 'object') ? val : { type: val }; return { type: obj.type, cd:3, roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined }; });
+        putEntries(World.spawners, (meta.spawners || []).filter(([k, val]) => !val || (val.type || val) !== 'jelly_house'), val => { const obj = (val && typeof val === 'object') ? val : { type: val }; return {
+              type: obj.type, cd: Number.isFinite(+obj.cd) ? +obj.cd : 3,
+              roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined,
+              rank: obj.rank || '', remaining: Number.isFinite(+obj.remaining) ? +obj.remaining : undefined,
+              max: Number.isFinite(+obj.max) ? +obj.max : undefined, spawned: Number.isFinite(+obj.spawned) ? +obj.spawned : undefined,
+              dungeonKey: obj.dungeonKey || '', liveCap: Number.isFinite(+obj.liveCap) ? +obj.liveCap : undefined,
+              pool: Array.isArray(obj.pool) ? obj.pool.slice(0, 12) : undefined,
+            }; });
         if (typeof Jelly !== 'undefined' && Array.isArray(meta.jellyHouses)) {
           Jelly.ensureStorage();
           for (const [hk, hd] of meta.jellyHouses) Jelly.setHouse(String(hk), Jelly.unpackHouseRecord(String(hk), hd), { storedNormalized: true });

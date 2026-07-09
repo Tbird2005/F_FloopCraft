@@ -70,6 +70,11 @@ const B = {
   JELLY_CHEST: 429,
   DUNGEON_BRICK: 447, DUNGEON_BRICK_INACTIVE: 448, DUNGEON_CORE: 449,
   DUNGEON_DOOR_GREEN: 450, DUNGEON_DOOR_BLUE: 451, DUNGEON_DOOR_GOLD: 452, DUNGEON_DOOR_DIAMOND: 453,
+  DUNGEON_CHEST_GREEN: 459, DUNGEON_CHEST_BLUE: 460, DUNGEON_CHEST_GOLD: 461, DUNGEON_CHEST_DIAMOND: 462,
+  DUNGEON_CRATE_GREEN: 463, DUNGEON_CRATE_BLUE: 464, DUNGEON_CRATE_GOLD: 465, DUNGEON_CRATE_DIAMOND: 466,
+  ROPE_LADDER: 467,
+  DUNGEON_SPAWNER_GREEN: 468, DUNGEON_SPAWNER_BLUE: 469, DUNGEON_SPAWNER_GOLD: 470, DUNGEON_SPAWNER_DIAMOND: 471,
+  BROKEN_SPAWNER: 472,
   // dynamic mixed double slabs: exact bottom/top slab IDs are encoded from here upward
   DSLAB_MIX_C0: 500,
   // dynamic vertical slab variants + two-piece slab combos
@@ -175,6 +180,33 @@ function dungeonDoorKeyForId(id) { const r = dungeonRankInfo(id); return r ? r.k
 function dungeonDoorNameForId(id) { const r = dungeonRankInfo(id); return r ? r.name : 'Unknown'; }
 function isActiveDungeonBlock(id) { return id === B.DUNGEON_BRICK || isDungeonDoor(id); }
 function isDungeonGeneratedBlock(id) { return isActiveDungeonBlock(id) || id === B.DUNGEON_CORE; }
+const DUNGEON_CHEST_BY_RANK = {
+  green: B.DUNGEON_CHEST_GREEN, blue: B.DUNGEON_CHEST_BLUE, gold: B.DUNGEON_CHEST_GOLD, diamond: B.DUNGEON_CHEST_DIAMOND,
+};
+const DUNGEON_CRATE_BY_RANK = {
+  green: B.DUNGEON_CRATE_GREEN, blue: B.DUNGEON_CRATE_BLUE, gold: B.DUNGEON_CRATE_GOLD, diamond: B.DUNGEON_CRATE_DIAMOND,
+};
+const DUNGEON_CHEST_IDS = Object.values(DUNGEON_CHEST_BY_RANK);
+const DUNGEON_CRATE_IDS = Object.values(DUNGEON_CRATE_BY_RANK);
+function dungeonChestBlockForRank(rank) { return DUNGEON_CHEST_BY_RANK[(rank || 'green').toLowerCase()] || B.DUNGEON_CHEST_GREEN; }
+function dungeonCrateBlockForRank(rank) { return DUNGEON_CRATE_BY_RANK[(rank || 'green').toLowerCase()] || B.DUNGEON_CRATE_GREEN; }
+function isDungeonChestBlock(id) { return DUNGEON_CHEST_IDS.includes(id); }
+function isDungeonCrateBlock(id) { return DUNGEON_CRATE_IDS.includes(id); }
+function isStorageChestBlock(id) {
+  return id === B.CHEST || id === B.LOOT_CRATE || id === B.JELLY_CHEST || isDungeonChestBlock(id) || isDungeonCrateBlock(id);
+}
+const DUNGEON_SPAWNER_BY_RANK = {
+  green: B.DUNGEON_SPAWNER_GREEN, blue: B.DUNGEON_SPAWNER_BLUE, gold: B.DUNGEON_SPAWNER_GOLD, diamond: B.DUNGEON_SPAWNER_DIAMOND,
+};
+const DUNGEON_SPAWNER_IDS = Object.values(DUNGEON_SPAWNER_BY_RANK);
+function dungeonSpawnerBlockForRank(rank) { return DUNGEON_SPAWNER_BY_RANK[(rank || 'green').toLowerCase()] || B.DUNGEON_SPAWNER_GREEN; }
+function dungeonRankForSpawnerBlock(id) {
+  for (const rank of DUNGEON_RANKS) if (dungeonSpawnerBlockForRank(rank.rank) === id) return rank.rank;
+  return '';
+}
+function isDungeonSpawnerBlock(id) { return DUNGEON_SPAWNER_IDS.includes(id); }
+function isBrokenSpawnerBlock(id) { return id === B.BROKEN_SPAWNER; }
+function isSpawnerBlock(id) { return id === B.SPAWNER || isDungeonSpawnerBlock(id); }
 function isRetiredStackId(id) { return id === B.MERRY_PORTAL || id === I.XMAS_GEM; }
 
 // ============================================================
@@ -14252,7 +14284,7 @@ function isSapling(id) { return (id >= B.SAPLING_OAK && id <= B.SAPLING_SPRUCE) 
 function isOasisSapling(id) { return id === B.SAPLING_OASIS; }
 function canPlantSaplingOn(saplingId, groundId) {
   if (saplingId === B.SAPLING_OASIS) return groundId === B.SAND;
-  if (isSapling(saplingId)) return groundId === B.DIRT || groundId === B.GRASS || groundId === B.SNOWY_GRASS;
+  if (isSapling(saplingId)) return groundId === B.DIRT || groundId === B.GRASS;
   return false;
 }
 function isFlower(id) { return (id >= B.ROSE && id <= B.CORNFLOWER) || id === B.WILD_GRASS || id === B.CATTAIL; }
@@ -14260,7 +14292,7 @@ function isCrop(id) { return id >= B.FLOOPFRUIT_CROP0 && id <= B.FLOOPFRUIT_CROP
 function cropStage(id) { return isCrop(id) ? id - B.FLOOPFRUIT_CROP0 : -1; }
 function isPlanterCell(id) { return id === B.PLANTATION_POT || isCrop(id); }
 function canPlantFloopfruitOn(id) { return id === B.PLANTATION_POT; }
-function isLadder(id) { return id >= B.LADDER_PX && id <= B.LADDER_NZ; }
+function isLadder(id) { return (id >= B.LADDER_PX && id <= B.LADDER_NZ) || id === B.ROPE_LADDER; }
 function isSnowSheet(id) { return id >= B.SNOW_SHEET_1 && id <= B.SNOW_SHEET_7; }
 function snowSheetLevel(id) { return id - B.SNOW_SHEET_1 + 1; } // 1..7
 function isDoor(id) { return (id >= B.DOOR_XB && id <= B.DOOR_ZT) || (id >= B.DOOR_XBO && id <= B.DOOR_ZTO) || (id >= B.BDOOR_XB && id <= B.BDOOR_ZTO) || (id >= B.SDOOR_XB && id <= B.SDOOR_ZTO) || (id >= B.ODOOR_XB && id <= B.ODOOR_ZTO); }
@@ -14675,6 +14707,11 @@ defBlock(B.SPAWNER, 'Monster Spawner', {
   hard: 8, tool: 'pickaxe', reqTier: 0, drop: null, xp: 15,
   opaque: false, cutout: true, tex: { all: 'spawner' },
 });
+defBlock(B.BROKEN_SPAWNER, 'Broken Spawner', {
+  hard: 4.5, tool: 'pickaxe', reqTier: 0, drop: null,
+  opaque: false, cutout: true, tex: { all: 'spawner_broken' },
+  tip: 'A spent monster spawner. It will not spawn anything else.'
+});
 for (const [id, mats] of Object.entries(DSLAB_MATS)) {
   const [botKey, topKey] = mats;
   const nm = botKey === topKey ? 'Double ' + SLAB_NAME[botKey] : SLAB_NAME[botKey] + ' / ' + SLAB_NAME[topKey];
@@ -14700,10 +14737,27 @@ defBlock(B.DUNGEON_CORE, 'Dungeon Core', {
   hard: 7.5, tool: 'pickaxe', reqTier: 1, drop: null, light: true, lightLevel: 10, tex: { all: 'dungeon_core' },
   tip: 'Break this to conquer the dungeon and make its active blocks mineable.'
 });
+defBlock(B.ROPE_LADDER, 'Rope Ladder', {
+  hard: 0.45, tool: 'axe', solid: false, opaque: false, cutout: true, shape: 'cross', drop: { id: B.ROPE_LADDER }, tex: { all: 'rope_ladder' },
+  tip: 'A free-hanging ladder used in dungeon shafts.'
+});
 for (const rank of DUNGEON_RANKS) {
+  defBlock(dungeonSpawnerBlockForRank(rank.rank), rank.name + ' Dungeon Spawner', {
+    hard: 8, tool: 'pickaxe', reqTier: 0, drop: null, xp: 10 + rank.mobBonus * 4,
+    opaque: false, cutout: true, tex: { all: 'spawner_' + rank.rank },
+    tip: rank.name + ' dungeon spawner. It wakes only while you are inside its dungeon.'
+  });
   defBlock(rank.door, rank.name + ' Dungeon Door', {
     hard: Infinity, drop: null, interact: 'dungeonDoor', opaque: false, cutout: true, shape: 'dungeonDoor', tex: { all: 'dungeon_door_' + rank.rank },
     tip: 'Part of a 3x3 ranked dungeon gate. Requires a ' + rank.name + ' Dungeon Key.'
+  });
+  defBlock(dungeonChestBlockForRank(rank.rank), rank.name + ' Dungeon Chest', {
+    hard: 2.6, tool: 'axe', drop: null, interact: 'chest', tex: { top: 'dungeon_chest_top_' + rank.rank, side: 'dungeon_chest_front_' + rank.rank, bottom: 'dungeon_chest_top_' + rank.rank },
+    tip: rank.name + ' ranked dungeon storage. Protected until this dungeon is conquered.'
+  });
+  defBlock(dungeonCrateBlockForRank(rank.rank), rank.name + ' Floop Box', {
+    hard: 2.2, tool: 'axe', drop: null, interact: 'chest', tex: { all: 'dungeon_crate_' + rank.rank },
+    tip: rank.name + ' ranked dungeon loot box. Protected until this dungeon is conquered.'
   });
 }
 defBlock(B.SNOWY_GRASS, 'Snowy Grass', { hard: 0.7, tool: 'shovel', drop: { id: B.DIRT }, tex: { top: 'snow', side: 'snowy_grass_side', bottom: 'dirt' } });
@@ -15555,6 +15609,32 @@ const Atlas = {
       c.fillStyle = '#ffffff'; c.fillRect(x + 4, y + 3, 2, 1); c.fillRect(x + 9, y + 3, 2, 1);
     };
     for (const rank of DUNGEON_RANKS) reg('dungeon_door_' + rank.rank, (c, x, y) => dungeonDoorTile(c, x, y, rank.color, rank.dark));
+    const dungeonChestTile = (c, x, y, main, dark, front) => {
+      fill(c, x, y, dark);
+      c.fillStyle = '#101018'; c.fillRect(x, y, T, 2); c.fillRect(x, y + 14, T, 2); c.fillRect(x, y, 2, T); c.fillRect(x + 14, y, 2, T);
+      c.fillStyle = main; c.fillRect(x + 2, y + 2, 12, 12);
+      c.fillStyle = dark; c.fillRect(x + 2, y + 7, 12, 2); c.fillRect(x + 7, y + 2, 2, 12);
+      c.fillStyle = '#f7f1c8'; c.fillRect(x + 7, y + 7, 2, 2);
+      if (front) {
+        c.fillStyle = '#ffffff'; c.fillRect(x + 4, y + 3, 2, 1); c.fillRect(x + 10, y + 3, 2, 1);
+        c.fillStyle = '#0b0b12'; c.fillRect(x + 6, y + 10, 4, 1);
+      } else {
+        speck(c, x, y, [main, dark, '#f7f1c8'], 16);
+      }
+    };
+    const dungeonCrateTile = (c, x, y, main, dark) => {
+      fill(c, x, y, main); speck(c, x, y, [main, dark, '#f7f1c8'], 28);
+      c.fillStyle = dark;
+      c.fillRect(x, y, T, 2); c.fillRect(x, y + 14, T, 2); c.fillRect(x, y, 2, T); c.fillRect(x + 14, y, 2, T);
+      c.fillRect(x + 3, y + 3, 2, 10); c.fillRect(x + 11, y + 3, 2, 10);
+      for (let i = 3; i < 13; i++) { px(c, x, y, i, i, '#101018'); px(c, x, y, 15 - i, i, '#101018'); }
+      c.fillStyle = '#f7f1c8'; c.fillRect(x + 7, y + 7, 2, 2);
+    };
+    for (const rank of DUNGEON_RANKS) {
+      reg('dungeon_chest_top_' + rank.rank, (c, x, y) => dungeonChestTile(c, x, y, rank.color, rank.dark, false));
+      reg('dungeon_chest_front_' + rank.rank, (c, x, y) => dungeonChestTile(c, x, y, rank.color, rank.dark, true));
+      reg('dungeon_crate_' + rank.rank, (c, x, y) => dungeonCrateTile(c, x, y, rank.color, rank.dark));
+    }
     reg('loot_crate', (c, x, y) => {
       fill(c, x, y, '#a8814d'); speck(c, x, y, ['#9a7544', '#b58c55'], 30);
       c.fillStyle = '#4a3a20';
@@ -15608,16 +15688,35 @@ const Atlas = {
       c.fillStyle = '#d0a063'; c.fillRect(x + 2, y + 10, 4, 4); c.fillRect(x + 10, y + 10, 4, 4);
       c.fillStyle = '#5d3c1f'; c.fillRect(x + 1, y + 8, 14, 1);
     });
-    reg('spawner', (c, x, y) => {
-      fill(c, x, y, '#0a0e18');
-      c.fillStyle = '#3a4a66';
+    reg('rope_ladder', (c, x, y) => {
+      fill(c, x, y, 'rgba(0,0,0,0)');
+      c.fillStyle = '#7a5630';
+      c.fillRect(x + 4, y, 2, T); c.fillRect(x + 10, y, 2, T);
+      for (let yy = 2; yy < 16; yy += 4) c.fillRect(x + 3, y + yy, 10, 2);
+      c.fillStyle = '#b78a52'; c.fillRect(x + 5, y, 1, T); c.fillRect(x + 11, y, 1, T);
+      for (let yy = 3; yy < 16; yy += 4) c.fillRect(x + 4, y + yy, 8, 1);
+    });
+    const spawnerTile = (c, x, y, main, glow, broken) => {
+      fill(c, x, y, broken ? '#1b1b20' : '#0a0e18');
+      c.fillStyle = broken ? '#53515d' : main;
       for (const i of [0, 4, 8, 12, 15]) {
         c.fillRect(x + i, y, 1, T);
         c.fillRect(x, y + i, T, 1);
       }
-      c.fillStyle = '#c02020'; c.fillRect(x + 7, y + 7, 2, 2);
-      px(c, x, y, 8, 7, '#ff6040');
-    });
+      c.fillStyle = broken ? '#24242a' : glow;
+      c.fillRect(x + 6, y + 6, 4, 4);
+      if (broken) {
+        c.fillStyle = '#0a0a0d';
+        for (let i = 3; i < 13; i++) px(c, x, y, i, i, '#0a0a0d');
+        c.fillRect(x + 3, y + 11, 10, 2);
+      } else {
+        c.fillStyle = '#ffffff'; c.fillRect(x + 8, y + 6, 1, 2);
+        px(c, x, y, 8, 8, '#fff6b8');
+      }
+    };
+    reg('spawner', (c, x, y) => spawnerTile(c, x, y, '#3a4a66', '#c02020', false));
+    for (const rank of DUNGEON_RANKS) reg('spawner_' + rank.rank, (c, x, y) => spawnerTile(c, x, y, rank.dark, rank.color, false));
+    reg('spawner_broken', (c, x, y) => spawnerTile(c, x, y, '#53515d', '#24242a', true));
 
     // paint the atlas
     this.rows = Math.ceil(painters.length / COLS);

@@ -119,6 +119,7 @@ const SFX = (() => {
     hurt(pos)  { tone(160, 0.18, 'sawtooth', 0.2, -70, pos, 24); },
     mobHurt(pos) { tone(220, 0.14, 'square', 0.12, -90, pos, 34); },
     boom(pos)  { noise(0.9, 900, 0.6, 60, pos, 70); tone(60, 0.5, 'sine', 0.4, -30, pos, 70); },
+    spawnerBreak(pos) { noise(0.32, 1300, 0.28, 180, pos, 42); tone(150, 0.18, 'square', 0.12, -80, pos, 42); setTimeout(() => tone(90, 0.22, 'sawtooth', 0.08, -35, pos, 42), 80); },
     hiss(pos)  { noise(1.4, 3500, 0.14, 5500, pos, 26); },
     arrow(pos) { noise(0.12, 3000, 0.1, 800, pos, 34); },
     eat()      { noise(0.08, 600, 0.15); setTimeout(() => noise(0.08, 500, 0.15), 120); setTimeout(() => noise(0.1, 450, 0.15), 260); },

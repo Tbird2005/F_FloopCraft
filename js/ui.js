@@ -1184,8 +1184,8 @@ const UI = {
       B.XMAS_ORE, B.FLOOPIUM_ORE, B.PATAPIM_ORE, B.GUNPOWDER_ORE,
     ]);
     putMany('Utility', [
-      B.CRAFT, B.EXTREME_CRAFT, B.FURNACE, B.CHEST, B.JELLY_CHEST, B.LOOT_CRATE, B.CASINO, B.STOCKS,
-      B.TORCH, B.MEGA_TORCH, B.LADDER_PX, B.SIGN, B.BED, B.SUNBED, B.PLANTATION_POT, B.SPAWNER,
+      B.CRAFT, B.EXTREME_CRAFT, B.FURNACE, B.CHEST, B.JELLY_CHEST, B.LOOT_CRATE, ...DUNGEON_CHEST_IDS, ...DUNGEON_CRATE_IDS, B.CASINO, B.STOCKS,
+      B.TORCH, B.MEGA_TORCH, B.LADDER_PX, B.ROPE_LADDER, B.SIGN, B.BED, B.SUNBED, B.PLANTATION_POT, B.SPAWNER, ...DUNGEON_SPAWNER_IDS, B.BROKEN_SPAWNER,
       I.DOOR, I.BIRCH_DOOR, I.SPRUCE_DOOR, I.OASIS_DOOR,
       I.FLINT_STEEL, I.BUCKET, I.WATER_BUCKET, I.LAVA_BUCKET,
     ]);
@@ -1380,7 +1380,8 @@ const UI = {
   buildChest(ov) {
     const h = this.chestHit;
     const key = World.pkey(h.bx, h.by, h.bz);
-    const isJellyChest = h.id === B.JELLY_CHEST || World.getBlock(h.bx, h.by, h.bz) === B.JELLY_CHEST;
+    const blockId = World.getBlock(h.bx, h.by, h.bz) || h.id;
+    const isJellyChest = h.id === B.JELLY_CHEST || blockId === B.JELLY_CHEST;
     const chestSize = isJellyChest ? 54 : 27;
     if (!World.chests.has(key)) World.chests.set(key, new Array(chestSize).fill(null));
     if (World.chests.get(key).length < chestSize) {
@@ -1391,7 +1392,7 @@ const UI = {
 
     const p = document.createElement('div');
     p.className = 'panel';
-    p.innerHTML = '<h2>' + (isJellyChest ? 'Jelly Chest' : 'Chest') + '</h2>';
+    p.innerHTML = '<h2>' + ((Reg[blockId] && Reg[blockId].name) || (isJellyChest ? 'Jelly Chest' : 'Chest')) + '</h2>';
     const grid = document.createElement('div');
     grid.className = 'grid';
     grid.style.gridTemplateColumns = 'repeat(9, 40px)';

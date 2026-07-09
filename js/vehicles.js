@@ -295,6 +295,8 @@ const Vehicles = {
   },
 
   remove(v) {
+    if (!v || v.removed) return false;
+    v.removed = true;
     if (this.isCarLike(v)) {
       this.scene.remove(v.group);
       const i = this.cars.indexOf(v);
@@ -310,21 +312,25 @@ const Vehicles = {
       const i = this.boards.indexOf(v);
       if (i >= 0) this.boards.splice(i, 1);
     }
+    return true;
   },
 
   // vehicles take damage like mobs; destroyed -> item drop
   hurt(v, dmg, src) {
+    if (!v || v.removed || v.destroyed) return false;
     v.hp -= dmg;
     v.flashT = 0.3; // orange damage flash
     SFX.mobHurt({ x: v.x, y: v.y + 0.8, z: v.z });
     const pos = v.body ? v.body : v;
     Particles.burst(pos.x, pos.y + 0.6, pos.z, [0.5, 0.5, 0.5], 6, 2);
     if (v.hp <= 0) {
+      v.destroyed = true;
       if (this.driving === v || this.boating === v) this.exit(true);
       this.remove(v);
       Drops.spawn(pos.x, pos.y + 0.5, pos.z, v.item, 1);
       UI.chat(Reg[v.item].name + ' broke apart!', '#ff8080');
     }
+    return true;
   },
 
   maxHp(v) { return v.kind === 'plane' ? 10 : v.kind === 'supercar' ? 60 : v.kind === 'car' ? 40 : v.kind === 'boat' ? (v.lavaBoat ? 34 : 20) : 12; },
@@ -675,6 +681,7 @@ const Vehicles = {
 
   update(dt) {
     for (const car of this.cars) {
+      if (!car || car.removed || car.destroyed) continue;
       this.updateVehicleCommon(car, dt, this.driving === car, false);
       const b = car.body;
       car.wheelSpin += car.speed * dt * 3;
@@ -694,6 +701,7 @@ const Vehicles = {
       }
     }
     for (const boat of this.boats) {
+      if (!boat || boat.removed || boat.destroyed) continue;
       this.updateVehicleCommon(boat, dt, this.boating === boat, true);
       const b = boat.body;
       boat.group.position.set(b.x, b.y, b.z);
@@ -710,6 +718,7 @@ const Vehicles = {
       }
     }
     for (const board of this.boards) {
+      if (!board || board.removed || board.destroyed) continue;
       this.applyFlash(board, dt);
       this.tintVehicle(board, dt);
     }

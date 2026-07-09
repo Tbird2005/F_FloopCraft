@@ -593,7 +593,9 @@ const World = {
         this.furnaces.delete(k);
       }
     }
-    if ((oldId === B.CHEST || oldId === B.LOOT_CRATE || oldId === B.JELLY_CHEST) && newId !== B.CHEST && newId !== B.LOOT_CRATE && newId !== B.JELLY_CHEST) {
+    const oldWasStorage = typeof isStorageChestBlock === 'function' ? isStorageChestBlock(oldId) : (oldId === B.CHEST || oldId === B.LOOT_CRATE || oldId === B.JELLY_CHEST);
+    const newIsStorage = typeof isStorageChestBlock === 'function' ? isStorageChestBlock(newId) : (newId === B.CHEST || newId === B.LOOT_CRATE || newId === B.JELLY_CHEST);
+    if (oldWasStorage && !newIsStorage) {
       if (oldId === B.JELLY_CHEST && this.ready && typeof Jelly !== 'undefined' && !opts.jellyChestBreakHandled && !(typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client')) {
         Jelly.onChestAccess({ x, y, z, mode: 'break', wasJellyChest: true, oldId });
       }
@@ -606,12 +608,15 @@ const World = {
     if (isBed(oldId) && !isBed(newId)) this.bedDirs.delete(k);
     if (oldId === B.MR_FLOOP_DRINKING_WATER && newId !== B.MR_FLOOP_DRINKING_WATER) this.photoDirs.delete(k);
     if (isStairs(oldId) && !isStairs(newId)) this.stairSideways.delete(k);
-    if (oldId === B.SPAWNER && newId !== B.SPAWNER) this.spawners.delete(k);
+    const oldWasSpawner = typeof isSpawnerBlock === 'function' ? isSpawnerBlock(oldId) : oldId === B.SPAWNER;
+    const newIsSpawner = typeof isSpawnerBlock === 'function' ? isSpawnerBlock(newId) : newId === B.SPAWNER;
+    if (oldWasSpawner && !newIsSpawner) this.spawners.delete(k);
     if (oldId === B.JELLY_HOUSE && newId !== B.JELLY_HOUSE && typeof Jelly !== 'undefined' && !opts.jellyHouseBreakHandled) {
       Jelly.onHouseBreak(k, { reason: 'block_removed', drop: false });
     }
-    if (newId === B.SPAWNER && !this.spawners.has(k)) {
-      this.spawners.set(k, { type: ['skeleton', 'creeper', 'humbug'][(Math.random() * 3) | 0], cd: 3 });
+    if (newIsSpawner && !this.spawners.has(k)) {
+      const rank = typeof dungeonRankForSpawnerBlock === 'function' ? dungeonRankForSpawnerBlock(newId) : '';
+      this.spawners.set(k, rank ? this.createDungeonSpawnerState(rank, opts && opts.dungeonKey) : { type: ['skeleton', 'creeper', 'humbug'][(Math.random() * 3) | 0], cd: 3 });
     }
     if (newId === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
       const hasJellyPlacementData = !!(opts && (opts.jellyHouse || opts.itemData || opts.data || opts.stored || opts.jellyRoster || opts.seedDefault || opts.source));
@@ -739,7 +744,7 @@ const World = {
         ],
         rich: [
           [I.DIAMOND, 1, 2, 0.32], [I.STAR, 1, 1, 0.14],
-          [I.DUNGEON_KEY_BLUE, 1, 1, 0.12], [I.DARK_FLOOPIUM, 1, 1, 0.10],
+          [I.DUNGEON_KEY_GREEN, 1, 1, 0.12], [I.DARK_FLOOPIUM, 1, 1, 0.10],
         ],
       },
       blue: {
@@ -752,7 +757,7 @@ const World = {
         ],
         rich: [
           [I.DIAMOND, 2, 4, 0.50], [B.EMERALD_BLOCK, 1, 1, 0.20],
-          [I.DUNGEON_KEY_GOLD, 1, 1, 0.11], [I.CHARGE_CORE, 1, 1, 0.10],
+          [I.DUNGEON_KEY_BLUE, 1, 1, 0.11], [I.CHARGE_CORE, 1, 1, 0.10],
           [I.STAR, 1, 2, 0.18],
         ],
       },
@@ -767,7 +772,7 @@ const World = {
         ],
         rich: [
           [I.DIAMOND, 4, 8, 0.68], [I.CHARGE_CORE, 1, 2, 0.25],
-          [I.DUNGEON_KEY_DIAMOND, 1, 1, 0.07], [I.STAR, 1, 2, 0.28],
+          [I.DUNGEON_KEY_GOLD, 1, 1, 0.07], [I.STAR, 1, 2, 0.28],
           [I.DUNGEON_CORE_SHARD, 1, 1, 0.18], [I.FLOOP_RAY, 1, 1, 0.025],
         ],
       },
@@ -1078,6 +1083,16 @@ const World = {
     }
   },
 
+  surfaceTopBlockId(wx, wz, h) {
+    const y = Number.isFinite(h) ? h : this.heightAt(wx, wz);
+    const biome = this.biomeAt(wx, wz);
+    const beach = y <= this.SEA + 1;
+    if (beach || biome === 'desert') return B.SAND;
+    if (y > 58) return NoiseGen.hash2(this.seed + 3, wx, wz) < 0.6 ? B.SNOWY_GRASS : B.STONE;
+    if (biome === 'snowy') return B.SNOWY_GRASS;
+    return B.GRASS;
+  },
+
   featuresFor(cx, cz) {
     const k = this.key(cx, cz);
     if (this.featureCache.has(k)) return this.featureCache.get(k);
@@ -1107,6 +1122,7 @@ const World = {
       const wx = cx * 16 + lx, wz = cz * 16 + lz;
       const h = this.heightAt(wx, wz);
       if (h <= this.SEA + 1 || h > 57) continue;
+      if (this.surfaceTopBlockId(wx, wz, h) !== B.GRASS) continue;
       let type = 'oak';
       if (biome === 'snowy') type = 'spruce';
       else if (biome === 'forest') type = tr() < 0.4 ? 'birch' : 'oak';
@@ -1123,6 +1139,7 @@ const World = {
         const wx = cx * 16 + lx, wz = cz * 16 + lz;
         const h = this.heightAt(wx, wz);
         if (h <= this.SEA + 1 || h > 55) continue;
+        if (this.surfaceTopBlockId(wx, wz, h) !== B.GRASS) continue;
         const flower = [B.ROSE, B.DANDELION, B.CORNFLOWER][(tr() * 3) | 0];
         put(wx, h + 1, wz, flower, false);
       }
@@ -1136,8 +1153,7 @@ const World = {
         const wx = cx * 16 + lx, wz = cz * 16 + lz;
         const h = this.heightAt(wx, wz);
         if (h <= this.SEA + 1 || h > 57) continue;
-        const localBiome = this.biomeAt(wx, wz);
-        if (localBiome === 'desert' || h <= this.SEA + 1) continue;
+        if (this.surfaceTopBlockId(wx, wz, h) !== B.GRASS) continue;
         put(wx, h + 1, wz, B.WILD_GRASS, false);
       }
     }
@@ -1181,8 +1197,8 @@ const World = {
             for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
               if (Math.abs(dx) + Math.abs(dz) <= 2) put(ox + dx, oh, oz + dz, B.WATER, true);
             }
-            put(ox - 2, oh + 1, oz, B.DANDELION, false);
-            put(ox + 2, oh + 1, oz - 1, B.ROSE, false);
+            if (this.surfaceTopBlockId(ox - 2, oz, oh) === B.GRASS) put(ox - 2, oh + 1, oz, B.DANDELION, false);
+            if (this.surfaceTopBlockId(ox + 2, oz - 1, oh) === B.GRASS) put(ox + 2, oh + 1, oz - 1, B.ROSE, false);
             this.treeBlocks(put, ox + 2, oh, oz + 2, 'oasis', tr);
           }
         }
@@ -1525,6 +1541,45 @@ const World = {
   },
 
   // ---------- dungeons ----------
+  dungeonSpawnerProfile(rank) {
+    const key = (rank || 'green').toLowerCase();
+    const profiles = {
+      green: { min: 3, max: 4, liveCap: 2, pool: ['skeleton', 'skeleton', 'skeleton', 'creeper'] },
+      blue: { min: 6, max: 8, liveCap: 3, pool: ['skeleton', 'skeleton', 'creeper', 'creeper', 'humbug'] },
+      gold: { min: 10, max: 14, liveCap: 4, pool: ['humbug', 'humbug', 'skeleton', 'creeper', 'creeper', 'tung'] },
+      diamond: { min: 16, max: 20, liveCap: 5, pool: ['humbug', 'humbug', 'tung', 'tung', 'creeper', 'creeper', 'skeleton'] },
+    };
+    return profiles[key] || profiles.green;
+  },
+
+  createDungeonSpawnerState(rank, dungeonKey, rnd) {
+    const profile = this.dungeonSpawnerProfile(rank);
+    const r = typeof rnd === 'function' ? rnd : Math.random;
+    const max = profile.min + ((r() * (profile.max - profile.min + 1)) | 0);
+    return {
+      type: 'dungeon_spawner', rank: (rank || 'green').toLowerCase(), dungeonKey: dungeonKey || '',
+      cd: 2 + r() * 2, remaining: max, max, spawned: 0, liveCap: profile.liveCap, pool: profile.pool.slice(),
+    };
+  },
+
+  spawnerMobForState(sp) {
+    if (!sp) return 'skeleton';
+    if (sp.type && sp.type !== 'dungeon_spawner') return sp.type === 'spider' ? (Math.random() < 0.5 ? 'skeleton' : 'creeper') : sp.type;
+    const rank = sp.rank || 'green';
+    const profile = this.dungeonSpawnerProfile(rank);
+    const pool = Array.isArray(sp.pool) && sp.pool.length ? sp.pool : profile.pool;
+    return pool[(Math.random() * pool.length) | 0] || 'skeleton';
+  },
+
+  playerInsideDungeon(dungeon, body) {
+    if (!dungeon || !body) return false;
+    const px = Math.floor(body.x), py = Math.floor(body.y), pz = Math.floor(body.z);
+    for (const [ox, oy, oz] of [[0, 0, 0], [0, 1, 0], [0, -1, 0], [0, 2, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
+      if (this.dungeonOwnsBlock(dungeon, px + ox, py + oy, pz + oz)) return true;
+    }
+    return false;
+  },
+
   dungeonFor(dscx, dscz) {
     const k = dscx + '|' + dscz;
     if (this.dungeonCache.has(k)) return this.dungeonCache.get(k);
@@ -1532,6 +1587,9 @@ const World = {
     if (r() > 0.35) { this.dungeonCache.set(k, null); return null; }
     const rankRoll = r();
     const rankInfo = dungeonRankInfo(rankRoll < 0.55 ? 'green' : rankRoll < 0.80 ? 'blue' : rankRoll < 0.95 ? 'gold' : 'diamond');
+    const rankChest = typeof dungeonChestBlockForRank === 'function' ? dungeonChestBlockForRank(rankInfo.rank) : B.CHEST;
+    const rankCrate = typeof dungeonCrateBlockForRank === 'function' ? dungeonCrateBlockForRank(rankInfo.rank) : B.LOOT_CRATE;
+    const rankSpawner = typeof dungeonSpawnerBlockForRank === 'function' ? dungeonSpawnerBlockForRank(rankInfo.rank) : B.SPAWNER;
     const conqueredAlready = this.dungeonConquered && this.dungeonConquered.has(k);
 
     const cells = new Map();
@@ -1559,28 +1617,21 @@ const World = {
       // some rooms guard their loot with a monster spawner
       if (!conqueredAlready && r() < 0.35 + rankInfo.mobBonus * 0.12) {
         const sx2 = cx0 + (w >> 1), sz2 = cz0 + (l >> 1);
-        setC(sx2, y0, sz2, B.SPAWNER);
+        setC(sx2, y0, sz2, rankSpawner);
         const sk = this.pkey(sx2, y0, sz2);
-        if (!this.spawners.has(sk)) {
-          const mobPool = rankInfo.rank === 'green'
-            ? ['skeleton', 'creeper', 'humbug']
-            : rankInfo.rank === 'blue'
-              ? ['skeleton', 'creeper', 'humbug', 'humbug']
-              : ['skeleton', 'creeper', 'humbug', 'humbug', 'tung'];
-          this.spawners.set(sk, { type: mobPool[(r() * mobPool.length) | 0], cd: 3 });
-        }
+        if (!this.spawners.has(sk)) this.spawners.set(sk, this.createDungeonSpawnerState(rankInfo.rank, k, r));
       }
       const nLoot = 1 + ((r() * 2) | 0);
       for (let i = 0; i < nLoot; i++) {
         const lx = cx0 + 1 + ((r() * (w - 2)) | 0), lz = cz0 + 1 + ((r() * (l - 2)) | 0);
-        setC(lx, y0, lz, B.LOOT_CRATE);
+        setC(lx, y0, lz, rankCrate);
         this.initChest(lx, y0, lz, r, r() < rankInfo.richBonus, 'dungeon:' + rankInfo.rank);
       }
       if (isLast) {
         setC(cx0 + (w >> 1), y0, cz0 + (l >> 1), B.DUNGEON_CORE);
-        setC(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), B.LOOT_CRATE);
+        setC(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), rankCrate);
         this.initChest(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), r, true, 'dungeon:' + rankInfo.rank);
-        setC(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, B.CHEST);
+        setC(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, rankChest);
         this.initChest(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, r, true, 'dungeon:' + rankInfo.rank);
         const li = (r() * LORE.length) | 0;
         setC(cx0 + (w >> 1) - 1, y0, cz0 + (l >> 1), B.LORE);
@@ -1611,6 +1662,55 @@ const World = {
       return [x, z];
     };
 
+    const roomWalkPoint = (room) => {
+      const cx = room.x + (room.w >> 1), cz = room.z + (room.l >> 1);
+      const candidates = [
+        [cx + 2, cz - 1], [cx + 2, cz + 1], [cx - 2, cz - 1], [cx - 2, cz + 1],
+        [cx + 1, cz - 2], [cx - 1, cz + 2], [cx, cz - 2], [cx, cz + 2],
+        [cx + 1, cz], [cx - 1, cz], [cx, cz - 1], [cx, cz + 1], [cx, cz],
+      ];
+      for (const [x, z] of candidates) {
+        if (x <= room.x || x >= room.x + room.w - 1 || z <= room.z || z >= room.z + room.l - 1) continue;
+        const cell = cells.get(this.pkey(x, baseY, z));
+        if (!cell || cell.id === B.AIR || cell.id === B.TORCH) return { x, z };
+      }
+      return { x: cx, z: cz };
+    };
+    const carveGuaranteedSegment = (x, z, axis) => {
+      const lanes = axis === 'z' ? [[0, 0], [1, 0]] : [[0, 0], [0, 1]];
+      for (const [ox, oz] of lanes) {
+        const px = x + ox, pz = z + oz;
+        for (let y = baseY; y < baseY + 3; y++) {
+          const key = this.pkey(px, y, pz);
+          const old = cells.get(key);
+          if (!old || old.id !== B.DUNGEON_CORE) {
+            if (old && typeof isStorageChestBlock === 'function' && isStorageChestBlock(old.id)) this.chests.delete(key);
+            setC(px, y, pz, B.AIR);
+          }
+        }
+        if (!cells.has(this.pkey(px, baseY - 1, pz))) setC(px, baseY - 1, pz, B.DUNGEON_BRICK);
+        if (!cells.has(this.pkey(px, baseY + 3, pz))) setC(px, baseY + 3, pz, B.DUNGEON_BRICK);
+      }
+      for (let y = baseY; y < baseY + 3; y++) {
+        if (axis === 'z') {
+          if (!cells.has(this.pkey(x - 1, y, z))) setC(x - 1, y, z, B.DUNGEON_BRICK);
+          if (!cells.has(this.pkey(x + 2, y, z))) setC(x + 2, y, z, B.DUNGEON_BRICK);
+        } else {
+          if (!cells.has(this.pkey(x, y, z - 1))) setC(x, y, z - 1, B.DUNGEON_BRICK);
+          if (!cells.has(this.pkey(x, y, z + 2))) setC(x, y, z + 2, B.DUNGEON_BRICK);
+        }
+      }
+    };
+    const carveGuaranteedPath = (a, b) => {
+      if (!a || !b) return;
+      let x = a.x | 0, z = a.z | 0;
+      carveGuaranteedSegment(x, z, 'x');
+      const sx = b.x > x ? 1 : -1;
+      while (x !== (b.x | 0)) { x += sx; carveGuaranteedSegment(x, z, 'x'); }
+      const sz = b.z > z ? 1 : -1;
+      while (z !== (b.z | 0)) { z += sz; carveGuaranteedSegment(x, z, 'z'); }
+    };
+
     const loX = dscx * 96 - 24, hiX = dscx * 96 + 112;
     const loZ = dscz * 96 - 24, hiZ = dscz * 96 + 112;
     const nRooms = 5 + ((r() * 4) | 0);
@@ -1633,6 +1733,8 @@ const World = {
         if (!moved) break;
       }
     }
+    const walkPoints = rooms.map(roomWalkPoint);
+    for (let i = 1; i < walkPoints.length; i++) carveGuaranteedPath(walkPoints[i - 1], walkPoints[i]);
 
     if (rooms.length) {
       const first = rooms[0];
@@ -1646,6 +1748,11 @@ const World = {
       const shaftX = first.x - 4;
       const shaftZ = doorCenterZ;
       const surfaceFloorY = Math.min(this.H - 5, Math.max(first.y + 8, this.heightAt(shaftX, shaftZ)));
+      const setWall = (x, y, z) => {
+        const old = cells.get(this.pkey(x, y, z));
+        if (!old || old.id === B.DUNGEON_BRICK) setC(x, y, z, B.DUNGEON_BRICK);
+      };
+      carveGuaranteedPath({ x: shaftX, z: shaftZ }, walkPoints[0]);
 
       // Underground entrance room. The east wall opens into room 1; the ranked
       // 3x3 gate lives on the surface tower so it is reachable before the ladder.
@@ -1653,7 +1760,8 @@ const World = {
         for (let y = first.y - 1; y <= first.y + 3; y++) {
           for (let z = entryZ0; z <= entryZ1; z++) {
             const shell = x === entryWest || x === entryEast || y === first.y - 1 || y === first.y + 3 || z === entryZ0 || z === entryZ1;
-            setC(x, y, z, shell ? B.DUNGEON_BRICK : B.AIR);
+            if (shell) setWall(x, y, z);
+            else setC(x, y, z, B.AIR);
           }
         }
       }
@@ -1666,8 +1774,8 @@ const World = {
         for (let dx = -1; dx <= 1; dx++) {
           for (let dz = -1; dz <= 1; dz++) {
             const x = shaftX + dx, z = shaftZ + dz;
-            if (dx === 0 && dz === 0) setC(x, y, z, B.LADDER_PZ);
-            else setC(x, y, z, B.DUNGEON_BRICK);
+            if (dx === 0 && dz === 0) setC(x, y, z, B.ROPE_LADDER);
+            else setWall(x, y, z);
           }
         }
       }
@@ -1677,8 +1785,7 @@ const World = {
         }
       }
       for (let y = first.y; y < surfaceFloorY; y++) {
-        setC(shaftX, y, shaftZ - 1, B.DUNGEON_BRICK);
-        setC(shaftX, y, shaftZ, B.LADDER_PZ);
+        setC(shaftX, y, shaftZ, B.ROPE_LADDER);
       }
 
       // Surface access room. Its outside wall is the reachable 3x3 ranked gate.
@@ -1686,13 +1793,13 @@ const World = {
         for (let y = surfaceFloorY; y <= surfaceFloorY + 4; y++) {
           for (let z = shaftZ - 2; z <= shaftZ + 2; z++) {
             const shell = x === shaftX - 2 || x === shaftX + 2 || y === surfaceFloorY || y === surfaceFloorY + 4 || z === shaftZ - 2 || z === shaftZ + 2;
-            setC(x, y, z, shell ? B.DUNGEON_BRICK : B.AIR);
+            if (shell) setWall(x, y, z);
+            else setC(x, y, z, B.AIR);
           }
         }
       }
       for (let y = surfaceFloorY; y <= surfaceFloorY + 3; y++) {
-        setC(shaftX, y, shaftZ - 1, B.DUNGEON_BRICK);
-        setC(shaftX, y, shaftZ, B.LADDER_PZ);
+        setC(shaftX, y, shaftZ, B.ROPE_LADDER);
       }
       for (let x = shaftX - 1; x <= shaftX + 1; x++) {
         for (let y = surfaceFloorY + 1; y <= surfaceFloorY + 3; y++) setC(x, y, shaftZ + 2, rankInfo.door);
@@ -1709,6 +1816,31 @@ const World = {
       setC(shaftX + 1, first.y, shaftZ + 1, B.TORCH);
     }
 
+    const ensureRankedStorage = (id, rich) => {
+      if (!rooms.length) return false;
+      for (const c of cells.values()) if (c.id === id) return true;
+      const room = rooms[rooms.length - 1];
+      const y = room.y;
+      const candidates = [
+        [room.x + 1, room.z + 1], [room.x + room.w - 2, room.z + room.l - 2],
+        [room.x + 1, room.z + room.l - 2], [room.x + room.w - 2, room.z + 1],
+        [room.x + 2, room.z + 1], [room.x + room.w - 3, room.z + room.l - 2],
+        [room.x + 1, room.z + 2], [room.x + room.w - 2, room.z + room.l - 3],
+      ];
+      for (const [sx, sz] of candidates) {
+        if (sx <= room.x || sx >= room.x + room.w - 1 || sz <= room.z || sz >= room.z + room.l - 1) continue;
+        const key = this.pkey(sx, y, sz);
+        const cur = cells.get(key);
+        if (cur && cur.id !== B.AIR && cur.id !== B.TORCH) continue;
+        setC(sx, y, sz, id);
+        this.initChest(sx, y, sz, r, rich, 'dungeon:' + rankInfo.rank);
+        return true;
+      }
+      return false;
+    };
+    ensureRankedStorage(rankCrate, true);
+    ensureRankedStorage(rankChest, true);
+
     const byChunk = new Map();
     for (const c of cells.values()) {
       const ck = this.key(c.x >> 4, c.z >> 4);
@@ -1720,7 +1852,7 @@ const World = {
       this.structSeen.add(dgKey);
       for (const s of spots) this.dungeonSpots.push(s);
     }
-    const res = { byChunk, rooms, key: k, rank: rankInfo.rank, door: rankInfo.door };
+    const res = { byChunk, rooms, key: k, rank: rankInfo.rank, door: rankInfo.door, cellKeys: new Set(cells.keys()) };
     this.dungeonCache.set(k, res);
     return res;
   },
@@ -1729,52 +1861,67 @@ const World = {
     return Math.floor(x / 96) + '|' + Math.floor(z / 96);
   },
 
+  dungeonOwnsBlock(dungeon, x, y, z) {
+    if (!dungeon || !dungeon.byChunk) return false;
+    const pk = this.pkey(x | 0, y | 0, z | 0);
+    if (dungeon.cellKeys && dungeon.cellKeys.has(pk)) return true;
+    const bucket = dungeon.byChunk.get(this.key((x | 0) >> 4, (z | 0) >> 4));
+    if (!bucket) return false;
+    return bucket.some(c => c.x === (x | 0) && c.y === (y | 0) && c.z === (z | 0));
+  },
+
+  dungeonAtBlock(x, y, z) {
+    const gx = Math.floor((x | 0) / 96), gz = Math.floor((z | 0) / 96);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const dg = this.dungeonFor(gx + dx, gz + dz);
+        if (this.dungeonOwnsBlock(dg, x, y, z)) return dg;
+      }
+    }
+    return null;
+  },
+
   deactivatedDungeonBlockId(id) {
     if (id === B.DUNGEON_BRICK || id === B.DUNGEON_CORE || isDungeonDoor(id)) return B.DUNGEON_BRICK_INACTIVE;
-    if (id === B.SPAWNER) return B.AIR;
+    if (typeof isSpawnerBlock === 'function' && isSpawnerBlock(id)) return B.BROKEN_SPAWNER;
+    if (id === B.SPAWNER) return B.BROKEN_SPAWNER;
     return id;
   },
 
   isProtectedDungeonBlock(x, y, z, id) {
     if (id === B.DUNGEON_CORE || id === B.DUNGEON_BRICK_INACTIVE) return false;
-    if (isActiveDungeonBlock(id)) return true;
-    const dkey = this.dungeonCellKeyForPos(x, z);
-    if (this.dungeonConquered && this.dungeonConquered.has(dkey)) return false;
-    const protectedContent = id === B.LOOT_CRATE || id === B.CHEST || id === B.SPAWNER || id === B.LORE || id === B.TORCH;
-    if (!protectedContent) return false;
-    for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 3; dy++) for (let dz = -2; dz <= 2; dz++) {
-      if (isActiveDungeonBlock(this.getBlock(x + dx, y + dy, z + dz))) return true;
+    const storage = typeof isStorageChestBlock === 'function' ? isStorageChestBlock(id) : (id === B.LOOT_CRATE || id === B.CHEST || id === B.JELLY_CHEST);
+    const spawnerLike = typeof isSpawnerBlock === 'function' ? isSpawnerBlock(id) : id === B.SPAWNER;
+    const protectedContent = storage || spawnerLike || id === B.BROKEN_SPAWNER || id === B.ROPE_LADDER || id === B.LORE || id === B.TORCH;
+    const dg = this.dungeonAtBlock(x, y, z);
+    if (dg) {
+      if (this.dungeonConquered && this.dungeonConquered.has(dg.key)) return false;
+      return isActiveDungeonBlock(id) || protectedContent;
     }
-    return false;
+    return isActiveDungeonBlock(id);
   },
 
   deactivateDungeonAt(x, y, z) {
-    const dkey = this.dungeonCellKeyForPos(x, z);
+    const dg = this.dungeonAtBlock(x, y, z);
+    const dkey = dg && dg.key ? dg.key : this.dungeonCellKeyForPos(x, z);
     if (!this.dungeonConquered) this.dungeonConquered = new Set();
     this.dungeonConquered.add(dkey);
-    const radius = 160;
-    const radius2 = radius * radius;
     const touched = new Set();
-    for (const ch of this.chunks.values()) {
-      const minX = ch.cx * 16, minZ = ch.cz * 16;
-      const maxX = minX + 15, maxZ = minZ + 15;
-      const nearX = x < minX ? minX : x > maxX ? maxX : x;
-      const nearZ = z < minZ ? minZ : z > maxZ ? maxZ : z;
-      const ddx = nearX - x, ddz = nearZ - z;
-      if (ddx * ddx + ddz * ddz > radius2) continue;
+    if (!dg || !dg.byChunk) return 0;
+    for (const [ck, bucket] of dg.byChunk.entries()) {
+      const ch = this.chunks.get(ck);
+      if (!ch) continue;
       let changed = false;
-      for (let yy = 0; yy < this.H; yy++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
-        const wx = ch.cx * 16 + lx, wz = ch.cz * 16 + lz;
-        const dx = wx - x, dz = wz - z;
-        if (dx * dx + dz * dz > radius2) continue;
-        const idx = this.idx(lx, yy, lz);
+      for (const cell of bucket) {
+        if (cell.y < 0 || cell.y >= this.H) continue;
+        const lx = cell.x & 15, lz = cell.z & 15;
+        const idx = this.idx(lx, cell.y, lz);
         const oldId = ch.blocks[idx];
         const newId = this.deactivatedDungeonBlockId(oldId);
         if (newId === oldId) continue;
         ch.blocks[idx] = newId;
-        const pk = this.pkey(wx, yy, wz);
+        const pk = this.pkey(cell.x, cell.y, cell.z);
         this.diffs.set(pk, newId);
-        const ck = this.key(ch.cx, ch.cz);
         if (!this.diffIndex.has(ck)) this.diffIndex.set(ck, new Map());
         this.diffIndex.get(ck).set(pk, newId);
         if (oldId === B.DUNGEON_CORE) this.lights.delete(pk);
@@ -1782,7 +1929,6 @@ const World = {
         changed = true;
       }
       if (changed) {
-        const ck = this.key(ch.cx, ch.cz);
         touched.add(ck);
         if (ch.hasMesh) this.dirty.add(ck);
         this.relightQueue.add(ck);
@@ -3403,7 +3549,7 @@ const World = {
     const canReplace = (id) => id === B.AIR || (Reg[id] && Reg[id].replaceable);
     const trySpot = (px, py, pz) => {
       const ground = this.getBlock(px, py, pz);
-      if (ground !== B.GRASS && ground !== B.SNOWY_GRASS) return false;
+      if (ground !== B.GRASS) return false;
       const above = this.getBlock(px, py + 1, pz);
       if (!canReplace(above)) return false;
       const raw = this.getLightRaw(px, py + 1, pz);

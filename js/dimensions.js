@@ -89,7 +89,11 @@ const Dimensions = {
       signDirs: [...World.signDirs.entries()],
       lore: [...World.loreMap.entries()],
       chests: [...World.chests.entries()].map(([k, slots]) => [k, slots.map(s => pack(s))]),
-      spawners: [...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, sp.type, sp.roster || null]),
+      spawners: [...World.spawners.entries()].filter(([k, sp]) => !sp || sp.type !== 'jelly_house').map(([k, sp]) => [k, {
+        type: sp.type, roster: sp.roster || null, rank: sp.rank || '', remaining: sp.remaining,
+        max: sp.max, spawned: sp.spawned, dungeonKey: sp.dungeonKey || '', liveCap: sp.liveCap,
+        pool: Array.isArray(sp.pool) ? sp.pool.slice(0, 12) : undefined,
+      }]),
       jellyHouses: (typeof Jelly !== 'undefined' ? Jelly.saveHouseEntries() : []),
       dungeonConquered: [...(World.dungeonConquered || new Set()).values()],
       bedDirs: [...World.bedDirs.entries()],
@@ -157,9 +161,17 @@ const Dimensions = {
     for (const [k, i] of st.lore || []) World.loreMap.set(k, i);
     for (const [k, slots] of st.chests || []) World.chests.set(k, slots.map(v => unpack(v)));
     if (typeof Jelly !== 'undefined') Jelly.loadHouseEntries(st.jellyHouses || []);
-    for (const [k, type, roster] of st.spawners || []) {
-      if (type === 'jelly_house' && typeof Jelly !== 'undefined') { Jelly.migrateLegacySaveSpawners([[k, type, roster]]); continue; }
-      World.spawners.set(k, { type, cd: 3, roster: Array.isArray(roster) ? roster.slice() : undefined });
+    for (const [k, raw, legacyRoster] of st.spawners || []) {
+      const obj = raw && typeof raw === 'object' ? raw : { type: raw, roster: legacyRoster };
+      if (obj.type === 'jelly_house' && typeof Jelly !== 'undefined') { Jelly.migrateLegacySaveSpawners([[k, obj.type, obj.roster]]); continue; }
+      World.spawners.set(k, {
+        type: obj.type, cd: Number.isFinite(+obj.cd) ? +obj.cd : 3,
+        roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined,
+        rank: obj.rank || '', remaining: Number.isFinite(+obj.remaining) ? +obj.remaining : undefined,
+        max: Number.isFinite(+obj.max) ? +obj.max : undefined, spawned: Number.isFinite(+obj.spawned) ? +obj.spawned : undefined,
+        dungeonKey: obj.dungeonKey || '', liveCap: Number.isFinite(+obj.liveCap) ? +obj.liveCap : undefined,
+        pool: Array.isArray(obj.pool) ? obj.pool.slice(0, 12) : undefined,
+      });
     }
     for (const [k, d] of st.bedDirs || []) World.bedDirs.set(k, d);
     for (const [k, d] of st.photoDirs || []) World.photoDirs.set(k, d);
