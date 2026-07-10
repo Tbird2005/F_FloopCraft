@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v116',
+  versionTag: 'ffloopcraft-v117',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -1354,7 +1354,20 @@ const Multiplayer = {
       this.applyingRemote = true;
       try {
         World.signs = new Map(msg.signs || []); World.signDirs = new Map(msg.signDirs || []); World.loreMap = new Map(msg.lore || []);
-        World.chests = new Map((msg.chests || []).map(([k, slots]) => [k, (slots || []).map(unpack)]));
+        // Chests/furnaces must NOT be wholesale-replaced: this snapshot is up to
+        // 1.2s stale, and stomping a container the client is editing reverted
+        // in-flight item moves (the classic dupe/vanish under ping). The open
+        // chest is lock-holder authoritative (chest_snapshot/chest_state own it),
+        // and anything this client edited in the last few seconds is left alone.
+        const nowMs = performance.now();
+        const recent = this._recentContainerEdits || (this._recentContainerEdits = new Map());
+        for (const [rk, until] of recent) if (until < nowMs) recent.delete(rk);
+        const openChestKey = (typeof UI !== 'undefined' && UI.screen === 'chest' && UI.chestHit)
+          ? World.pkey(UI.chestHit.bx, UI.chestHit.by, UI.chestHit.bz) : '';
+        const chestProtected = (k) => k === openChestKey || recent.has(k);
+        const incomingChests = new Map((msg.chests || []).map(([k, slots]) => [k, (slots || []).map(unpack)]));
+        for (const [k, slots] of incomingChests) if (!chestProtected(k)) World.chests.set(k, slots);
+        for (const k of [...World.chests.keys()]) if (!incomingChests.has(k) && !chestProtected(k)) World.chests.delete(k);
         World.spawners = new Map((msg.spawners || []).filter(([k, val]) => !val || (val.type || val) !== 'jelly_house').map(([k, val]) => { const obj = (val && typeof val === 'object') ? val : { type: val }; return [k, {
             type: obj.type, cd: Number.isFinite(+obj.cd) ? +obj.cd : 3,
             roster: Array.isArray(obj.roster) ? obj.roster.slice() : undefined,
@@ -1366,7 +1379,19 @@ const Multiplayer = {
         if (typeof Jelly !== 'undefined') Jelly.loadHouseEntries(msg.jellyHouses || []);
         World.bedDirs = new Map(msg.bedDirs || []); World.photoDirs = new Map(msg.photoDirs || []); World.stairSideways = new Map(msg.stairSideways || []);
         World.crops = new Map(msg.crops || []); World.plantationOrigins = new Map(msg.plantationOrigins || []); World.plantationUnderSlabs = new Map(msg.plantationUnderSlabs || []);
-        World.furnaces = new Map((msg.furnaces || []).map(([k, f]) => [k, { in:unpack(f.i), fuel:unpack(f.f), out:unpack(f.o), burn:f.burn || 0, burnMax:f.burnMax || 0, cook:f.cook || 0 }]));
+        // Furnaces: full adopt EXCEPT ones this client just edited — for those,
+        // only the host's burn/cook progress scalars come through so the UI bars
+        // keep moving without reverting the in-flight slot changes.
+        const incomingFurn = new Map((msg.furnaces || []).map(([k, f]) => [k, { in:unpack(f.i), fuel:unpack(f.f), out:unpack(f.o), burn:f.burn || 0, burnMax:f.burnMax || 0, cook:f.cook || 0 }]));
+        for (const [k, f] of incomingFurn) {
+          if (recent.has(k)) {
+            const cur = World.furnaces.get(k);
+            if (cur) { cur.burn = f.burn; cur.burnMax = f.burnMax; cur.cook = f.cook; }
+            else World.furnaces.set(k, f);
+          } else World.furnaces.set(k, f);
+        }
+        for (const k of [...World.furnaces.keys()]) if (!incomingFurn.has(k) && !recent.has(k)) World.furnaces.delete(k);
+        if (typeof UI !== 'undefined' && UI.screen === 'furnace' && UI.refreshAll) UI.refreshAll();
         for (const k of World.chunks.keys()) World.dirty.add(k);
       } finally { this.applyingRemote = false; }
     },
@@ -6088,5 +6113,25 @@ const Multiplayer = {
       return;
     }
     return prevReceive(msg, fromId, cameFromClient);
+  };
+})();
+
+// ============================================================
+// Container edit guard (installFloopContainerEditGuard)
+// Records which chest/furnace THIS client just touched, so the periodic
+// host_world_state merge (applyHostWorldState) won't revert in-flight
+// item moves — the root cause of chest item dupes/vanishes under ping.
+// ============================================================
+(function installFloopContainerEditGuard() {
+  const MP = Multiplayer;
+  const prevSend = MP.send.bind(MP);
+  MP.send = function(msg) {
+    if (msg && this.role === 'client') {
+      const recent = this._recentContainerEdits || (this._recentContainerEdits = new Map());
+      if ((msg.type === 'chest_state' || msg.type === 'chest_close') && msg.key) recent.set(String(msg.key), performance.now() + 5000);
+      if (msg.chest && msg.chest.key) recent.set(String(msg.chest.key), performance.now() + 5000);
+      if (msg.furnace && msg.furnace.key) recent.set(String(msg.furnace.key), performance.now() + 5000);
+    }
+    return prevSend(msg);
   };
 })();

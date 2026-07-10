@@ -93,9 +93,28 @@ const Mobs = {
 
   targetBody(tgt) {
     if (!tgt) return null;
+    if (tgt.peerId) { // remote player: host-side mob AI tracks their streamed state
+      const p = (typeof Multiplayer !== 'undefined' && Multiplayer.peers) ? Multiplayer.peers.get(tgt.peerId) : null;
+      const s = p && (p.target || p.state);
+      return s ? { x: +s.x, y: +s.y, z: +s.z, h: +s.h || 1.8 } : null;
+    }
     if (tgt.isPlayer && typeof Player !== 'undefined' && Player.body) return Player.body;
     if (tgt.mob && tgt.mob.body) return tgt.mob.body;
     return null;
+  },
+
+  // one target candidate per living, non-creative, same-dimension remote player
+  makePeerTargets() {
+    if (typeof Multiplayer === 'undefined' || Multiplayer.role !== 'host' || !Multiplayer.connected || !Multiplayer.peers) return [];
+    const myDim = (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld');
+    const out = [];
+    for (const [pid, p] of Multiplayer.peers.entries()) {
+      const s = p && (p.target || p.state);
+      if (!s || s.dead || s.inv || !Number.isFinite(+s.x)) continue;
+      if ((s.dim || 'overworld') !== myDim) continue;
+      out.push({ x: +s.x, y: +s.y, z: +s.z, h: +s.h || 1.8, mob: null, isPlayer: true, peerId: pid });
+    }
+    return out;
   },
 
   targetWorldPos(tgt) {
@@ -1166,14 +1185,23 @@ const Mobs = {
 
   targetKey(tgt) {
     if (!tgt) return '';
+    if (tgt.peerId) return 'peer:' + tgt.peerId;
     if (tgt.isPlayer) return 'player';
     if (tgt.mob) return 'mob:' + this.mobUid(tgt.mob);
     return '';
   },
 
+  // is this remote player still a valid victim? (connected, alive, not creative)
+  peerTargetAlive(pid) {
+    const p = (typeof Multiplayer !== 'undefined' && Multiplayer.peers) ? Multiplayer.peers.get(pid) : null;
+    const s = p && (p.target || p.state);
+    return !!(s && !s.dead && !s.inv);
+  },
+
   canSeeTarget(m, tgt) {
     if (!m || !m.body || !tgt) return false;
-    if (tgt.isPlayer && (typeof Player === 'undefined' || Player.dead || Player.gamemode === 'creative')) return false;
+    if (tgt.peerId && !this.peerTargetAlive(tgt.peerId)) return false;
+    if (tgt.isPlayer && !tgt.peerId && (typeof Player === 'undefined' || Player.dead || Player.gamemode === 'creative')) return false;
     if (tgt.mob && (tgt.mob.dead || !tgt.mob.body)) return false;
     if (!tgt.isPlayer && !tgt.mob && !Number.isFinite(tgt.x)) return false;
     if (typeof World === 'undefined' || !World.lineOfSight) return true;
@@ -1201,6 +1229,7 @@ const Mobs = {
     m.targetLastSeen = {
       x: tgt.x, y: tgt.y, z: tgt.z, h: tgt.h || 1,
       isPlayer: !!tgt.isPlayer,
+      peerId: tgt.peerId || '',
       mob: tgt.mob || null,
       mobType: tgt.mob ? tgt.mob.type : (tgt.isPlayer ? 'player' : ''),
     };
@@ -1220,6 +1249,14 @@ const Mobs = {
 
   rememberedTarget(m, maxDist) {
     if (!m || !m.body || !m.targetMemoryKey || !(m.targetMemoryT > 0) || !m.targetLastSeen) return null;
+    // memory of a player who has since gone creative/died/left is dropped —
+    // mobs used to keep chasing you for 30s after /gamemode creative
+    if (m.targetMemoryKey === 'player' && (typeof Player === 'undefined' || Player.dead || Player.gamemode === 'creative')) {
+      this.forgetTargetMemory(m); return null;
+    }
+    if (m.targetMemoryKey.indexOf('peer:') === 0 && !this.peerTargetAlive(m.targetMemoryKey.slice(5))) {
+      this.forgetTargetMemory(m); return null;
+    }
 
     // Important: LOS memory is a LAST-SEEN POSITION, not magic wall-hack tracking.
     // The old code returned the live mob/player body for 30 seconds after LOS broke,
@@ -1279,6 +1316,13 @@ const Mobs = {
       best = playerTgt;
       bestD2 = d.x * d.x + d.z * d.z + (d.y * d.y) * 0.25;
     }
+    // remote players are victims too (nearest player wins, host-side AI)
+    for (const peerTgt of this.makePeerTargets()) {
+      if (!this.canSeeTarget(m, peerTgt)) continue;
+      const d = this.deltaToTarget(m.body, peerTgt);
+      const d2 = d.x * d.x + d.z * d.z + (d.y * d.y) * 0.25;
+      if (d2 < bestD2) { bestD2 = d2; best = peerTgt; }
+    }
     for (const o of this.list) {
       if (!o || o.dead || o === m || !JELLY_MOB_TYPES.includes(o.type)) continue;
       const cand = this.makeTargetForMob(o);
@@ -1298,6 +1342,10 @@ const Mobs = {
 
   dmgTarget(tgt, dmg, kx, kz, src) {
     if (!tgt || tgt.memoryOnly) return;
+    if (tgt.peerId) {
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.damageRemotePlayer) Multiplayer.damageRemotePlayer(tgt.peerId, dmg, kx, kz, src || 'mob');
+      return;
+    }
     if (tgt.isPlayer) Player.hurt(dmg, kx, kz);
     else if (tgt.mob && !tgt.mob.dead) this.hurt(tgt.mob, dmg, kx, kz, src);
   },

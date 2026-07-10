@@ -81,6 +81,7 @@ const World = {
     this.scene = scene;
     this.seed = seed;
     this.dimensionId = 'overworld';
+    this.initGenWorkers();
     this.chunks.clear(); this.featureCache.clear(); this.structCellCache.clear();
     this.dungeonCache.clear(); this.dungeonConquered.clear(); this.structSeen.clear(); this.dirty.clear();
     this.lights.clear(); this.saplings.clear(); this.crops.clear(); this.plantationOrigins.clear(); this.plantationUnderSlabs.clear(); this.loreMap.clear(); this.diffs.clear();
@@ -112,6 +113,29 @@ const World = {
         return mat;
       };
       this.matSolid = lightPatch(new THREE.MeshBasicMaterial({ map: Atlas.texture, vertexColors: true }));
+      {
+        // greedy-merged quads carry the tile ORIGIN in uv and repeat coords in
+        // aRep; re-tile with fract() so one wide quad shows N copies of the tile
+        const prevPatch = this.matSolid.onBeforeCompile;
+        const tile = Atlas.uv('stone'); // every atlas tile has the same size
+        this.matSolid.onBeforeCompile = (sh) => {
+          prevPatch(sh);
+          sh.uniforms.uTile = { value: new THREE.Vector2(tile.u1 - tile.u0, tile.v1 - tile.v0) };
+          sh.vertexShader = 'attribute vec2 aRep;\nvarying vec2 vRep;\n' + sh.vertexShader.replace(
+            '#include <uv_vertex>',
+            '#include <uv_vertex>\n vRep = aRep;'
+          );
+          sh.fragmentShader = 'uniform vec2 uTile;\nvarying vec2 vRep;\n' + sh.fragmentShader.replace(
+            '#include <map_fragment>',
+            `#ifdef USE_MAP
+              vec2 mUv = vUv;
+              if (vRep.x + vRep.y > 0.0001) mUv = vUv + vec2(fract(vRep.x), min(vRep.y, 0.9999)) * uTile;
+              vec4 sampledDiffuseColor = texture2D(map, mUv);
+              diffuseColor *= sampledDiffuseColor;
+            #endif`
+          );
+        };
+      }
       this.matCutout = lightPatch(new THREE.MeshBasicMaterial({ map: Atlas.texture, vertexColors: true, alphaTest: 0.45, side: THREE.DoubleSide }));
       this.matWater = lightPatch(new THREE.MeshBasicMaterial({
         map: Atlas.texture, vertexColors: true, transparent: true, opacity: 0.72,
@@ -1085,6 +1109,123 @@ const World = {
   genChunk(cx, cz) {
     const k = this.key(cx, cz);
     if (this.chunks.has(k)) return this.chunks.get(k);
+    return this.finishChunk(cx, cz, this.genChunkBlocks(cx, cz));
+  },
+
+  // ---------- worldgen worker pool ----------
+  // Chunk gen + first lighting run in Web Workers (the same world.js code via
+  // importScripts). Falls back to the synchronous path on file:// where the
+  // browser refuses to start workers. Every request carries seed + conquered
+  // dungeons, so the workers never need stateful syncing.
+  _genWorkers: null,
+  _genPending: new Set(),
+  _genRR: 0,
+  initGenWorkers() {
+    this._genPending.clear();
+    if (this._genWorkers) return; // pool survives world switches (requests carry the seed)
+    if (typeof Worker === 'undefined' || location.protocol === 'file:') return;
+    try {
+      const q = (document.querySelector('script[src*="world.js"]') || {}).src || '';
+      const v = q.includes('?') ? q.slice(q.indexOf('?')) : '';
+      this._genWorkers = [0, 1].map(() => {
+        const w = new Worker('js/worldgen-worker.js' + v);
+        w.onmessage = (e) => this._adoptWorkerChunk(e.data);
+        w.onerror = () => { this._genWorkers = null; this._genPending.clear(); }; // fall back to sync gen
+        return w;
+      });
+    } catch (e) { this._genWorkers = null; }
+  },
+
+  _requestWorkerChunk(cx, cz) {
+    const k = this.key(cx, cz);
+    if (this._genPending.has(k)) return;
+    this._genPending.add(k);
+    const bucket = this.diffIndex.get(k);
+    const w = this._genWorkers[(this._genRR++) % this._genWorkers.length];
+    w.postMessage({
+      type: 'gen', cx, cz, seed: this.seed,
+      diffs: bucket ? [...bucket.entries()] : null,
+      conquered: this.dungeonConquered.size ? [...this.dungeonConquered] : null,
+      client: !!(typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client'),
+    });
+  },
+
+  _adoptWorkerChunk(msg) {
+    if (!msg || msg.type !== 'chunk') return;
+    const k = this.key(msg.cx, msg.cz);
+    this._genPending.delete(k);
+    if (msg.seed !== this.seed || this.chunks.has(k)) return; // stale world or raced a sync gen
+    const blocks = new Uint16Array(msg.blocks);
+    const ch = this.finishChunk(msg.cx, msg.cz, {
+      blocks,
+      extraBlocks: new Map(msg.extraBlocks || []),
+      worldBorderColumns: msg.worldBorderColumns || [],
+      light: new Uint8Array(msg.light),
+    });
+    // merge gen-time registries with the same has-guards the sync path uses
+    for (const [key, v] of msg.chests || []) if (!this.chests.has(key)) this.chests.set(key, v);
+    for (const [key, v] of msg.spawners || []) if (!this.spawners.has(key)) this.spawners.set(key, v);
+    for (const [key, v] of msg.lore || []) this.loreMap.set(key, v);
+    for (const s of msg.floopSpots || []) this.floopSpots.push(s);
+    for (const s of msg.dungeonSpots || []) this.dungeonSpots.push(s);
+    // diffs that arrived while the worker was busy (MP stash race)
+    const bucket = this.diffIndex.get(k);
+    if (bucket) for (const [pk, id] of bucket) {
+      const [wx, wy, wz] = pk.split(',').map(Number);
+      if (wy >= 0 && wy < this.H) blocks[this.idx(this.localCoord(wx), wy, this.localCoord(wz))] = id;
+      else if (wy >= this.H && id !== B.AIR) { if (!ch.extraBlocks) ch.extraBlocks = new Map(); ch.extraBlocks.set(pk, id); }
+    }
+    // worker light has no neighbor seeds: the border exchange happens at mesh
+    // time (budgeted, and chunks that never get meshed never pay for it)
+    ch.needsBorderLight = true;
+  },
+
+  // pull border light INTO a freshly adopted worker-lit chunk from lit
+  // neighbors (the worker floods interior light only — it has no neighbors).
+  // Direct typed-array reads: borderPush-style world reads cost ~10ms/chunk.
+  borderPull(ch) {
+    const X0 = ch.cx * 16, Z0 = ch.cz * 16, H = this.H;
+    const touched = new Set();
+    const sides = [
+      [this.key(ch.cx - 1, ch.cz), 0, 15, true],   // west: my lx 0 <- nb lx 15
+      [this.key(ch.cx + 1, ch.cz), 15, 0, true],
+      [this.key(ch.cx, ch.cz - 1), 0, 15, false],  // north: my lz 0 <- nb lz 15
+      [this.key(ch.cx, ch.cz + 1), 15, 0, false],
+    ];
+    for (const channel of [0, 1]) {
+      const q = [];
+      for (const [nk, myEdge, nbEdge, xAxis] of sides) {
+        const nb = this.chunks.get(nk);
+        if (!nb || !nb.light) continue;
+        for (let i = 0; i < 16; i++) {
+          const mlx = xAxis ? myEdge : i, mlz = xAxis ? i : myEdge;
+          const tlx = xAxis ? nbEdge : i, tlz = xAxis ? i : nbEdge;
+          for (let y = 0; y < H; y++) {
+            const ni = this.idx(tlx, y, tlz);
+            const nl = channel === 0 ? (nb.light[ni] >> 4) : (nb.light[ni] & 15);
+            if (nl <= 1) continue;
+            const mi = this.idx(mlx, y, mlz);
+            const ml = channel === 0 ? (ch.light[mi] >> 4) : (ch.light[mi] & 15);
+            if (nl - 1 > ml && !this.opaqueToLight(ch.blocks[mi])) {
+              q.push({ x: X0 + mlx, y, z: Z0 + mlz, l: nl - 1 });
+            }
+          }
+        }
+      }
+      if (q.length) this.lightAdd(q, channel, touched);
+    }
+    for (const tk of touched) {
+      const c2 = this.chunks.get(tk);
+      if (c2 && c2.hasMesh) this.dirty.add(tk);
+    }
+  },
+
+  // Phase 1 of chunk generation: build the raw block array (terrain, ores,
+  // features, dungeons, saved diffs, border wall). No scene/registry writes on
+  // World.chunks — this is the expensive part and it also runs inside the
+  // worldgen Web Worker (see js/worldgen-worker.js).
+  genChunkBlocks(cx, cz) {
+    const k = this.key(cx, cz);
     const H = this.H, SEA = this.SEA;
     const blocks = new Uint16Array(16 * 16 * H); // 16-bit ids: room for every wool color imaginable
     const rnd = this.chunkRand(cx, cz, 101);
@@ -1188,7 +1329,18 @@ const World = {
     // disappear behind old edits.
     const worldBorderColumns = this.applyWorldBorderToGeneratedChunk(cx, cz, blocks);
 
-    const ch = { cx, cz, blocks, extraBlocks: extraBlocks.size ? extraBlocks : null, worldBorderColumns, light: null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, sectionMeshes: [], hasMesh: false };
+    return { blocks, extraBlocks, worldBorderColumns };
+  },
+
+  // Phase 2 of chunk generation: adopt the block data into World.chunks and
+  // register lights/fires/saplings/crops. Main thread only (uses Math.random
+  // for timers and mutates live registries).
+  finishChunk(cx, cz, data) {
+    const k = this.key(cx, cz);
+    const H = this.H;
+    const blocks = data.blocks;
+    const extraBlocks = data.extraBlocks || new Map();
+    const ch = { cx, cz, blocks, extraBlocks: extraBlocks.size ? extraBlocks : null, worldBorderColumns: data.worldBorderColumns || [], light: data.light || null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, sectionMeshes: [], hasMesh: false };
     this.chunks.set(k, ch);
 
     for (let y = 0; y < H; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
@@ -2262,6 +2414,13 @@ const World = {
     for (const n of need) {
       const k = this.key(n.cx, n.cz);
       if (!this.chunks.has(k)) {
+        if (this._genWorkers) {
+          // async path: keep enough requests in flight that both workers stay
+          // busy between frames; the frame budget goes to lighting/meshing
+          if (this._genPending.size < 12) this._requestWorkerChunk(n.cx, n.cz);
+          else break;
+          continue;
+        }
         if (genned < budget) { this.genChunk(n.cx, n.cz); genned++; }
         else break;
       }
@@ -2282,6 +2441,16 @@ const World = {
             this.borderPush(ch); // bleed our light into already-lit neighbors
             // neighbors baked their border faces against our default-lit void:
             // remesh them so dungeon walls etc. pick up the real values
+            for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nb = this.chunks.get(this.key(n.cx + dx, n.cz + dz));
+              if (nb && nb.hasMesh) this.dirty.add(this.key(n.cx + dx, n.cz + dz));
+            }
+          } else if (ch.needsBorderLight) {
+            // worker-lit chunk: exchange border light with neighbors now that
+            // this chunk is actually about to be visible
+            ch.needsBorderLight = false;
+            this.borderPush(ch);
+            this.borderPull(ch);
             for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
               const nb = this.chunks.get(this.key(n.cx + dx, n.cz + dz));
               if (nb && nb.hasMesh) this.dirty.add(this.key(n.cx + dx, n.cz + dz));
@@ -2493,7 +2662,7 @@ const World = {
     // and sub-block details, causing warped/stretched block faces even though
     // raycasts, outlines, mobs, drops, and vehicles still behaved correctly.
     const makeBufs = (oy) => {
-      const makeBuf = () => ({ pos: [], uv: [], col: [], idx: [], ox: X0, oy: oy || 0, oz: Z0 });
+      const makeBuf = () => ({ pos: [], uv: [], col: [], rep: [], idx: [], ox: X0, oy: oy || 0, oz: Z0 });
       return {
         solid: makeBuf(),
         cutout: makeBuf(),
@@ -2582,22 +2751,45 @@ const World = {
       return [(raw & 15) / 15, (raw >> 4) / 15];
     };
 
-    const pushQuad = (b, verts, uvr, uvs, shade, lb, ls) => {
+    const pushQuad = (b, verts, uvr, uvs, shade, lb, ls, repX) => {
       const base = b.pos.length / 3;
       const ox = Number.isFinite(b.ox) ? b.ox : 0;
       const oy = Number.isFinite(b.oy) ? b.oy : 0;
       const oz = Number.isFinite(b.oz) ? b.oz : 0;
       for (let i = 0; i < 4; i++) {
         b.pos.push(verts[i][0] - ox, verts[i][1] - oy, verts[i][2] - oz);
-        const u = uvr.u0 + (uvr.u1 - uvr.u0) * uvs[i][0];
-        const v = uvr.v0 + (uvr.v1 - uvr.v0) * uvs[i][1];
-        b.uv.push(u, v);
+        if (repX) {
+          // greedy-merged run: uv carries the tile ORIGIN, aRep carries repeat
+          // coords; the solid material re-tiles with fract() in the fragment shader
+          b.uv.push(uvr.u0, uvr.v0);
+          b.rep.push(uvs[i][0] * repX, uvs[i][1]);
+        } else {
+          const u = uvr.u0 + (uvr.u1 - uvr.u0) * uvs[i][0];
+          const v = uvr.v0 + (uvr.v1 - uvr.v0) * uvs[i][1];
+          b.uv.push(u, v);
+          b.rep.push(0, 0);
+        }
         b.col.push(shade, lb, ls);
       }
       b.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
     const UVQ = [[0, 0], [1, 0], [1, 1], [0, 1]];
     const rotUVQ = (n) => n === 0 ? UVQ : UVQ.map((_, i) => UVQ[(i + n) % 4]);
+
+    // greedy meshing: pending row-merge runs for plain opaque cube faces.
+    // The main voxel loop walks x innermost, so faces whose quads extend along
+    // X (+y,-y,+z,-z) accumulate while id+light match; a gap (endWx !== wx),
+    // any mismatch, or the end of the mesh flushes the run as ONE wide quad.
+    const cubeRuns = [null, null, null, null, null, null];
+    const flushCubeRun = (f) => {
+      const r = cubeRuns[f];
+      if (!r) return;
+      cubeRuns[f] = null;
+      const n = r.endWx - r.startWx;
+      const face = this.FACES[f];
+      const verts = face.c.map(cn => [r.startWx + cn[0] * n, r.y + cn[1], r.wz + cn[2]]);
+      pushQuad(r.target, verts, r.uvr, UVQ, face.shade, r.lb, r.ls, n > 1 ? n : 0);
+    };
 
     const emitBox = (buf, wx, y, wz, x0, y0, z0, x1, y1, z1, texTop, texSide, texBottom, topRot, selfLight, skipFaces) => {
       const uvT = Atlas.uv(texTop), uvS = Atlas.uv(texSide), uvB = Atlas.uv(texBottom);
@@ -3257,6 +3449,7 @@ const World = {
           }
 
           const target = def.cutout ? bufs.cutout : bufs.solid;
+          const mergeable = this.greedyMesh !== false && !def.cutout; // greedy row-merge is for plain opaque cubes only
           for (let f = 0; f < 6; f++) {
             const face = this.FACES[f];
             const nx = wx + face.d[0], ny = y + face.d[1], nz = wz + face.d[2];
@@ -3273,7 +3466,20 @@ const World = {
               else visible = !(def.cutout && nb === id);
             }
             else visible = false;
-            if (!visible) continue;
+            if (!visible) { if (mergeable && f >= 2) flushCubeRun(f); continue; }
+            const [lb, ls] = lightAt(nx, ny, nz);
+            if (mergeable && f >= 2) {
+              // greedy meshing: faces whose quads extend along X (+y,-y,+z,-z)
+              // merge into one wide quad while id + light stay identical
+              const r = cubeRuns[f];
+              if (r && r.endWx === wx && r.y === y && r.wz === wz && r.id === id && r.lb === lb && r.ls === ls && r.target === bufs.solid) {
+                r.endWx = wx + 1;
+                continue;
+              }
+              flushCubeRun(f);
+              cubeRuns[f] = { id, startWx: wx, endWx: wx + 1, lb, ls, y, wz, target: bufs.solid, uvr: Atlas.uv(Atlas.texName(id, f === 2 ? 'top' : f === 3 ? 'bottom' : 'side')) };
+              continue;
+            }
             const texName = Atlas.texName(id, f === 2 ? 'top' : f === 3 ? 'bottom' : 'side');
             const uvr = Atlas.uv(texName);
             let verts = face.c.map(cn => [wx + cn[0], y + cn[1], wz + cn[2]]);
@@ -3283,12 +3489,12 @@ const World = {
               // adjacent partial/non-glass coplanar face so it does not shimmer.
               if (hasCoplanarNonJoinedNeighbor(bo, f, wx, y, wz, id)) verts = insetFaceVerts(verts, f);
             }
-            const [lb, ls] = lightAt(nx, ny, nz);
             pushQuad(target, verts, uvr, UVQ, face.shade, lb, ls);
           }
         }
       }
     }
+    for (let f = 2; f < 6; f++) flushCubeRun(f); // tail runs from the last row
 
     const emitSparseCell = (wx, y, wz, id) => {
       if (id === B.AIR) return;
@@ -3482,6 +3688,7 @@ const World = {
       g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
       g.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
       g.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3));
+      g.setAttribute('aRep', new THREE.Float32BufferAttribute(b.rep, 2));
       g.setIndex(b.idx);
       const mesh = new THREE.Mesh(g, mat);
       const ox = Number.isFinite(b.ox) ? b.ox : 0;
