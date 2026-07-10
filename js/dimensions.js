@@ -135,7 +135,7 @@ const Dimensions = {
     World.diffIndex.clear();
     for (const [k, id] of World.diffs) {
       const parts = k.split(',');
-      const ck = World.key((+parts[0]) >> 4, (+parts[2]) >> 4);
+      const ck = World.chunkKeyForBlock ? World.chunkKeyForBlock(+parts[0], +parts[2]) : World.key(Math.floor(+parts[0] / 16), Math.floor(+parts[2] / 16));
       if (!World.diffIndex.has(ck)) World.diffIndex.set(ck, new Map());
       World.diffIndex.get(ck).set(k, id);
     }
@@ -146,7 +146,7 @@ const Dimensions = {
     World.diffs.clear(); World.diffIndex.clear(); World.signs.clear(); World.signDirs.clear(); World.loreMap.clear();
     World.chests.clear(); World.spawners.clear(); if (World.jellyHouses) World.jellyHouses.clear(); if (World.jellyHouseIds) World.jellyHouseIds.clear(); World.bedDirs.clear(); World.photoDirs.clear(); World.stairSideways.clear(); World.crops.clear();
     World.plantationOrigins.clear(); World.plantationUnderSlabs.clear(); World.furnaces.clear();
-    World.megaTorches.clear(); World.fires.clear(); World.saplings.clear(); World.lights.clear();
+    World.megaTorches.clear(); World.fires.clear(); World.saplings.clear(); World.lights.clear(); if (World.markLightBucketsDirty) World.markLightBucketsDirty(); World.lightBuckets = null; World._lightBucketCount = -1;
     if (World.dungeonConquered) {
       World.dungeonConquered.clear();
       for (const dk of st.dungeonConquered || st.dungeonsConquered || []) World.dungeonConquered.add(String(dk));

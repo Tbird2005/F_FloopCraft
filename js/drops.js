@@ -14,6 +14,11 @@ const Drops = {
     }
   },
 
+  farDelta(a, b) {
+    if (typeof Physics !== 'undefined' && Physics.deltaBodies) return Physics.deltaBodies(a, b);
+    return { x: (b.x || 0) - (a.x || 0), y: (b.y || 0) - (a.y || 0), z: (b.z || 0) - (a.z || 0) };
+  },
+
   // textured cube of any size (dropped items, falling sand, viewmodels).
   // Each cube gets its OWN material so voxel-light tinting doesn't bleed across items.
   makeBlockCube(id, size) {
@@ -69,15 +74,18 @@ const Drops = {
     const mesh = this.makeMesh(id);
     mesh.position.set(x, y, z);
     this.scene.add(mesh);
+    const body = {
+      x, y, z,
+      vx: vel ? vel[0] : (Math.random() - 0.5) * 2.4,
+      vy: vel ? vel[1] : 3 + Math.random() * 1.5,
+      vz: vel ? vel[2] : (Math.random() - 0.5) * 2.4,
+      w: 0.13, h: 0.26, onGround: false, hitH: false,
+    };
+    if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(body);
+    mesh.userData.farBody = body;
     this.list.push({
       id, count, dur, data: data === undefined ? undefined : JSON.parse(JSON.stringify(data)), mesh,
-      body: {
-        x, y, z,
-        vx: vel ? vel[0] : (Math.random() - 0.5) * 2.4,
-        vy: vel ? vel[1] : 3 + Math.random() * 1.5,
-        vz: vel ? vel[2] : (Math.random() - 0.5) * 2.4,
-        w: 0.13, h: 0.26, onGround: false, hitH: false,
-      },
+      body,
       age: 0, pickupDelay: vel ? 1.1 : 0.4, spin: Math.random() * Math.PI * 2,
     });
   },
@@ -118,17 +126,22 @@ const Drops = {
           const remotes = (typeof Multiplayer !== 'undefined' && Multiplayer.connected
             && Multiplayer.role !== 'solo' && Multiplayer.remoteBodies) ? Multiplayer.remoteBodies() : [];
           let tx = 0, ty = 0, tz = 0, best = Infinity, localBest = false;
+          let bestDelta = null;
           if (!Player.dead && Player.canAccept(d.id)) {
-            const dd = Math.hypot(p.x - b.x, (p.y + 0.6) - b.y, p.z - b.z);
-            if (dd < best) { best = dd; tx = p.x; ty = p.y + 0.6; tz = p.z; localBest = true; }
+            const delta = this.farDelta(b, p);
+            delta.y += 0.6;
+            const dd = Math.hypot(delta.x, delta.y, delta.z);
+            if (dd < best) { best = dd; bestDelta = delta; tx = p.x; ty = p.y + 0.6; tz = p.z; localBest = true; }
           }
           for (const rb of remotes) {
-            const dd = Math.hypot(rb.x - b.x, (rb.y + 0.6) - b.y, rb.z - b.z);
-            if (dd < best) { best = dd; tx = rb.x; ty = rb.y + 0.6; tz = rb.z; localBest = false; }
+            const delta = this.farDelta(b, rb);
+            delta.y += 0.6;
+            const dd = Math.hypot(delta.x, delta.y, delta.z);
+            if (dd < best) { best = dd; bestDelta = delta; tx = rb.x; ty = rb.y + 0.6; tz = rb.z; localBest = false; }
           }
-          if (best < 2.0 && best > 0.01) {
+          if (best < 2.0 && best > 0.01 && bestDelta) {
             const pull = 26 * dt / Math.max(best, 0.4);
-            b.vx += (tx - b.x) * pull; b.vy += (ty - b.y) * pull; b.vz += (tz - b.z) * pull;
+            b.vx += bestDelta.x * pull; b.vy += bestDelta.y * pull; b.vz += bestDelta.z * pull;
           }
           if (localBest && best < 0.7) {
             let leftover;

@@ -26,7 +26,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v112',
+  versionTag: 'ffloopcraft-v114',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -533,8 +533,8 @@ const Multiplayer = {
       for (const [key, id] of (msg.diffs || [])) {
         World.diffs.set(key, id);
         const parts = String(key).split(',');
-        const x = +parts[0] | 0, y = +parts[1] | 0, z = +parts[2] | 0;
-        const ck = World.key(x >> 4, z >> 4);
+        const x = Math.floor(+parts[0]), y = Math.floor(+parts[1]), z = Math.floor(+parts[2]);
+        const ck = World.chunkKeyForBlock ? World.chunkKeyForBlock(x, z) : World.key(Math.floor(x / 16), Math.floor(z / 16));
         if (!World.diffIndex.has(ck)) World.diffIndex.set(ck, new Map());
         World.diffIndex.get(ck).set(key, id);
         if (World.hasChunk(x, z)) World.setBlock(x, y, z, id, { remote: true });
@@ -659,10 +659,10 @@ const Multiplayer = {
 
   applyRemoteBlock(msg) {
     if (!World || !World.ready) return;
-    const x = msg.x | 0, y = msg.y | 0, z = msg.z | 0, id = msg.block | 0;
+    const x = Math.floor(+msg.x), y = Math.floor(+msg.y), z = Math.floor(+msg.z), id = msg.block | 0;
     if (!World.hasChunk || !World.hasChunk(x, z)) {
       const pk = World.pkey(x, y, z);
-      const ck = World.key(x >> 4, z >> 4);
+      const ck = World.chunkKeyForBlock ? World.chunkKeyForBlock(x, z) : World.key(Math.floor(x / 16), Math.floor(z / 16));
       World.diffs.set(pk, id);
       if (!World.diffIndex.has(ck)) World.diffIndex.set(ck, new Map());
       World.diffIndex.get(ck).set(pk, id);
@@ -682,7 +682,7 @@ const Multiplayer = {
     if (!msg.key || typeof World === 'undefined') return;
     World.signs.set(String(msg.key), String(msg.text || '').slice(0, 30));
     const parts = String(msg.key).split(',').map(Number);
-    if (parts.length >= 3) World.dirty.add(World.key(parts[0] >> 4, parts[2] >> 4));
+    if (parts.length >= 3) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(parts[0], parts[2]) : World.key(Math.floor(parts[0] / 16), Math.floor(parts[2] / 16))); 
   },
 
   sendChat(text) {
@@ -2040,12 +2040,12 @@ const Multiplayer = {
     const unpack = (s) => (typeof Save !== 'undefined' && Save.unpackStack) ? Save.unpackStack(s) : (s ? { id:s.id, count:s.count, dur:s.dur } : null);
     if (msg.chest && msg.chest.key && Array.isArray(msg.chest.slots)) {
       World.chests.set(String(msg.chest.key), msg.chest.slots.map(unpack));
-      const p = String(msg.chest.key).split(',').map(Number); if (p.length >= 3) World.dirty.add(World.key(p[0] >> 4, p[2] >> 4));
+      const p = String(msg.chest.key).split(',').map(Number); if (p.length >= 3) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(p[0], p[2]) : World.key(Math.floor(p[0] / 16), Math.floor(p[2] / 16)));
     }
     if (msg.furnace && msg.furnace.key && msg.furnace.f) {
       const f = msg.furnace.f;
       World.furnaces.set(String(msg.furnace.key), { in:unpack(f.i), fuel:unpack(f.f), out:unpack(f.o), burn:f.burn || 0, burnMax:f.burnMax || 0, cook:f.cook || 0 });
-      const p = String(msg.furnace.key).split(',').map(Number); if (p.length >= 3) World.dirty.add(World.key(p[0] >> 4, p[2] >> 4));
+      const p = String(msg.furnace.key).split(',').map(Number); if (p.length >= 3) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(p[0], p[2]) : World.key(Math.floor(p[0] / 16), Math.floor(p[2] / 16)));
     }
   };
 })();
@@ -2844,7 +2844,7 @@ const Multiplayer = {
       if (this.role !== 'host' || !msg || typeof World === 'undefined' || typeof Reg === 'undefined') return;
       const st = this.remotePeerState(pid);
       if (!st) return;
-      const bx = msg.x|0, by = msg.y|0, bz = msg.z|0;
+      const bx = Math.floor(+msg.x), by = Math.floor(+msg.y), bz = Math.floor(+msg.z);
       if (Math.hypot((+st.x || 0) - (bx + 0.5), ((+st.y || 0) + 0.8) - (by + 0.5), (+st.z || 0) - (bz + 0.5)) > 7.0) return;
       if (typeof Dimensions !== 'undefined' && st.dim && st.dim !== Dimensions.current) return;
       const liveId = World.getBlock(bx, by, bz);
@@ -2933,7 +2933,7 @@ const Multiplayer = {
         const def = held && Reg[asItemId(held.id)];
         const tool = def && def.tool;
         Multiplayer.send({
-          type:'block_break_request', x:bx|0, y:by|0, z:bz|0, id:asItemId(id), toolOk:!!toolOk,
+          type:'block_break_request', x:bx, y:by, z:bz, id:asItemId(id), toolOk:!!toolOk,
           creative:this.gamemode === 'creative', toolType:tool && tool.type || '', area:!!(tool && tool.area && hit && !this.sneaking),
           nx:hit && +hit.nx || 0, ny:hit && +hit.ny || 0, nz:hit && +hit.nz || 0, targetPart:hit && hit.targetPart || ''
         });
@@ -3073,7 +3073,7 @@ const Multiplayer = {
       const radius = Math.max(2, (World.R || 4) + 1);
       const tasks = [];
       for (const c of centers) {
-        const pcx = Math.floor(c.x) >> 4, pcz = Math.floor(c.z) >> 4;
+        const pcx = World.chunkCoord ? World.chunkCoord(c.x) : Math.floor(c.x / 16), pcz = World.chunkCoord ? World.chunkCoord(c.z) : Math.floor(c.z / 16);
         for (let dx = -radius; dx <= radius; dx++) for (let dz = -radius; dz <= radius; dz++) {
           const dist = Math.max(Math.abs(dx), Math.abs(dz));
           tasks.push({ cx:pcx + dx, cz:pcz + dz, dist });
@@ -3692,7 +3692,7 @@ const Multiplayer = {
       const slots = cleanSlots((msg.slots || []).map(unpack), size);
       World.chests.set(key, slots);
       const p = key.split(',').map(Number);
-      if (p.length >= 3 && World.dirty) World.dirty.add(World.key((p[0] | 0) >> 4, (p[2] | 0) >> 4));
+      if (p.length >= 3 && World.dirty) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(p[0], p[2]) : World.key(Math.floor(p[0] / 16), Math.floor(p[2] / 16)));
       this.hostSendInventorySnapshot(pid, 'chest');
       const out = { type:'chest_snapshot', key, slots:slots.map(pack), reason:'update' };
       for (const [otherId, conn] of this.connections || []) {
@@ -3719,7 +3719,7 @@ const Multiplayer = {
     clientSendOpenChestRequest(hit) {
       if (this.role !== 'client' || !this.connected || !hit || typeof World === 'undefined') return;
       const key = World.pkey(hit.bx, hit.by, hit.bz);
-      this.send({ type:'chest_open_request', key, x:hit.bx|0, y:hit.by|0, z:hit.bz|0 });
+      this.send({ type:'chest_open_request', key, x:Math.floor(hit.bx), y:Math.floor(hit.by), z:Math.floor(hit.bz) });
     },
 
     // ---- chest locking: exactly one player may have a given chest open at a time.
@@ -3785,7 +3785,7 @@ const Multiplayer = {
         rank: dg.rank || '',
         door: dg.door || 0,
         rooms: dg.rooms || [],
-        byChunk: [...(dg.byChunk || new Map()).entries()].map(([k, arr]) => [k, (arr || []).map(c => [c.x|0, c.y|0, c.z|0, mapId(c.id)|0])]),
+        byChunk: [...(dg.byChunk || new Map()).entries()].map(([k, arr]) => [k, (arr || []).map(c => [Math.floor(c.x), Math.floor(c.y), Math.floor(c.z), mapId(c.id)|0])]),
       };
     },
 
@@ -3796,7 +3796,7 @@ const Multiplayer = {
         rank: data.rank || '',
         door: data.door || 0,
         rooms: data.rooms || [],
-        byChunk: new Map((data.byChunk || []).map(([k, arr]) => [k, (arr || []).map(c => ({ x:c[0]|0, y:c[1]|0, z:c[2]|0, id:c[3]|0 }))])),
+        byChunk: new Map((data.byChunk || []).map(([k, arr]) => [k, (arr || []).map(c => ({ x:Math.floor(c[0]), y:Math.floor(c[1]), z:Math.floor(c[2]), id:c[3]|0 }))])),
       };
     },
 
@@ -3806,25 +3806,27 @@ const Multiplayer = {
       if (!conn) return;
       const msg = { type:'worldgen_data', structs:[], dungeons:[], chunks:[] };
       for (const s of req.structs || []) {
-        const key = (s.scx|0) + '|' + (s.scz|0);
-        const st = World.structCell(s.scx|0, s.scz|0);
-        msg.structs.push([key, st ? { type:st.type, cx:st.cx|0, cz:st.cz|0 } : null]);
+        const sCx = Math.floor(+s.scx), sCz = Math.floor(+s.scz);
+        const key = sCx + '|' + sCz;
+        const st = World.structCell(sCx, sCz);
+        msg.structs.push([key, st ? { type:st.type, cx:Math.floor(st.cx), cz:Math.floor(st.cz) } : null]);
       }
       for (const d of req.dungeons || []) {
-        const key = (d.dscx|0) + '|' + (d.dscz|0);
-        const dg = World.dungeonFor(d.dscx|0, d.dscz|0);
+        const dCx = Math.floor(+d.dscx), dCz = Math.floor(+d.dscz);
+        const key = dCx + '|' + dCz;
+        const dg = World.dungeonFor(dCx, dCz);
         msg.dungeons.push([key, this.serializeDungeonForNet(dg)]);
       }
       // Optional exact chunk overlays for chunks the client is entering. This is
       // much lighter than sending every block array and fixes procedural pieces
       // that are stamped by host generation order.
       for (const c of req.chunks || []) {
-        const cx = c.cx|0, cz = c.cz|0, ck = World.key(cx, cz);
+        const cx = Math.floor(+c.cx), cz = Math.floor(+c.cz), ck = World.key(cx, cz);
         const overlays = [];
         // Ensure host has generated the chunk, then send only procedural/diff overrides.
         World.genChunk(cx, cz);
         const feats = World.featuresFor ? World.featuresFor(cx, cz) : [];
-        for (const f of feats || []) if ((f.x >> 4) === cx && (f.z >> 4) === cz && f.y >= 0 && f.y < World.H) overlays.push([f.x|0, f.y|0, f.z|0, f.id|0]);
+        for (const f of feats || []) if ((World.chunkCoord ? World.chunkCoord(f.x) : Math.floor(f.x / 16)) === cx && (World.chunkCoord ? World.chunkCoord(f.z) : Math.floor(f.z / 16)) === cz && f.y >= 0 && f.y < World.H) overlays.push([Math.floor(f.x), Math.floor(f.y), Math.floor(f.z), f.id|0]);
         const gcx0 = Math.floor(cx / 6), gcz0 = Math.floor(cz / 6);
         const seen = new Set();
         for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
@@ -3833,7 +3835,7 @@ const Multiplayer = {
           const dg = World.dungeonFor(dkx, dkz);
           const bucket = dg && dg.byChunk && dg.byChunk.get(ck);
           const conquered = !!(dg && dg.key && World.dungeonConquered && World.dungeonConquered.has(dg.key));
-          if (bucket) for (const f of bucket) overlays.push([f.x|0, f.y|0, f.z|0, (conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(f.id) : f.id)|0]);
+          if (bucket) for (const f of bucket) overlays.push([Math.floor(f.x), Math.floor(f.y), Math.floor(f.z), (conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(f.id) : f.id)|0]);
         }
         const diffBucket = World.diffIndex && World.diffIndex.get(ck);
         if (diffBucket) for (const [pk, id] of diffBucket.entries()) {
@@ -3846,13 +3848,14 @@ const Multiplayer = {
 
     clientRequestWorldgen(kind, a, b) {
       if (this.role !== 'client' || !this.connected) return;
-      const key = kind + ':' + (a|0) + ',' + (b|0);
+      const aa = Math.floor(+a), bb = Math.floor(+b);
+      const key = kind + ':' + aa + ',' + bb;
       if (this.pendingWorldgenRequests.has(key)) return;
       this.pendingWorldgenRequests.add(key);
       const req = { type:'worldgen_request', structs:[], dungeons:[], chunks:[] };
-      if (kind === 'struct') req.structs.push({ scx:a|0, scz:b|0 });
-      else if (kind === 'dungeon') req.dungeons.push({ dscx:a|0, dscz:b|0 });
-      else if (kind === 'chunk') req.chunks.push({ cx:a|0, cz:b|0 });
+      if (kind === 'struct') req.structs.push({ scx:aa, scz:bb });
+      else if (kind === 'dungeon') req.dungeons.push({ dscx:aa, dscz:bb });
+      else if (kind === 'chunk') req.chunks.push({ cx:aa, cz:bb });
       this.send(req);
       setTimeout(() => this.pendingWorldgenRequests.delete(key), 3000);
     },
@@ -3862,24 +3865,24 @@ const Multiplayer = {
       this.applyingRemote = true;
       try {
         for (const [key, st] of msg.structs || []) {
-          World.structCellCache.set(String(key), st ? { type:st.type, cx:st.cx|0, cz:st.cz|0 } : null);
+          World.structCellCache.set(String(key), st ? { type:st.type, cx:Math.floor(st.cx), cz:Math.floor(st.cz) } : null);
         }
         for (const [key, data] of msg.dungeons || []) {
           World.dungeonCache.set(String(key), this.deserializeDungeonFromNet(data));
         }
         for (const [cx, cz, overlays] of msg.chunks || []) {
-          const ck = World.key(cx|0, cz|0);
+          const ck = World.key(Math.floor(+cx), Math.floor(+cz));
           if (World.chunks.has(ck)) {
             for (const c of overlays || []) {
-              const x = c[0]|0, y = c[1]|0, z = c[2]|0, id = c[3]|0;
+              const x = Math.floor(c[0]), y = Math.floor(c[1]), z = Math.floor(c[2]), id = c[3]|0;
               if (y >= 0) World.setBlock(x, y, z, id, { remote:true, noUpdate:true, skipPortalCheck:true });
             }
           } else {
             for (const c of overlays || []) {
-              const x = c[0]|0, y = c[1]|0, z = c[2]|0, id = c[3]|0;
+              const x = Math.floor(c[0]), y = Math.floor(c[1]), z = Math.floor(c[2]), id = c[3]|0;
               const pk = World.pkey(x, y, z);
               World.diffs.set(pk, id);
-              const bkey = World.key(x >> 4, z >> 4);
+              const bkey = World.chunkKeyForBlock ? World.chunkKeyForBlock(x, z) : World.key(Math.floor(x / 16), Math.floor(z / 16));
               if (!World.diffIndex.has(bkey)) World.diffIndex.set(bkey, new Map());
               World.diffIndex.get(bkey).set(pk, id);
             }
@@ -4067,26 +4070,26 @@ const Multiplayer = {
     const deferToHost = () => (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client'
       && Multiplayer.connected && Multiplayer.sameDimAsHost && Multiplayer.sameDimAsHost());
     if (oldStructCell) World.structCell = function(scx, scz){
-      const k = (scx|0) + '|' + (scz|0);
+      const k = Math.floor(+scx) + '|' + Math.floor(+scz);
       if (deferToHost()) {
         if (this.structCellCache.has(k)) return this.structCellCache.get(k);
-        Multiplayer.clientRequestWorldgen('struct', scx|0, scz|0);
+        Multiplayer.clientRequestWorldgen('struct', Math.floor(+scx), Math.floor(+scz));
         return null;
       }
       return oldStructCell(scx, scz);
     };
     if (oldDungeonFor) World.dungeonFor = function(dscx, dscz){
-      const k = (dscx|0) + '|' + (dscz|0);
+      const k = Math.floor(+dscx) + '|' + Math.floor(+dscz);
       if (deferToHost()) {
         if (this.dungeonCache.has(k)) return this.dungeonCache.get(k);
-        Multiplayer.clientRequestWorldgen('dungeon', dscx|0, dscz|0);
+        Multiplayer.clientRequestWorldgen('dungeon', Math.floor(+dscx), Math.floor(+dscz));
         return null;
       }
       return oldDungeonFor(dscx, dscz);
     };
     if (oldGenChunk) World.genChunk = function(cx, cz){
       const ch = oldGenChunk(cx, cz);
-      if (deferToHost()) Multiplayer.clientRequestWorldgen('chunk', cx|0, cz|0);
+      if (deferToHost()) Multiplayer.clientRequestWorldgen('chunk', Math.floor(+cx), Math.floor(+cz));
       return ch;
     };
   }
@@ -4436,7 +4439,7 @@ const Multiplayer = {
       if (!ch || !ch.blocks) return;
       const inChunk = (k) => {
         const p = String(k).split(',').map(Number);
-        return p.length >= 3 && ((p[0] | 0) >> 4) === cx && ((p[2] | 0) >> 4) === cz;
+        return p.length >= 3 && (World.chunkCoord ? World.chunkCoord(p[0]) : Math.floor(p[0] / 16)) === cx && (World.chunkCoord ? World.chunkCoord(p[2]) : Math.floor(p[2] / 16)) === cz;
       };
       const stacks = (slots) => (slots || []).map(pack);
       const meta = {
@@ -4486,8 +4489,8 @@ const Multiplayer = {
           for (const [dk, id] of meta.diffs) {
             const parts = String(dk).split(',').map(Number);
             if (parts.length < 3 || !Number.isFinite(parts[0] + parts[1] + parts[2])) continue;
-            const x = parts[0] | 0, y = parts[1] | 0, z = parts[2] | 0;
-            const bkey = World.key(x >> 4, z >> 4);
+            const x = Math.floor(parts[0]), y = Math.floor(parts[1]), z = Math.floor(parts[2]);
+            const bkey = World.chunkKeyForBlock ? World.chunkKeyForBlock(x, z) : World.key(Math.floor(x / 16), Math.floor(z / 16));
             if (!World.diffIndex.has(bkey)) World.diffIndex.set(bkey, new Map());
             World.diffIndex.get(bkey).set(String(dk), id);
             if (bkey === key && y >= World.H && World.setExtraBlock) World.setExtraBlock(ch, x, y, z, id | 0);
@@ -4524,12 +4527,12 @@ const Multiplayer = {
 
     mcClientRequestChunk(cx, cz) {
       if (this.role !== 'client' || !this.connected) return;
-      const key = (cx|0) + ',' + (cz|0);
+      const key = Math.floor(+cx) + ',' + Math.floor(+cz);
       const t = nowMs();
       const prev = this.mcChunkRequests.has(key) ? (this.mcChunkRequests[key] || 0) : 0;
       if (prev && t - prev < 1000) return;
       this.mcChunkRequests.add(key); this.mcChunkRequests[key] = t;
-      this.send({ type:'mc_chunk_request', cx:cx|0, cz:cz|0 });
+      this.send({ type:'mc_chunk_request', cx:Math.floor(+cx), cz:Math.floor(+cz) });
       setTimeout(() => { this.mcChunkRequests.delete(key); delete this.mcChunkRequests[key]; }, 1800);
     },
   });
@@ -4628,7 +4631,7 @@ const Multiplayer = {
     const oldGenChunk = World.genChunk.bind(World);
     World.genChunk = function(cx, cz){
       const ch = oldGenChunk(cx, cz);
-      if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected && !Multiplayer.applyingRemote) Multiplayer.mcClientRequestChunk(cx|0, cz|0);
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected && !Multiplayer.applyingRemote) Multiplayer.mcClientRequestChunk(Math.floor(+cx), Math.floor(+cz));
       return ch;
     };
   }
@@ -4854,12 +4857,12 @@ const Multiplayer = {
     if (this.role === 'client' && this.connected && this.__driverVehicleBlockContext && idOf(id) === (typeof B !== 'undefined' ? B.AIR : 0)) {
       const old = idOf(oldId);
       if (old && typeof Reg !== 'undefined' && Reg[old] && Reg[old].weak) {
-        const key = (x|0) + ',' + (y|0) + ',' + (z|0);
+        const key = Math.floor(+x) + ',' + Math.floor(+y) + ',' + Math.floor(+z);
         const ctx = this.__driverVehicleBlockContext;
         if (!ctx.sent) ctx.sent = new Set();
         if (!ctx.sent.has(key)) {
           ctx.sent.add(key);
-          this.send({ type:'vehicle_block_break_request', vid:ctx.vid || '', x:x|0, y:y|0, z:z|0, old });
+          this.send({ type:'vehicle_block_break_request', vid:ctx.vid || '', x:Math.floor(+x), y:Math.floor(+y), z:Math.floor(+z), old });
         }
         return;
       }
@@ -5406,7 +5409,7 @@ const Multiplayer = {
             if (!Physics.blockBoxes(feet, sx, hit.by, sz) && !Physics.blockBoxes(head, sx, hit.by + 1, sz) && floor) { Player.spawn = { x:sx + 0.5, y:hit.by + 0.02, z:sz + 0.5, dim:(typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld') }; break; }
           }
         }
-        Multiplayer.send({ type:'sleep_request', toNight:!!toNight, hit: hit ? { bx:hit.bx|0, by:hit.by|0, bz:hit.bz|0 } : null });
+        Multiplayer.send({ type:'sleep_request', toNight:!!toNight, hit: hit ? { bx:Math.floor(hit.bx), by:Math.floor(hit.by), bz:Math.floor(hit.bz) } : null });
         if (typeof UI !== 'undefined') UI.chat('Sleep request sent to host...', '#ffd97a');
         return;
       }
@@ -5744,7 +5747,7 @@ const Multiplayer = {
   // Add metadata maps to live block messages so beds/stairs/signs/photos keep orientation after placement.
   const metaForBlock = (x, y, z) => {
     if (typeof World === 'undefined') return null;
-    const k = World.pkey(x|0, y|0, z|0);
+    const k = World.pkey(Math.floor(+x), Math.floor(+y), Math.floor(+z));
     const meta = {};
     if (World.bedDirs && World.bedDirs.has(k)) meta.bedDir = World.bedDirs.get(k);
     if (World.signDirs && World.signDirs.has(k)) meta.signDir = World.signDirs.get(k);
@@ -5754,7 +5757,7 @@ const Multiplayer = {
     // raised (and preserves the slabs beneath) for everyone, not just the placer.
     if (World.plantationOrigins && World.plantationOrigins.has(k)) meta.potOrigin = World.plantationOrigins.get(k);
     if (World.plantationUnderSlabs && World.plantationUnderSlabs.has(k)) meta.potUnderSlab = World.plantationUnderSlabs.get(k);
-    if (typeof B !== 'undefined' && World.getBlock && World.getBlock(x|0, y|0, z|0) === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
+    if (typeof B !== 'undefined' && World.getBlock && World.getBlock(Math.floor(+x), Math.floor(+y), Math.floor(+z)) === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
       const h = Jelly.getHouseByKey(k);
       if (h) meta.jellyHouse = Jelly.packHouseRecord(h);
     }
@@ -5762,14 +5765,14 @@ const Multiplayer = {
   };
   const applyBlockMeta = (x, y, z, meta) => {
     if (!meta || typeof World === 'undefined') return;
-    const k = World.pkey(x|0, y|0, z|0);
+    const k = World.pkey(Math.floor(+x), Math.floor(+y), Math.floor(+z));
     if (meta.bedDir !== undefined && World.bedDirs) World.bedDirs.set(k, meta.bedDir);
     if (meta.signDir !== undefined && World.signDirs) World.signDirs.set(k, meta.signDir);
     if (meta.photoDir !== undefined && World.photoDirs) World.photoDirs.set(k, meta.photoDir);
     if (meta.stairSide !== undefined && World.stairSideways) World.stairSideways.set(k, meta.stairSide);
     if (meta.potOrigin !== undefined && World.plantationOrigins) World.plantationOrigins.set(k, meta.potOrigin);
     if (meta.potUnderSlab !== undefined && World.plantationUnderSlabs) World.plantationUnderSlabs.set(k, meta.potUnderSlab);
-    if ((meta.jellyHouse !== undefined || meta.jellyRoster !== undefined) && typeof B !== 'undefined' && typeof Jelly !== 'undefined' && World.getBlock && World.getBlock(x|0, y|0, z|0) === B.JELLY_HOUSE) {
+    if ((meta.jellyHouse !== undefined || meta.jellyRoster !== undefined) && typeof B !== 'undefined' && typeof Jelly !== 'undefined' && World.getBlock && World.getBlock(Math.floor(+x), Math.floor(+y), Math.floor(+z)) === B.JELLY_HOUSE) {
       const house = meta.jellyHouse !== undefined ? Jelly.unpackHouseRecord(k, meta.jellyHouse) : Jelly.unpackHouseRecord(k, { stored: meta.jellyRoster });
       Jelly.setHouse(k, house, { storedNormalized: true });
     }
@@ -5791,12 +5794,12 @@ const Multiplayer = {
     const msgDim = (msg && msg.dim) || 'overworld';
     if (typeof Dimensions !== 'undefined' && Dimensions.stashRemoteBlock && msgDim !== curDim) {
       // change happened in a dimension we're not in — stash it there, don't touch our world
-      Dimensions.stashRemoteBlock(msgDim, msg.x | 0, msg.y | 0, msg.z | 0, msg.block | 0);
+      Dimensions.stashRemoteBlock(msgDim, Math.floor(+msg.x), Math.floor(+msg.y), Math.floor(+msg.z), msg.block | 0);
       return;
     }
     const ret = oldApplyRemoteBlock ? oldApplyRemoteBlock(msg) : undefined;
     if (msg && msg.meta) applyBlockMeta(msg.x, msg.y, msg.z, msg.meta);
-    if (typeof World !== 'undefined' && World.dirty) World.dirty.add(World.key((msg.x|0) >> 4, (msg.z|0) >> 4));
+    if (typeof World !== 'undefined' && World.dirty) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(msg.x, msg.z) : World.key(Math.floor(msg.x / 16), Math.floor(msg.z / 16))); 
     return ret;
   };
 

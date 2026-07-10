@@ -33,7 +33,7 @@ const Dynamics = {
   // ---------------- falling blocks (sand / gravel) ----------------
   queueFallRelight(x, z) {
     if (!World || !World.relightQueue) return;
-    const cx = x >> 4, cz = z >> 4;
+    const cx = World.chunkCoord ? World.chunkCoord(x) : Math.floor(x / 16), cz = World.chunkCoord ? World.chunkCoord(z) : Math.floor(z / 16);
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         World.relightQueue.add(World.key(cx + dx, cz + dz));
@@ -44,7 +44,7 @@ const Dynamics = {
   startFall(x, y, z, id) {
     if (this.falling.length > 160) { return; } // hard cap: never loop the world to death
     if (World.getBlock(x, y, z) !== id) return;
-    World.setBlock(x, y, z, B.AIR, { noUpdate: true });
+    World.setBlock(x, y, z, B.AIR, { noUpdate: true, skipLight: true });
     // Falling sand/gravel changes sky columns. Queue a full verification relight
     // around the source so no stale dark/bright cells remain after it starts.
     this.queueFallRelight(x, z);
@@ -54,9 +54,12 @@ const Dynamics = {
     const mesh = Drops.makeBlockCube(id, 0.98);
     mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
     this.scene.add(mesh);
+    const body = { x: x + 0.5, y, z: z + 0.5, vx: 0, vy: 0, vz: 0, w: 0.45, h: 0.98, onGround: false, hitH: false };
+    if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(body);
+    mesh.userData.farBody = body;
     this.falling.push({
       id, mesh,
-      body: { x: x + 0.5, y, z: z + 0.5, vx: 0, vy: 0, vz: 0, w: 0.45, h: 0.98, onGround: false, hitH: false },
+      body,
     });
   },
 
@@ -86,7 +89,7 @@ const Dynamics = {
         const hereDef = Reg[here];
         if (here === B.AIR || (hereDef && (hereDef.replaceable || !hereDef.solid))) {
           if (hereDef && hereDef.needsSupport) Drops.spawn(bx + 0.5, by + 0.4, bz + 0.5, here, 1);
-          World.setBlock(bx, by, bz, f.id);
+          World.setBlock(bx, by, bz, f.id, { skipLight: true });
           // The landing cell may close a skylight shaft or cross a chunk border.
           // Incremental lighting handles most cases; this verification pass fixes
           // the sand/gravel ghost-light edge cases after the fall completes.

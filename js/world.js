@@ -66,6 +66,16 @@ const World = {
   dayFUniform: { value: 1 },
   scene: null,
   visibleSectionY: 0,
+  // Above this, JS Number can no longer preserve reliable per-block / sub-block math.
+  // Hard-guard it so /tp or corrupted saves do not crash the streamer.
+  MAX_PLAYABLE_COORD: 4000000000000000,
+  WORLD_BORDER_INSET: 10,
+  WORLD_BORDER_WALL_TOP: 4000000000000000,
+  WORLD_BORDER_RENDER_MARGIN: 16,
+  lightBuckets: null,
+  _lightBucketCount: -1,
+  _lightBucketVersion: 0,
+  _lightBucketBuiltVersion: -1,
 
   init(scene, seed) {
     this.scene = scene;
@@ -74,6 +84,7 @@ const World = {
     this.chunks.clear(); this.featureCache.clear(); this.structCellCache.clear();
     this.dungeonCache.clear(); this.dungeonConquered.clear(); this.structSeen.clear(); this.dirty.clear();
     this.lights.clear(); this.saplings.clear(); this.crops.clear(); this.plantationOrigins.clear(); this.plantationUnderSlabs.clear(); this.loreMap.clear(); this.diffs.clear();
+    this.lightBuckets = null; this._lightBucketCount = -1; this._lightBucketVersion = 0; this._lightBucketBuiltVersion = -1;
     this.megaTorches.clear(); this.fires.clear();
     this.floopSpots.length = 0; this.dungeonSpots.length = 0;
     this.signs.clear(); this.furnaces.clear(); this.chests.clear(); this.signDirs.clear();
@@ -119,6 +130,14 @@ const World = {
   key(cx, cz) { return cx + ',' + cz; },
   pkey(x, y, z) { return x + ',' + y + ',' + z; },
   idx(x, y, z) { return (y << 8) + (z << 4) + x; },
+  // Do NOT use bitwise >> 4 for world coordinates. JavaScript bitwise math
+  // truncates to signed 32-bit, so chunks at huge coordinates wrap to the wrong
+  // place and the generated meshes vanish far from spawn.
+  chunkCoord(v) { return Math.floor(Math.floor(v) / 16); },
+  localCoord(v) { const n = Math.floor(v); return ((n % 16) + 16) % 16; },
+  coordPlayable(v) { return Number.isFinite(+v) && Math.abs(+v) <= this.MAX_PLAYABLE_COORD; },
+  coordsPlayable(x, z) { return this.coordPlayable(x) && this.coordPlayable(z); },
+  chunkKeyForBlock(x, z) { return this.key(this.chunkCoord(x), this.chunkCoord(z)); },
   isBaseY(y) { return y >= 0 && y < this.H; },
 
   extraBlock(ch, x, y, z) {
@@ -140,15 +159,79 @@ const World = {
     ch.extraBlocks.set(k, id);
   },
 
+  minPlayableCoord() { return -this.MAX_PLAYABLE_COORD; },
+  maxPlayableCoord() { return this.MAX_PLAYABLE_COORD; },
+  chunkPlayable(cx, cz) {
+    const min = this.minPlayableCoord() - (this.WORLD_BORDER_RENDER_MARGIN || 0);
+    const max = this.maxPlayableCoord() + (this.WORLD_BORDER_RENDER_MARGIN || 0);
+    const x0 = cx * 16, x1 = x0 + 15, z0 = cz * 16, z1 = z0 + 15;
+    return x1 >= min && x0 <= max && z1 >= min && z0 <= max;
+  },
+  isBorderLineColumn(x, z) {
+    x = Math.floor(x); z = Math.floor(z);
+    const min = this.minPlayableCoord(), max = this.maxPlayableCoord();
+    return (x === min || x === max || z === min || z === max);
+  },
+  isOutsideBorderColumn(x, z) {
+    x = Math.floor(x); z = Math.floor(z);
+    const min = this.minPlayableCoord(), max = this.maxPlayableCoord();
+    return x < min || x > max || z < min || z > max;
+  },
+  isOutsideBorderWallColumn(x, z) {
+    // Only the first column outside the playable range is rendered/collidable as
+    // the wall.  Treating the entire one-chunk render margin as filled border
+    // blocks made edge chunks expensive to generate and mesh.
+    x = Math.floor(x); z = Math.floor(z);
+    const min = this.minPlayableCoord(), max = this.maxPlayableCoord();
+    return x === min - 1 || x === max + 1 || z === min - 1 || z === max + 1;
+  },
+  worldBorderTopY() { return Math.floor(this.WORLD_BORDER_WALL_TOP || this.MAX_PLAYABLE_COORD || 4000000000000000); },
+  worldBorderCoversY(y) {
+    y = Math.floor(+y);
+    return Number.isFinite(y) && y >= 0 && y <= this.worldBorderTopY();
+  },
+  isWorldBorderWallColumn(x, z) {
+    return this.isBorderLineColumn(x, z) || this.isOutsideBorderWallColumn(x, z);
+  },
+  borderSurfaceY(x, z) {
+    const h = this.heightAt(Math.max(this.minPlayableCoord(), Math.min(this.maxPlayableCoord(), Math.floor(x))), Math.max(this.minPlayableCoord(), Math.min(this.maxPlayableCoord(), Math.floor(z))));
+    return Math.max(1, Math.min(this.H - 2, h <= this.SEA ? this.SEA : h));
+  },
+  borderBlockOverride(x, y, z) {
+    x = Math.floor(x); z = Math.floor(z);
+    // Fast path first: this runs on EVERY block read in the game (meshing,
+    // physics, mobs, water). Anything strictly inside the playable area or
+    // beyond the wall column can never be a border block — 4 compares, no calls.
+    const max = this.MAX_PLAYABLE_COORD, min = -max;
+    if (x > min && x < max && z > min && z < max) return 0;
+    if (x < min - 1 || x > max + 1 || z < min - 1 || z > max + 1) return 0;
+    y = Math.floor(y);
+    if (!this.worldBorderCoversY(y)) return 0;
+    if (this.isBorderLineColumn(x, z)) {
+      const sy = this.borderSurfaceY(x, z);
+      // The surface line is visible red wool, but the same boundary column is
+      // otherwise solid world-border block from bedrock all the way up.
+      if (y === sy) return B.WOOL_RED;
+      return B.WORLD_BORDER || B.GLASS;
+    }
+    if (this.isOutsideBorderWallColumn(x, z)) return B.WORLD_BORDER || B.GLASS;
+    return 0;
+  },
+  borderProtectedBlock(x, y, z) { return !!this.borderBlockOverride(Math.floor(x), Math.floor(y), Math.floor(z)); },
+
   getBlock(x, y, z) {
-    if (y < 0) return B.AIR; // below the generated world is true void, not invisible bedrock
-    const ch = this.chunks.get(this.key(x >> 4, z >> 4));
-    if (!ch) return y < this.H ? B.STONE : B.AIR;
-    if (y < this.H) return ch.blocks[this.idx(x & 15, y, z & 15)];
-    return this.extraBlock(ch, x, y, z);
+    const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+    const border = this.borderBlockOverride(bx, by, bz);
+    if (border) return border;
+    if (!this.coordsPlayable(bx, bz)) return B.AIR;
+    if (by < 0) return B.AIR; // below the generated world is true void, not invisible bedrock
+    const ch = this.chunks.get(this.chunkKeyForBlock(bx, bz));
+    if (!ch) return by < this.H ? B.STONE : B.AIR;
+    if (by < this.H) return ch.blocks[this.idx(this.localCoord(bx), by, this.localCoord(bz))];
+    return this.extraBlock(ch, bx, by, bz);
   },
 
-  hasChunk(x, z) { return this.chunks.has(this.key(x >> 4, z >> 4)); },
+  hasChunk(x, z) { return this.chunks.has(this.chunkKeyForBlock(x, z)); },
 
   // ---------- lighting (0-15 sky & block channels) ----------
   _opaqueLUT: null, // id -> 0/1, built once (all defBlock calls happen at load)
@@ -170,19 +253,81 @@ const World = {
   },
 
   getLightRaw(x, y, z) {
-    if (y >= this.H) return 0xF0;
+    if (y >= this.H) return 0xF0 | this.sparseBlockLightAt(x, y, z);
     if (y < 0) return 0;
-    const ch = this.chunks.get(this.key(x >> 4, z >> 4));
+    const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch) return 0xF0;
     // A loaded chunk with light temporarily cleared for a relight pass must not
     // behave like open sky. Treating it as 15 skylight was re-seeding stale cave
     // light from chunks waiting to be recomputed after a roof hole got patched.
     if (!ch.light) return 0;
-    return ch.light[this.idx(x & 15, y, z & 15)];
+    return ch.light[this.idx(this.localCoord(x), y, this.localCoord(z))];
   },
 
   getSkyLight(x, y, z) { return this.getLightRaw(x, y, z) >> 4; },
   getBlockLight(x, y, z) { return this.getLightRaw(x, y, z) & 15; },
+
+  markLightBucketsDirty() { this._lightBucketVersion = (this._lightBucketVersion || 0) + 1; },
+
+  lightBucketKey(x, y, z) {
+    return this.chunkCoord(x) + ',' + Math.floor(Math.floor(y) / 16) + ',' + this.chunkCoord(z);
+  },
+
+  rebuildLightBuckets() {
+    const buckets = new Map();
+    if (this.lights && this.lights.size) {
+      for (const v of this.lights.values()) {
+        if (!v || v.length < 3) continue;
+        const x = Math.floor(v[0]), y = Math.floor(v[1]), z = Math.floor(v[2]);
+        if (!Number.isFinite(x + y + z)) continue;
+        const k = this.lightBucketKey(x, y, z);
+        let arr = buckets.get(k);
+        if (!arr) buckets.set(k, arr = []);
+        arr.push(v);
+      }
+    }
+    this.lightBuckets = buckets;
+    this._lightBucketCount = this.lights ? this.lights.size : 0;
+    this._lightBucketBuiltVersion = this._lightBucketVersion || 0;
+  },
+
+  sparseBlockLightAt(x, y, z) {
+    // Player-built blocks above the generated H=80 terrain live sparsely in
+    // extraBlocks, not in the fixed chunk light array.  The old code scanned
+    // every torch/lamp in every loaded chunk for every high-Y face, which caused
+    // the big far/high block-place, explosion, and falling-sand hitches.  Bucket
+    // light sources by chunk-section and only sample the nearby 3x3x3 buckets.
+    if (!this.lights || !this.lights.size) return 0;
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    if (!Number.isFinite(x + y + z)) return 0;
+    if (!this.lightBuckets || this._lightBucketCount !== this.lights.size || this._lightBucketBuiltVersion !== (this._lightBucketVersion || 0)) {
+      this.rebuildLightBuckets();
+    }
+    const cx = this.chunkCoord(x), cy = Math.floor(y / 16), cz = this.chunkCoord(z);
+    let best = 0;
+    for (let dxs = -1; dxs <= 1; dxs++) {
+      for (let dys = -1; dys <= 1; dys++) {
+        for (let dzs = -1; dzs <= 1; dzs++) {
+          const arr = this.lightBuckets && this.lightBuckets.get((cx + dxs) + ',' + (cy + dys) + ',' + (cz + dzs));
+          if (!arr) continue;
+          for (const v of arr) {
+            const lx = v[0], ly = v[1], lz = v[2];
+            const ddy = Math.abs(ly - y);
+            if (ddy > 15) continue;
+            const ddx = Math.abs(lx - x);
+            if (ddx + ddy > 15) continue;
+            const ddz = Math.abs(lz - z);
+            const dist = ddx + ddy + ddz;
+            if (dist > 15) continue;
+            const em = this.lightEmit(this.getBlock(lx, ly, lz));
+            const lvl = em - dist;
+            if (lvl > best) { best = lvl; if (best >= 15) return 15; }
+          }
+        }
+      }
+    }
+    return Math.max(0, Math.min(15, best));
+  },
 
   computeChunkLight(ch) {
     const H = this.H;
@@ -299,27 +444,27 @@ const World = {
   // ---------- incremental lighting (BFS add/remove, crosses chunk borders) ----------
   getChLight(x, y, z, channel) {
     if (y < 0) return 0;
-    if (y >= this.H) return channel === 0 ? 15 : 0;
-    const ch = this.chunks.get(this.key(x >> 4, z >> 4));
+    if (y >= this.H) return channel === 0 ? 15 : this.sparseBlockLightAt(x, y, z);
+    const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch) return channel === 0 ? 15 : 0;
     // During grouped relights, loaded chunks may intentionally have null light.
     // Do not let them seed fake sky/block light into neighboring cave cells.
     if (!ch.light) return 0;
-    const v = ch.light[this.idx(x & 15, y, z & 15)];
+    const v = ch.light[this.idx(this.localCoord(x), y, this.localCoord(z))];
     return channel === 0 ? (v >> 4) : (v & 15);
   },
 
   setChLight(x, y, z, channel, lvl, touched) {
     if (y < 0 || y >= this.H) return;
-    const ch = this.chunks.get(this.key(x >> 4, z >> 4));
+    const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch || !ch.light) return;
-    const i = this.idx(x & 15, y, z & 15);
+    const i = this.idx(this.localCoord(x), y, this.localCoord(z));
     const v = ch.light[i];
     ch.light[i] = channel === 0 ? ((lvl << 4) | (v & 15)) : ((v & 0xF0) | lvl);
     if (touched) {
       touched.add(this.key(ch.cx, ch.cz));
       // border light changes affect the neighbor's mesh too (faces sample across)
-      const lx = x & 15, lz = z & 15;
+      const lx = this.localCoord(x), lz = this.localCoord(z);
       if (lx === 0) touched.add(this.key(ch.cx - 1, ch.cz));
       if (lx === 15) touched.add(this.key(ch.cx + 1, ch.cz));
       if (lz === 0) touched.add(this.key(ch.cx, ch.cz - 1));
@@ -345,7 +490,7 @@ const World = {
     // per-call chunk cache: BFS cells cluster, no string key + Map.get per cell
     let cKey = null, cCh = null;
     const chunkAt = (x, z) => {
-      const k = (x >> 4) + ',' + (z >> 4);
+      const k = this.chunkKeyForBlock(x, z);
       if (k !== cKey) { cKey = k; cCh = this.chunks.get(k); }
       return cCh;
     };
@@ -355,14 +500,14 @@ const World = {
         const n = bq[qi];
         const ch = n.ch || chunkAt(n.x, n.z); // pushed nodes carry their chunk
         if (!ch || !ch.light) continue;
-        const i = this.idx(n.x & 15, n.y, n.z & 15);
+        const i = this.idx(this.localCoord(n.x), n.y, this.localCoord(n.z));
         const v = ch.light[i];
         const cur = channel === 0 ? (v >> 4) : (v & 15);
         if (lvl <= cur) continue;
         ch.light[i] = channel === 0 ? ((lvl << 4) | (v & 15)) : ((v & 0xF0) | lvl);
         if (touched) {
           touched.add(this.key(ch.cx, ch.cz));
-          const lx = n.x & 15, lz = n.z & 15;
+          const lx = this.localCoord(n.x), lz = this.localCoord(n.z);
           if (lx === 0) touched.add(this.key(ch.cx - 1, ch.cz));
           if (lx === 15) touched.add(this.key(ch.cx + 1, ch.cz));
           if (lz === 0) touched.add(this.key(ch.cx, ch.cz - 1));
@@ -373,9 +518,9 @@ const World = {
           const nx = n.x + dx, ny = n.y + dy, nz = n.z + dz;
           if (ny < 0 || ny >= H) continue;
           // same-chunk fast path; only border hops pay a lookup
-          const nch = ((nx >> 4) === ch.cx && (nz >> 4) === ch.cz) ? ch : chunkAt(nx, nz);
+          const nch = (this.chunkCoord(nx) === ch.cx && this.chunkCoord(nz) === ch.cz) ? ch : chunkAt(nx, nz);
           if (!nch || !nch.light) continue;
-          const ni = this.idx(nx & 15, ny, nz & 15);
+          const ni = this.idx(this.localCoord(nx), ny, this.localCoord(nz));
           if (this.opaqueToLight(nch.blocks[ni])) continue;
           const nl = lvl - 1; // direct sky columns are handled by full recompute, not flood-fill
           const nv = nch.light[ni];
@@ -414,7 +559,7 @@ const World = {
 
   lightOnBlockChanged(x, y, z, oldId, newId) {
     if (y < 0 || y >= this.H) return;
-    const ch = this.chunks.get(this.key(x >> 4, z >> 4));
+    const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch || !ch.light) return;
     const oldEm = this.lightEmit(oldId), newEm = this.lightEmit(newId);
     const oldOp = this.opaqueToLight(oldId), newOp = this.opaqueToLight(newId);
@@ -453,9 +598,9 @@ const World = {
         const rk = this.key(ccx, ccz);
         if (!seen.has(rk)) { seen.add(rk); this.relightQueue.add(rk); }
       };
-      const ccx = x >> 4, ccz = z >> 4;
+      const ccx = this.chunkCoord(x), ccz = this.chunkCoord(z);
       relightChunk(ccx, ccz);
-      const lx = x & 15, lz = z & 15;
+      const lx = this.localCoord(x), lz = this.localCoord(z);
       if (lx === 0) relightChunk(ccx - 1, ccz);
       if (lx === 15) relightChunk(ccx + 1, ccz);
       if (lz === 0) relightChunk(ccx, ccz - 1);
@@ -477,7 +622,7 @@ const World = {
       const feed = (x, y, z, nx, nz) => {
         const l = this.getChLight(x, y, z, channel);
         if (l <= 1) return;
-        const nb = this.chunks.get(this.key(nx >> 4, nz >> 4));
+        const nb = this.chunks.get(this.chunkKeyForBlock(nx, nz));
         if (!nb || !nb.light || nb === ch) return;
         if (!this.transparentToLight(nx, y, nz)) return;
         if (l - 1 > this.getChLight(nx, y, nz, channel)) q.push({ x: nx, y, z: nz, l: l - 1 });
@@ -500,14 +645,18 @@ const World = {
 
   setBlock(x, y, z, id, opts) {
     opts = opts || {};
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    if (this.borderProtectedBlock(x, y, z) && !(opts && opts.allowBorderEdit)) return;
+    if (!this.coordsPlayable(x, z)) return;
     if (y < 0) return;
-    const cx = x >> 4, cz = z >> 4;
+    const cx = this.chunkCoord(x), cz = this.chunkCoord(z);
     const ch = this.chunks.get(this.key(cx, cz));
     if (!ch) return;
     const baseY = y < this.H;
-    const old = baseY ? ch.blocks[this.idx(x & 15, y, z & 15)] : this.extraBlock(ch, x, y, z);
+    const lx0 = this.localCoord(x), lz0 = this.localCoord(z);
+    const old = baseY ? ch.blocks[this.idx(lx0, y, lz0)] : this.extraBlock(ch, x, y, z);
     if (old === id) return;
-    if (baseY) ch.blocks[this.idx(x & 15, y, z & 15)] = id;
+    if (baseY) ch.blocks[this.idx(lx0, y, lz0)] = id;
     else this.setExtraBlock(ch, x, y, z, id);
     if (this.ready && old !== id && id !== old && typeof Dynamics !== 'undefined' && Dynamics.isLogId && Dynamics.isLogId(old) && !Dynamics.isLogId(id)) {
       Dynamics.queueLeafDecay(x, y, z);
@@ -521,7 +670,7 @@ const World = {
     }
 
     this.dirty.add(this.key(cx, cz));
-    const lx = x & 15, lz = z & 15;
+    const lx = this.localCoord(x), lz = this.localCoord(z);
     if (lx === 0) this.dirty.add(this.key(cx - 1, cz));
     if (lx === 15) this.dirty.add(this.key(cx + 1, cz));
     if (lz === 0) this.dirty.add(this.key(cx, cz - 1));
@@ -542,8 +691,16 @@ const World = {
       }
     }
 
-    // incremental light update (only touches the cells that actually change)
-    this.lightOnBlockChanged(x, y, z, old, id);
+    // incremental light update (only touches the cells that actually change).
+    // Mass edits like explosions/falling sand can opt out and queue a chunk
+    // verification pass instead, avoiding one light flood-fill per destroyed block.
+    if (opts.skipLight) {
+      const oldEm = this.lightEmit(old), newEm = this.lightEmit(id);
+      const oldOp = this.opaqueToLight(old), newOp = this.opaqueToLight(id);
+      if (y >= 0 && y < this.H && (oldEm !== newEm || oldOp !== newOp)) this.relightQueue.add(this.key(cx, cz));
+    } else {
+      this.lightOnBlockChanged(x, y, z, old, id);
+    }
 
     if (typeof Multiplayer !== 'undefined' && Multiplayer.onLocalBlockChange) {
       Multiplayer.onLocalBlockChange(x, y, z, id, opts, old);
@@ -566,8 +723,8 @@ const World = {
     const k = this.pkey(x, y, z);
     const wasLight = Reg[oldId] && Reg[oldId].light;
     const isLight = Reg[newId] && Reg[newId].light;
-    if (wasLight && !isLight) this.lights.delete(k);
-    if (isLight) this.lights.set(k, [x, y, z]);
+    if (wasLight && !isLight) { this.lights.delete(k); this.markLightBucketsDirty(); }
+    if (isLight) { this.lights.set(k, [x, y, z]); this.markLightBucketsDirty(); }
     if (oldId === B.MEGA_TORCH && newId !== B.MEGA_TORCH) this.megaTorches.delete(k);
     if (newId === B.MEGA_TORCH) this.megaTorches.add(k);
     if (oldId === B.FIRE && newId !== B.FIRE) this.fires.delete(k);
@@ -640,6 +797,13 @@ const World = {
     if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client') return;
     const solidNow = !!Physics.blockBoxes(newId, x, y, z);
     const above = this.getBlock(x, y + 1, z);
+
+    // Grass above the base terrain height lives in extraBlocks. Make it obey
+    // the same smother rule immediately when a full opaque block is placed over it.
+    const below = this.getBlock(x, y - 1, z);
+    if ((below === B.GRASS || below === B.SNOWY_GRASS) && !this.grassCanStayCovered(newId)) {
+      this.setBlock(x, y - 1, z, B.DIRT, { noUpdate: true });
+    }
 
     // Saplings have real soil rules now: normal saplings need dirt/grass,
     // oasis saplings need sand. Replacing the ground under them should pop
@@ -993,12 +1157,18 @@ const World = {
     if (bucket2) {
       for (const [dk, id] of bucket2) {
         const [wx2, wy2, wz2] = dk.split(',').map(Number);
-        if (wy2 >= 0 && wy2 < H) blocks[this.idx(wx2 & 15, wy2, wz2 & 15)] = id;
+        if (wy2 >= 0 && wy2 < H) blocks[this.idx(this.localCoord(wx2), wy2, this.localCoord(wz2))] = id;
         else if (wy2 >= H && id !== B.AIR) extraBlocks.set(this.pkey(wx2, wy2, wz2), id);
       }
     }
 
-    const ch = { cx, cz, blocks, extraBlocks: extraBlocks.size ? extraBlocks : null, light: null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, sectionMeshes: [], hasMesh: false };
+    // Permanent world-border visibility: the last playable surface column is
+    // red wool, and the outside/over-edge space is a clear glass wall.  This is
+    // applied after worldgen and saved diffs so the boundary cannot silently
+    // disappear behind old edits.
+    const worldBorderColumns = this.applyWorldBorderToGeneratedChunk(cx, cz, blocks);
+
+    const ch = { cx, cz, blocks, extraBlocks: extraBlocks.size ? extraBlocks : null, worldBorderColumns, light: null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, sectionMeshes: [], hasMesh: false };
     this.chunks.set(k, ch);
 
     for (let y = 0; y < H; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
@@ -1006,7 +1176,7 @@ const World = {
       if (id === B.AIR) continue;
       const def = Reg[id];
       const wx = cx * 16 + lx, wz = cz * 16 + lz;
-      if (def && def.light) this.lights.set(this.pkey(wx, y, wz), [wx, y, wz]);
+      if (def && def.light) { this.lights.set(this.pkey(wx, y, wz), [wx, y, wz]); this.markLightBucketsDirty(); }
       if (id === B.MEGA_TORCH) this.megaTorches.add(this.pkey(wx, y, wz));
       if (id === B.FIRE) this.fires.set(this.pkey(wx, y, wz), { t: 5 });
       else if (isSapling(id)) {
@@ -1018,11 +1188,11 @@ const World = {
       }
     }
     if (ch.extraBlocks) {
-      for (const [pk, id] of ch.extraBlocks) {
+      for (const [pk, id] of [...ch.extraBlocks]) {
         if (id === B.AIR) continue;
         const [wx, y, wz] = pk.split(',').map(Number);
         const def = Reg[id];
-        if (def && def.light) this.lights.set(pk, [wx, y, wz]);
+        if (def && def.light) { this.lights.set(pk, [wx, y, wz]); this.markLightBucketsDirty(); }
         if (id === B.MEGA_TORCH) this.megaTorches.add(pk);
         if (id === B.FIRE) this.fires.set(pk, { t: 5 });
         else if (isSapling(id) && !this.saplings.has(pk)) this.saplings.set(pk, { id, t: 25 + Math.random() * 50 });
@@ -1030,6 +1200,90 @@ const World = {
       }
     }
     return ch;
+  },
+
+  applyWorldBorderToGeneratedChunk(cx, cz, blocks) {
+    // Base terrain is still materialized in the chunk's normal block array, so
+    // lighting/meshing/collision below Y80 stays fast and deterministic.  Above
+    // Y80 the same wall is provided procedurally by borderBlockOverride() and
+    // meshed only for the visible vertical sections, so edge chunks do not hitch.
+    const columns = [];
+    if (!blocks) return columns;
+    const wallId = B.WORLD_BORDER || B.GLASS;
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        const wx = cx * 16 + lx, wz = cz * 16 + lz;
+        const border = this.isBorderLineColumn(wx, wz);
+        const outsideWall = this.isOutsideBorderWallColumn(wx, wz);
+        if (!border && !outsideWall) continue;
+        const sy = border ? this.borderSurfaceY(wx, wz) : -1;
+        columns.push({ lx, lz, wx, wz, border, outsideWall, sy });
+        for (let y = 0; y < this.H; y++) {
+          blocks[this.idx(lx, y, lz)] = (border && y === sy) ? B.WOOL_RED : wallId;
+        }
+      }
+    }
+    return columns;
+  },
+
+  safeTeleportY(x, z) {
+    x = Math.floor(x); z = Math.floor(z);
+    // Prefer loaded block data so player-made columns/shore water are respected;
+    // fall back to deterministic terrain height when teleporting into an unloaded border chunk.
+    if (this.hasChunk(x, z)) {
+      for (let y = Math.min(this.H - 1, this.WORLD_BORDER_WALL_TOP); y >= 1; y--) {
+        const id = this.getBlock(x, y, z);
+        if (id === B.AIR || isFlower(id) || isSnowSheet(id)) continue;
+        if (isFluid(id)) return y + 1.15;
+        const def = Reg[id];
+        if (def && def.solid) return y + 1.02;
+      }
+    }
+    const h = this.heightAt(x, z);
+    return (h <= this.SEA ? this.SEA : h) + 1.05;
+  },
+
+  enforceWorldBorder(body) {
+    if (!body) return false;
+    const st = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(body) : null;
+    const wx = st ? st.ox + st.x : body.x;
+    const wz = st ? st.oz + st.z : body.z;
+    if (this.coordsPlayable(wx, wz)) return false;
+    const min = this.minPlayableCoord(), max = this.maxPlayableCoord(), inset = Math.max(1, this.WORLD_BORDER_INSET || 10);
+    let nx = wx, nz = wz;
+    if (wx > max) nx = max - inset;
+    else if (wx < min) nx = min + inset;
+    if (wz > max) nz = max - inset;
+    else if (wz < min) nz = min + inset;
+    if (!Number.isFinite(nx + nz)) { nx = 0; nz = 0; }
+    const ny = this.safeTeleportY(nx, nz);
+
+    if (typeof Vehicles !== 'undefined') {
+      if (Vehicles.driving || Vehicles.boating) {
+        Vehicles.driving = null;
+        Vehicles.boating = null;
+        if (typeof UI !== 'undefined') UI.chat('World border crossed: dismounted vehicle before moving you back inside.', '#ffd97a');
+      }
+      if (typeof Player !== 'undefined' && Player.boarding && Vehicles.stopBoard) Vehicles.stopBoard(false, true);
+    }
+
+    const ox = (typeof Physics !== 'undefined' && Physics._originFor) ? Physics._originFor(nx) : 0;
+    const oz = (typeof Physics !== 'undefined' && Physics._originFor) ? Physics._originFor(nz) : 0;
+    body._farPos = { ox, oz, x: nx - ox, z: nz - oz };
+    body.x = nx; body.y = ny; body.z = nz;
+    body.vx = body.vy = body.vz = 0;
+    body.onGround = false; body.hitH = false;
+    if (typeof Player !== 'undefined' && Player.body === body) {
+      Player.fallDist = 0;
+      if (Player.camera) {
+        Player.camera.position.set(nx, Player.eyeY ? Player.eyeY() : ny + 1.6, nz);
+        Player.camera.rotation.order = 'YXZ';
+        Player.camera.rotation.y = Player.yaw || 0;
+        Player.camera.rotation.x = Player.pitch || 0;
+      }
+    }
+    if (typeof UI !== 'undefined') UI.chat('World border: moved you 10 blocks back inside on a valid surface.', '#ff8080');
+    return true;
   },
 
   // ---------- features ----------
@@ -1122,11 +1376,18 @@ const World = {
       const wx = cx * 16 + lx, wz = cz * 16 + lz;
       const h = this.heightAt(wx, wz);
       if (h <= this.SEA + 1 || h > 57) continue;
-      if (this.surfaceTopBlockId(wx, wz, h) !== B.GRASS) continue;
+      const topId = this.surfaceTopBlockId(wx, wz, h);
       let type = 'oak';
-      if (biome === 'snowy') type = 'spruce';
-      else if (biome === 'forest') type = tr() < 0.4 ? 'birch' : 'oak';
-      else if (tr() < 0.12) type = 'birch';
+      if (biome === 'snowy') {
+        // Spruce should naturally grow from snowy grass only, never normal grass.
+        if (topId !== B.SNOWY_GRASS) continue;
+        type = 'spruce';
+      } else {
+        // Oak/birch stay on normal grass. This keeps spruce out of regular grass biomes.
+        if (topId !== B.GRASS) continue;
+        if (biome === 'forest') type = tr() < 0.4 ? 'birch' : 'oak';
+        else if (tr() < 0.12) type = 'birch';
+      }
       if (!reserveTreeBase(wx, wz)) continue;
       this.treeBlocks(put, wx, h, wz, type, tr);
     }
@@ -1347,8 +1608,8 @@ const World = {
         if (best && r >= 2) break;
       }
     } else {
-      const baseX = Math.floor((Math.floor(fromX) >> 4) / 4);
-      const baseZ = Math.floor((Math.floor(fromZ) >> 4) / 4);
+      const baseX = Math.floor(this.chunkCoord(fromX) / 4);
+      const baseZ = Math.floor(this.chunkCoord(fromZ) / 4);
       for (let r = 0; r <= ringMax; r++) {
         for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
@@ -1703,12 +1964,12 @@ const World = {
     };
     const carveGuaranteedPath = (a, b) => {
       if (!a || !b) return;
-      let x = a.x | 0, z = a.z | 0;
+      let x = Math.floor(a.x), z = Math.floor(a.z);
       carveGuaranteedSegment(x, z, 'x');
       const sx = b.x > x ? 1 : -1;
-      while (x !== (b.x | 0)) { x += sx; carveGuaranteedSegment(x, z, 'x'); }
+      while (x !== Math.floor(b.x)) { x += sx; carveGuaranteedSegment(x, z, 'x'); }
       const sz = b.z > z ? 1 : -1;
-      while (z !== (b.z | 0)) { z += sz; carveGuaranteedSegment(x, z, 'z'); }
+      while (z !== Math.floor(b.z)) { z += sz; carveGuaranteedSegment(x, z, 'z'); }
     };
 
     const loX = dscx * 96 - 24, hiX = dscx * 96 + 112;
@@ -1843,7 +2104,7 @@ const World = {
 
     const byChunk = new Map();
     for (const c of cells.values()) {
-      const ck = this.key(c.x >> 4, c.z >> 4);
+      const ck = this.chunkKeyForBlock(c.x, c.z);
       if (!byChunk.has(ck)) byChunk.set(ck, []);
       byChunk.get(ck).push(c);
     }
@@ -1863,15 +2124,16 @@ const World = {
 
   dungeonOwnsBlock(dungeon, x, y, z) {
     if (!dungeon || !dungeon.byChunk) return false;
-    const pk = this.pkey(x | 0, y | 0, z | 0);
+    const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+    const pk = this.pkey(bx, by, bz);
     if (dungeon.cellKeys && dungeon.cellKeys.has(pk)) return true;
-    const bucket = dungeon.byChunk.get(this.key((x | 0) >> 4, (z | 0) >> 4));
+    const bucket = dungeon.byChunk.get(this.chunkKeyForBlock(bx, bz));
     if (!bucket) return false;
-    return bucket.some(c => c.x === (x | 0) && c.y === (y | 0) && c.z === (z | 0));
+    return bucket.some(c => c.x === bx && c.y === by && c.z === bz);
   },
 
   dungeonAtBlock(x, y, z) {
-    const gx = Math.floor((x | 0) / 96), gz = Math.floor((z | 0) / 96);
+    const gx = Math.floor(Math.floor(x) / 96), gz = Math.floor(Math.floor(z) / 96);
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         const dg = this.dungeonFor(gx + dx, gz + dz);
@@ -1914,7 +2176,7 @@ const World = {
       let changed = false;
       for (const cell of bucket) {
         if (cell.y < 0 || cell.y >= this.H) continue;
-        const lx = cell.x & 15, lz = cell.z & 15;
+        const lx = this.localCoord(cell.x), lz = this.localCoord(cell.z);
         const idx = this.idx(lx, cell.y, lz);
         const oldId = ch.blocks[idx];
         const newId = this.deactivatedDungeonBlockId(oldId);
@@ -1924,7 +2186,7 @@ const World = {
         this.diffs.set(pk, newId);
         if (!this.diffIndex.has(ck)) this.diffIndex.set(ck, new Map());
         this.diffIndex.get(ck).set(pk, newId);
-        if (oldId === B.DUNGEON_CORE) this.lights.delete(pk);
+        if (oldId === B.DUNGEON_CORE) { this.lights.delete(pk); this.markLightBucketsDirty(); }
         if (oldId === B.SPAWNER) this.spawners.delete(pk);
         changed = true;
       }
@@ -1940,12 +2202,15 @@ const World = {
 
   // ---------- streaming ----------
   neededChunks(px, pz) {
-    const pcx = Math.floor(px) >> 4, pcz = Math.floor(pz) >> 4;
+    if (!this.coordsPlayable(px, pz)) return { need: [], pcx: 0, pcz: 0 };
+    const pcx = this.chunkCoord(px), pcz = this.chunkCoord(pz);
     const need = [];
     const R = this.R + 1;
     for (let dcx = -R; dcx <= R; dcx++) {
       for (let dcz = -R; dcz <= R; dcz++) {
-        need.push({ cx: pcx + dcx, cz: pcz + dcz, dist: Math.max(Math.abs(dcx), Math.abs(dcz)) });
+        const ncx = pcx + dcx, ncz = pcz + dcz;
+        if (!this.chunkPlayable(ncx, ncz)) continue;
+        need.push({ cx: ncx, cz: ncz, dist: Math.max(Math.abs(dcx), Math.abs(dcz)) });
       }
     }
     need.sort((a, b) => a.dist - b.dist);
@@ -1954,6 +2219,7 @@ const World = {
 
   update(px, pz, budget, py) {
     budget = budget || 2;
+    if (!this.coordsPlayable(px, pz)) return { genned: 0, meshed: 0, unsafe: true };
     this.updateVerticalMeshVisibility(py);
     const { need, pcx, pcz } = this.neededChunks(px, pz);
     // in-game (budget 1): time-slice — gen, light and mesh are each ~10-25ms,
@@ -2057,8 +2323,8 @@ const World = {
     if (!this.dirty || !this.dirty.size) return 0;
     const limit = Math.max(1, maxChunks || 16);
     const maxDist = Number.isFinite(+radius) ? Math.max(0, +radius) : Infinity;
-    const cx0 = Math.floor(x) >> 4;
-    const cz0 = Math.floor(z) >> 4;
+    const cx0 = this.chunkCoord(x);
+    const cz0 = this.chunkCoord(z);
     const list = [...this.dirty].map(k => {
       const parts = k.split(',');
       return { k, d: Math.max(Math.abs((+parts[0]) - cx0), Math.abs((+parts[1]) - cz0)) };
@@ -2082,9 +2348,9 @@ const World = {
     for (const cell of cells) {
       if (!cell || cell.length < 3) continue;
       const x = Math.floor(cell[0]), z = Math.floor(cell[2]);
-      const cx = x >> 4, cz = z >> 4;
+      const cx = this.chunkCoord(x), cz = this.chunkCoord(z);
       keys.add(this.key(cx, cz));
-      const lx = x & 15, lz = z & 15;
+      const lx = this.localCoord(x), lz = this.localCoord(z);
       if (lx === 0) keys.add(this.key(cx - 1, cz));
       if (lx === 15) keys.add(this.key(cx + 1, cz));
       if (lz === 0) keys.add(this.key(cx, cz - 1));
@@ -2106,6 +2372,7 @@ const World = {
 
   countMissing(px, pz, radius) {
     const { need } = this.neededChunks(px, pz);
+    if (!need || !need.length) return { missing: 0, total: 1 };
     const renderRadius = Number.isFinite(+radius) ? Math.max(0, Math.min(this.R, +radius | 0)) : this.R;
     let missing = 0, total = 0;
     for (const n of need) {
@@ -2142,7 +2409,7 @@ const World = {
     const radius = Math.max(0, this.VERTICAL_RENDER_RADIUS || 0);
     for (const sec of ch.sectionMeshes) {
       if (!sec) continue;
-      const visible = Math.abs((sec.sy | 0) - centerY) <= radius;
+      const visible = Math.abs((Number(sec.sy) || 0) - centerY) <= radius;
       for (const m of ['solidMesh', 'cutoutMesh', 'waterMesh', 'lavaMesh', 'photoMesh']) {
         if (sec[m]) sec[m].visible = visible;
       }
@@ -2155,7 +2422,14 @@ const World = {
     const nextY = Math.floor(+py / sectionH);
     if (nextY === this.visibleSectionY) return;
     this.visibleSectionY = nextY;
-    for (const ch of this.chunks.values()) if (ch && ch.hasMesh) this.applyChunkSectionVisibility(ch);
+    for (const ch of this.chunks.values()) {
+      if (!ch || !ch.hasMesh) continue;
+      // Procedural border walls above the generated terrain are meshed only for
+      // the currently visible vertical band.  When the player climbs/falls,
+      // rebuild edge chunks lazily so the wall continues to the height limit.
+      if (ch.worldBorderColumns && ch.worldBorderColumns.length) this.dirty.add(this.key(ch.cx, ch.cz));
+      else this.applyChunkSectionVisibility(ch);
+    }
   },
 
   // ---------- meshing ----------
@@ -2180,13 +2454,24 @@ const World = {
       }
     }
     const H = this.H;
-    const makeBufs = () => ({
-      solid: { pos: [], uv: [], col: [], idx: [] },
-      cutout: { pos: [], uv: [], col: [], idx: [] },
-      water: { pos: [], uv: [], col: [], idx: [] },
-      lava: { pos: [], uv: [], col: [], idx: [] },
-      photo: { pos: [], uv: [], col: [], idx: [] },
-    });
+    const X0 = ch.cx * 16, Z0 = ch.cz * 16;
+    // Far-origin rendering fix:
+    // Store each chunk section's vertex positions in small LOCAL coordinates and
+    // place the mesh at the chunk/section origin.  The old mesh stored absolute
+    // world coordinates directly in Float32 vertex attributes.  At x/z values in
+    // the millions or billions, float precision is too coarse to preserve 1-block
+    // and sub-block details, causing warped/stretched block faces even though
+    // raycasts, outlines, mobs, drops, and vehicles still behaved correctly.
+    const makeBufs = (oy) => {
+      const makeBuf = () => ({ pos: [], uv: [], col: [], idx: [], ox: X0, oy: oy || 0, oz: Z0 });
+      return {
+        solid: makeBuf(),
+        cutout: makeBuf(),
+        water: makeBuf(),
+        lava: makeBuf(),
+        photo: makeBuf(),
+      };
+    };
     const sectionH = this.CHUNK_H || 16;
     const baseSectionCount = Math.max(1, Math.ceil(H / sectionH));
     const sectionMap = new Map();
@@ -2194,7 +2479,8 @@ const World = {
       sy = Math.floor(+sy || 0);
       let sec = sectionMap.get(sy);
       if (!sec) {
-        sec = { sy, y0: sy * sectionH, y1: sy * sectionH + sectionH, bufs: makeBufs() };
+        const y0 = sy * sectionH;
+        sec = { sy, y0, y1: y0 + sectionH, bufs: makeBufs(y0) };
         sectionMap.set(sy, sec);
       }
       return sec;
@@ -2209,10 +2495,16 @@ const World = {
         if (Number.isFinite(y)) ensureSection(Math.floor(y / sectionH));
       }
     }
+    const borderColumns = (ch.worldBorderColumns && ch.worldBorderColumns.length) ? ch.worldBorderColumns : [];
+    if (borderColumns.length) {
+      const centerY = Number.isFinite(this.visibleSectionY) ? this.visibleSectionY : 0;
+      const radius = Math.max(0, this.VERTICAL_RENDER_RADIUS || 0);
+      const topSy = Math.floor(this.worldBorderTopY() / sectionH);
+      for (let sy = Math.max(0, centerY - radius); sy <= Math.min(topSy, centerY + radius); sy++) ensureSection(sy);
+    }
     const bufsForY = (yy) => ensureSection(Math.floor(yy / sectionH)).bufs;
     let bufs = ensureSection(0).bufs;
     const chunkSigns = [];
-    const X0 = ch.cx * 16, Z0 = ch.cz * 16;
 
     // fast block/light access: direct typed-array reads instead of 50k string-keyed
     // Map lookups per rebuild (this WAS the chunk-loading hitch)
@@ -2220,26 +2512,37 @@ const World = {
     const nbE = this.chunks.get(this.key(ch.cx + 1, ch.cz));
     const nbN = this.chunks.get(this.key(ch.cx, ch.cz - 1));
     const nbS = this.chunks.get(this.key(ch.cx, ch.cz + 1));
-    const resolve = (wx, wz) => {
-      const lx = wx - X0, lz = wz - Z0;
-      if (lx >= 0 && lx < 16 && lz >= 0 && lz < 16) return [ch, lx, lz];
-      if (lx === -1) return [nbW, 15, lz];
-      if (lx === 16) return [nbE, 0, lz];
-      if (lz === -1) return [nbN, lx, 15];
-      if (lz === 16) return [nbS, lx, 0];
-      return [null, 0, 0];
-    };
+    // NOTE: keep gb/gl allocation-free — they run ~60k times per rebuild.
+    // (The old `resolve()` helper returned a fresh array per call.)
     const gb = (wx, y, wz) => {
+      const border = this.borderBlockOverride(wx, y, wz);
+      if (border) return border;
       if (y < 0) return B.AIR; // below the generated world is true void, not invisible bedrock
-      const [c, ax, az] = resolve(wx, wz);
-      if (!c) return y < H ? B.STONE : B.AIR;
+      const lx = wx - X0, lz = wz - Z0;
+      let c = ch, ax = lx, az = lz;
+      if (lx < 0 || lx > 15 || lz < 0 || lz > 15) {
+        if (lx === -1) { c = nbW; ax = 15; }
+        else if (lx === 16) { c = nbE; ax = 0; }
+        else if (lz === -1) { c = nbN; az = 15; }
+        else if (lz === 16) { c = nbS; az = 0; }
+        else c = null;
+        if (!c) return y < H ? B.STONE : B.AIR;
+      }
       if (y < H) return c.blocks[(y << 8) + (az << 4) + ax];
       return this.extraBlock(c, wx, y, wz);
     };
     const gl = (wx, y, wz) => {
-      if (y >= H) return 0xF0;
+      if (y >= H) return 0xF0 | this.sparseBlockLightAt(wx, y, wz);
       if (y < 0) return 0;
-      const [c, ax, az] = resolve(wx, wz);
+      const lx = wx - X0, lz = wz - Z0;
+      let c = ch, ax = lx, az = lz;
+      if (lx < 0 || lx > 15 || lz < 0 || lz > 15) {
+        if (lx === -1) { c = nbW; ax = 15; }
+        else if (lx === 16) { c = nbE; ax = 0; }
+        else if (lz === -1) { c = nbN; az = 15; }
+        else if (lz === 16) { c = nbS; az = 0; }
+        else c = null;
+      }
       if (!c || !c.light) return 0xF0;
       return c.light[(y << 8) + (az << 4) + ax];
     };
@@ -2251,8 +2554,11 @@ const World = {
 
     const pushQuad = (b, verts, uvr, uvs, shade, lb, ls) => {
       const base = b.pos.length / 3;
+      const ox = Number.isFinite(b.ox) ? b.ox : 0;
+      const oy = Number.isFinite(b.oy) ? b.oy : 0;
+      const oz = Number.isFinite(b.oz) ? b.oz : 0;
       for (let i = 0; i < 4; i++) {
-        b.pos.push(verts[i][0], verts[i][1], verts[i][2]);
+        b.pos.push(verts[i][0] - ox, verts[i][1] - oy, verts[i][2] - oz);
         const u = uvr.u0 + (uvr.u1 - uvr.u0) * uvs[i][0];
         const v = uvr.v0 + (uvr.v1 - uvr.v0) * uvs[i][1];
         b.uv.push(u, v);
@@ -2317,10 +2623,17 @@ const World = {
       const parts = (typeof SLAB_COMBO_PIECES !== 'undefined') ? SLAB_COMBO_PIECES[bid] : null;
       return (parts && parts.length && parts.every(p => p.mat === 'glass')) ? parts : null;
     };
+    // Pure function of block id, but it runs for EVERY voxel in the main mesh
+    // loop and again per neighbor in the 3x3x3 coplanar sweeps — memoize it
+    // once per page load (the id -> glass-family classification never changes).
+    const glassJoinMemo = this._glassJoinMemo || (this._glassJoinMemo = {});
     const isJoinedGlassBlock = (bid) => {
-      if (bid === B.GLASS || bid === B.GLASS_SLAB_B || bid === B.GLASS_SLAB_T || isGlassDSlab(bid) || isGlassVSlab(bid) || glassSlabComboParts(bid)) return true;
-      const si = stairInfo(bid);
-      return !!(si && si.mat === 'glass');
+      const m = glassJoinMemo[bid];
+      if (m !== undefined) return m;
+      let v = false;
+      if (bid === B.GLASS || bid === B.GLASS_SLAB_B || bid === B.GLASS_SLAB_T || isGlassDSlab(bid) || isGlassVSlab(bid) || glassSlabComboParts(bid)) v = true;
+      else { const si = stairInfo(bid); v = !!(si && si.mat === 'glass'); }
+      return (glassJoinMemo[bid] = v);
     };
     const localGlassBoxes = (bid, bx, by, bz) => {
       if (bid === B.GLASS) return [[0, 0, 0, 1, 1, 1]];
@@ -2420,12 +2733,41 @@ const World = {
       const d = this.FACES[f].d;
       return verts.map(v => [v[0] - d[0] * amt, v[1] - d[1] * amt, v[2] - d[2] * amt]);
     };
+    // id -> 0: never renders boxes, 1: full unit cube, 2: partial shape.
+    // Memoized per page load; runs 27x per visible leaf/glass face otherwise.
+    const boxClassMemo = this._boxClassMemo || (this._boxClassMemo = {});
+    const boxClassOf = (bid) => {
+      const m = boxClassMemo[bid];
+      if (m !== undefined) return m;
+      const bd = Reg[bid];
+      let v;
+      if (!bd || !bd.block || bid === B.AIR || isFluid(bid)) v = 0;
+      else switch (bd.shape) {
+        case 'cube': case 'mega': case 'dslab': v = 1; break;
+        default: v = (bd.shape ? 2 : (bd.solid ? 1 : 0));
+      }
+      return (boxClassMemo[bid] = v);
+    };
     const hasCoplanarNonJoinedNeighbor = (bo, f, selfWx, selfY, selfWz, selfId) => {
       const fr = faceRect(bo, f);
+      const fd = this.FACES[f].d;
       for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) for (let ox = -1; ox <= 1; ox++) {
         const bx = selfWx + ox, by = selfY + oy, bz = selfWz + oz;
         const bid = (ox === 0 && oy === 0 && oz === 0) ? selfId : gb(bx, by, bz);
         if (bid === B.AIR || isFluid(bid) || isJoinedGlassBlock(bid)) continue;
+        const cls = boxClassOf(bid);
+        if (cls === 0) continue;
+        if (cls === 1) {
+          // A full unit cube's faces sit on cell boundaries, so it can only
+          // area-overlap this face plane as the direct face neighbor (diagonal
+          // full cubes merely edge-touch). Skip the box math for the common case.
+          if (ox === fd[0] && oy === fd[1] && oz === fd[2]) {
+            const plane = f === 0 ? bo[3] : f === 1 ? bo[0] : f === 2 ? bo[4] : f === 3 ? bo[1] : f === 4 ? bo[5] : bo[2];
+            const bnd = f === 0 ? selfWx + 1 : f === 1 ? selfWx : f === 2 ? selfY + 1 : f === 3 ? selfY : f === 4 ? selfWz + 1 : selfWz;
+            if (Math.abs(plane - bnd) < GLASS_EPS) return true;
+          }
+          continue;
+        }
         const bd = Reg[bid];
         if (!bd || !bd.block) continue;
         for (const ob of renderBoxesForId(bid, bx, by, bz)) {
@@ -3079,10 +3421,26 @@ const World = {
     };
 
     if (ch.extraBlocks) {
-      for (const [pk, id] of ch.extraBlocks) {
+      for (const [pk, id] of [...ch.extraBlocks]) {
         const [wx, y, wz] = pk.split(',').map(Number);
         if (!Number.isFinite(wx + y + wz) || y < H) continue;
         emitSparseCell(wx, y, wz, id);
+      }
+    }
+
+    if (borderColumns.length) {
+      const wallId = B.WORLD_BORDER || B.GLASS;
+      const topY = this.worldBorderTopY();
+      for (const sec of sectionMap.values()) {
+        const y0 = Math.max(H, sec.y0, 0);
+        const y1 = Math.min(sec.y1, topY + 1);
+        if (y0 >= y1) continue;
+        for (const c of borderColumns) {
+          const wx = c.wx, wz = c.wz;
+          for (let yy = y0; yy < y1; yy++) {
+            emitSparseCell(wx, yy, wz, wallId);
+          }
+        }
       }
     }
 
@@ -3096,8 +3454,14 @@ const World = {
       g.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3));
       g.setIndex(b.idx);
       const mesh = new THREE.Mesh(g, mat);
+      const ox = Number.isFinite(b.ox) ? b.ox : 0;
+      const oy = Number.isFinite(b.oy) ? b.oy : 0;
+      const oz = Number.isFinite(b.oz) ? b.oz : 0;
+      mesh.position.set(ox, oy, oz);
+      mesh.updateMatrix();
       mesh.matrixAutoUpdate = false;
       mesh.userData.chunkSectionY = sy;
+      mesh.userData.renderOrigin = { x: ox, y: oy, z: oz };
       this.scene.add(mesh);
       return mesh;
     };
@@ -3260,6 +3624,36 @@ const World = {
   // visible boxes actually are (open doors, slab gaps, torches...)
   raycast(ox, oy, oz, dx, dy, dz, maxDist, opts) {
     opts = opts || {};
+    // Generic far-coordinate ray pass for all sources: player, mobs, vehicles,
+    // rockets, and command tools.  Do the DDA near zero, while each block lookup
+    // is translated back to absolute X/Y/Z.  This avoids precision loss on every
+    // axis, including very high Y builds and negative world-border edges.
+    if (!opts._farLocal && typeof Physics !== 'undefined' && Physics._originFor) {
+      const th = Physics.FAR_COORD_THRESHOLD || 1000000000;
+      if (Math.abs(ox) >= th || Math.abs(oy) >= th || Math.abs(oz) >= th) {
+        const rox = Physics._originFor(ox), roy = Physics._originFor(oy), roz = Physics._originFor(oz);
+        return this.raycast(ox - rox, oy - roy, oz - roz, dx, dy, dz, maxDist,
+          Object.assign({}, opts, { _farLocal: true, _farOriginX: rox, _farOriginY: roy, _farOriginZ: roz }));
+      }
+    }
+    if (!opts._farLocal && typeof Physics !== 'undefined' && Physics.farState &&
+        typeof Player !== 'undefined' && Player && Player.body) {
+      const st = Physics.farState(Player.body);
+      if (st) {
+        const ax = st.ox + st.x, ay = st.oy + st.y, az = st.oz + st.z;
+        if (Math.abs(ox - ax) < 4 && Math.abs(oy - ay) < 8 && Math.abs(oz - az) < 4) {
+          return this.raycast(st.x + (ox - ax), st.y + (oy - ay), st.z + (oz - az), dx, dy, dz, maxDist,
+            Object.assign({}, opts, { _farLocal: true, _farOriginX: st.ox, _farOriginY: st.oy, _farOriginZ: st.oz }));
+        }
+      }
+    }
+    const farLocal = !!opts._farLocal;
+    const farOX = farLocal ? (+opts._farOriginX || 0) : 0;
+    const farOY = farLocal ? (+opts._farOriginY || 0) : 0;
+    const farOZ = farLocal ? (+opts._farOriginZ || 0) : 0;
+    const absX = (lx) => farLocal ? farOX + lx : lx;
+    const absY = (ly) => farLocal ? farOY + ly : ly;
+    const absZ = (lz) => farLocal ? farOZ + lz : lz;
     let x = Math.floor(ox), y = Math.floor(oy), z = Math.floor(oz);
     const stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1, stepZ = dz > 0 ? 1 : -1;
     const tDX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
@@ -3270,14 +3664,15 @@ const World = {
     let tMZ = dz !== 0 ? (dz > 0 ? (z + 1 - oz) : (oz - z)) * tDZ : Infinity;
     let nx = 0, ny = 0, nz = 0, t = 0;
     for (let i = 0; i < 384; i++) {
-      const id = this.getBlock(x, y, z);
+      const wx = absX(x), wy = absY(y), wz = absZ(z);
+      const id = this.getBlock(wx, wy, wz);
       if (opts.fluids && (id === B.WATER || id === B.LAVA)) {
-        return { bx: x, by: y, bz: z, nx, ny, nz, dist: t, id, px: ox + dx * t, py: oy + dy * t, pz: oz + dz * t };
+        return { bx: wx, by: wy, bz: wz, nx, ny, nz, dist: t, id, px: absX(ox + dx * t), py: absY(oy + dy * t), pz: absZ(oz + dz * t) };
       }
       if (id !== B.AIR && !isFluid(id)) {
         const def = Reg[id];
         if (def.shape === 'cube' || def.shape === 'dslab' || def.shape === 'mega') {
-          return { bx: x, by: y, bz: z, nx, ny, nz, dist: t, id, px: ox + dx * t, py: oy + dy * t, pz: oz + dz * t };
+          return { bx: wx, by: wy, bz: wz, nx, ny, nz, dist: t, id, px: absX(ox + dx * t), py: absY(oy + dy * t), pz: absZ(oz + dz * t) };
         }
 
         const tNext = Math.min(tMX, tMY, tMZ, maxDist + 0.5);
@@ -3288,10 +3683,10 @@ const World = {
         // mesh; hit the pot only when the ray touches the tray/rim mesh. If the
         // ray passes through empty air inside the cell, keep raycasting forward.
         if (def.shape === 'crop') {
-          const underSlab = (this.plantationUnderSlabs && this.pkey) ? this.plantationUnderSlabs.get(this.pkey(x, y, z)) : 0;
-          const underHit = underSlab ? Physics.rayVsBoxes(Physics.rayBoxes(underSlab, x, y, z) || [[0, 0, 0, 1, 0.5, 1]], x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001) : null;
-          const cropHit = Physics.rayVsBoxes(Physics.cropRayBoxes(id, x, y, z), x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001);
-          const potHit = Physics.rayVsBoxes(Physics.planterRayBoxes(id, x, y, z), x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001);
+          const underSlab = (this.plantationUnderSlabs && this.pkey) ? this.plantationUnderSlabs.get(this.pkey(wx, wy, wz)) : 0;
+          const underHit = underSlab ? Physics.rayVsBoxes(Physics.rayBoxes(underSlab, wx, wy, wz) || [[0, 0, 0, 1, 0.5, 1]], x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001) : null;
+          const cropHit = Physics.rayVsBoxes(Physics.cropRayBoxes(id, wx, wy, wz), x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001);
+          const potHit = Physics.rayVsBoxes(Physics.planterRayBoxes(id, wx, wy, wz), x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001);
           let hit = null, hitId = id, targetPart = 'crop';
           if (underHit && underHit.t <= maxDist) { hit = underHit; hitId = underSlab; targetPart = 'underSlab'; }
           if (cropHit && cropHit.t <= maxDist && (!hit || cropHit.t < hit.t - 0.0005)) { hit = cropHit; hitId = id; targetPart = 'crop'; }
@@ -3300,32 +3695,32 @@ const World = {
           }
           if (hit) {
             return {
-              bx: x, by: y, bz: z, nx: hit.nx, ny: hit.ny, nz: hit.nz, dist: hit.t, id: hitId, actualId: id, targetPart,
-              px: ox + dx * hit.t, py: oy + dy * hit.t, pz: oz + dz * hit.t,
+              bx: wx, by: wy, bz: wz, nx: hit.nx, ny: hit.ny, nz: hit.nz, dist: hit.t, id: hitId, actualId: id, targetPart,
+              px: absX(ox + dx * hit.t), py: absY(oy + dy * hit.t), pz: absZ(oz + dz * hit.t),
             };
           }
         } else if (def.shape === 'planter') {
-          const underSlab = (this.plantationUnderSlabs && this.pkey) ? this.plantationUnderSlabs.get(this.pkey(x, y, z)) : 0;
-          const underHit = underSlab ? Physics.rayVsBoxes(Physics.rayBoxes(underSlab, x, y, z) || [[0, 0, 0, 1, 0.5, 1]], x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001) : null;
-          const potHit = Physics.rayVsBoxes(Physics.planterRayBoxes(id, x, y, z), x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001);
+          const underSlab = (this.plantationUnderSlabs && this.pkey) ? this.plantationUnderSlabs.get(this.pkey(wx, wy, wz)) : 0;
+          const underHit = underSlab ? Physics.rayVsBoxes(Physics.rayBoxes(underSlab, wx, wy, wz) || [[0, 0, 0, 1, 0.5, 1]], x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001) : null;
+          const potHit = Physics.rayVsBoxes(Physics.planterRayBoxes(id, wx, wy, wz), x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001);
           let hit = null, hitId = id, targetPart = 'pot';
           if (underHit && underHit.t <= maxDist) { hit = underHit; hitId = underSlab; targetPart = 'underSlab'; }
           if (potHit && potHit.t <= maxDist && (!hit || potHit.t < hit.t - 0.0005)) { hit = potHit; hitId = id; targetPart = 'pot'; }
           if (hit) {
             return {
-              bx: x, by: y, bz: z, nx: hit.nx, ny: hit.ny, nz: hit.nz, dist: hit.t, id: hitId, actualId: id, targetPart,
-              px: ox + dx * hit.t, py: oy + dy * hit.t, pz: oz + dz * hit.t,
+              bx: wx, by: wy, bz: wz, nx: hit.nx, ny: hit.ny, nz: hit.nz, dist: hit.t, id: hitId, actualId: id, targetPart,
+              px: absX(ox + dx * hit.t), py: absY(oy + dy * hit.t), pz: absZ(oz + dz * hit.t),
             };
           }
         } else {
           // partial block: intersect against its actual boxes
-          const boxes = Physics.rayBoxes(id, x, y, z);
+          const boxes = Physics.rayBoxes(id, wx, wy, wz);
           if (boxes) {
             const hit = Physics.rayVsBoxes(boxes, x, y, z, ox, oy, oz, dx, dy, dz, tMin, tNext + 0.001);
             if (hit && hit.t <= maxDist) {
               return {
-                bx: x, by: y, bz: z, nx: hit.nx, ny: hit.ny, nz: hit.nz, dist: hit.t, id,
-                px: ox + dx * hit.t, py: oy + dy * hit.t, pz: oz + dz * hit.t,
+                bx: wx, by: wy, bz: wz, nx: hit.nx, ny: hit.ny, nz: hit.nz, dist: hit.t, id,
+                px: absX(ox + dx * hit.t), py: absY(oy + dy * hit.t), pz: absZ(oz + dz * hit.t),
               };
             }
             // ray misses the visible part — pass through
@@ -3341,10 +3736,22 @@ const World = {
   },
 
   lineOfSight(x0, y0, z0, x1, y1, z1) {
-    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    let ox = 0, oy = 0, oz = 0;
+    const th = (typeof Physics !== 'undefined' && Physics.FAR_COORD_THRESHOLD) ? Physics.FAR_COORD_THRESHOLD : 1000000000;
+    if (typeof Physics !== 'undefined' && Physics._originFor &&
+        (Math.abs(x0) >= th || Math.abs(y0) >= th || Math.abs(z0) >= th || Math.abs(x1) >= th || Math.abs(y1) >= th || Math.abs(z1) >= th)) {
+      ox = Physics._originFor(x0);
+      oy = Physics._originFor(y0);
+      oz = Physics._originFor(z0);
+    }
+    const lx0 = x0 - ox, ly0 = y0 - oy, lz0 = z0 - oz;
+    const lx1 = x1 - ox, ly1 = y1 - oy, lz1 = z1 - oz;
+    const dx = lx1 - lx0, dy = ly1 - ly0, dz = lz1 - lz0;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (dist < 0.001) return true;
-    const hit = this.raycast(x0, y0, z0, dx / dist, dy / dist, dz / dist, dist);
+    const hit = (ox || oy || oz)
+      ? this.raycast(lx0, ly0, lz0, dx / dist, dy / dist, dz / dist, dist, { _farLocal: true, _farOriginX: ox, _farOriginY: oy, _farOriginZ: oz })
+      : this.raycast(x0, y0, z0, dx / dist, dy / dist, dz / dist, dist);
     return !hit;
   },
 
@@ -3650,34 +4057,46 @@ const World = {
     const toDirt = [];
     let changed = false;
 
+    const processCell = (wx, y, wz, id) => {
+      if (id === B.GRASS || id === B.SNOWY_GRASS) {
+        const above = this.getBlock(wx, y + 1, wz);
+        if (!this.grassCanStayCovered(above)) {
+          toDirt.push([wx, y, wz]);
+          return;
+        }
+        // Wild grass regrowth is still intentionally rare, but every exposed
+        // grass block now gets checked when its chunk is swept.
+        if (this.tryGrowWildGrassFromGrass(wx, y, wz, weatherMult)) changed = true;
+        return;
+      }
+
+      if (id === B.DIRT) {
+        const grassId = this.grassSourceForDirt(wx, y, wz);
+        // Dirt spread used to be instant whenever a swept dirt block found
+        // nearby grass. Keep deterministic checks, but add a Minecraft-like
+        // random-tick chance so it happens around 10-15x slower.
+        const spreadChance = Math.min(0.16, 0.07 * (weatherMult || 1));
+        if (grassId && Math.random() < spreadChance) toGrass.push([wx, y, wz, grassId]);
+      }
+    };
+
     for (let lz = 0; lz < 16; lz++) {
       for (let lx = 0; lx < 16; lx++) {
         const wx = ch.cx * 16 + lx;
         const wz = ch.cz * 16 + lz;
         for (let y = 1; y < this.H - 1; y++) {
-          const id = ch.blocks[this.idx(lx, y, lz)];
-
-          if (id === B.GRASS || id === B.SNOWY_GRASS) {
-            const above = this.getBlock(wx, y + 1, wz);
-            if (!this.grassCanStayCovered(above)) {
-              toDirt.push([wx, y, wz]);
-              continue;
-            }
-            // Wild grass regrowth is still intentionally rare, but every exposed
-            // grass block now gets checked when its chunk is swept.
-            if (this.tryGrowWildGrassFromGrass(wx, y, wz, weatherMult)) changed = true;
-            continue;
-          }
-
-          if (id === B.DIRT) {
-            const grassId = this.grassSourceForDirt(wx, y, wz);
-            // Dirt spread used to be instant whenever a swept dirt block found
-            // nearby grass. Keep deterministic checks, but add a Minecraft-like
-            // random-tick chance so it happens around 10-15x slower.
-            const spreadChance = Math.min(0.16, 0.07 * (weatherMult || 1));
-            if (grassId && Math.random() < spreadChance) toGrass.push([wx, y, wz, grassId]);
-          }
+          processCell(wx, y, wz, ch.blocks[this.idx(lx, y, lz)]);
         }
+      }
+    }
+
+    // Player-placed blocks above the generated H=80 terrain live in ch.extraBlocks.
+    // They need the same grass/dirt random update rules as base terrain chunks.
+    if (ch.extraBlocks) {
+      for (const [pk, id] of [...ch.extraBlocks]) {
+        const [wx, y, wz] = String(pk).split(',').map(Number);
+        if (!Number.isFinite(wx + y + wz) || y < this.H) continue;
+        processCell(wx, y, wz, id);
       }
     }
 
@@ -3701,8 +4120,8 @@ const World = {
     // Check whole nearby loaded chunks in a rotating sweep. This avoids the old
     // "random dart throw" behavior while still avoiding a giant all-world scan in
     // one frame.
-    const pcx = Math.floor(px) >> 4;
-    const pcz = Math.floor(pz) >> 4;
+    const pcx = this.chunkCoord(px);
+    const pcz = this.chunkCoord(pz);
     const maxChunkDist = 4;
     const keys = [];
     for (const [k, ch] of this.chunks) {
@@ -3780,7 +4199,7 @@ const World = {
       const above = this.getBlock(x, y + dy, z);
       if (above !== B.AIR && !isFluid(above)) return false;
     }
-    const tr = NoiseGen.mulberry((x * 341 + z * 887 + y) | 0);
+    const tr = this.chunkRand(this.chunkCoord(x * 341 + y), this.chunkCoord(z * 887 - y), 707);
     const puts = [];
     const put = (px, py, pz, id, force) => puts.push({ x: px, y: py, z: pz, id, f: force });
     this.treeBlocks(put, x, y - 1, z, type, tr);
@@ -3832,9 +4251,15 @@ const World = {
             }
           }
           if (wasLog && typeof Dynamics !== 'undefined') Dynamics.queueLeafDecay(bx, by, bz);
-          this.setBlock(bx, by, bz, B.AIR, id === B.JELLY_HOUSE ? { jellyHouseBreakHandled: true } : undefined);
+          const boomOpts = id === B.JELLY_HOUSE ? { jellyHouseBreakHandled: true, noUpdate: true, skipLight: true } : { noUpdate: true, skipLight: true };
+          this.setBlock(bx, by, bz, B.AIR, boomOpts);
         }
       }
+    }
+    {
+      const ccx = this.chunkCoord(Math.floor(ex)), ccz = this.chunkCoord(Math.floor(ez));
+      const cr = Math.ceil((r + 2) / 16) + 1;
+      for (let dcx = -cr; dcx <= cr; dcx++) for (let dcz = -cr; dcz <= cr; dcz++) this.relightQueue.add(this.key(ccx + dcx, ccz + dcz));
     }
     if (explodedLogs.length && typeof Dynamics !== 'undefined') {
       // Important: queue leaf decay AFTER every explosion deletion is finished.
@@ -3860,10 +4285,14 @@ const World = {
     const hurtRange = radius * (hurtMult || 2);
     // hiding behind blocks actually helps now
     const cover = (tx, ty, tz) => this.lineOfSight(ex, ey, ez, tx, ty, tz) ? 1 : 0.3;
-    const pd = Math.sqrt((Player.body.x - ex) ** 2 + (Player.body.y + 0.9 - ey) ** 2 + (Player.body.z - ez) ** 2);
+    const boomBody = { x: ex, y: ey, z: ez };
+    const pdv = (typeof Physics !== 'undefined' && Physics.deltaBodies) ? Physics.deltaBodies(boomBody, Player.body) : { x: Player.body.x - ex, y: Player.body.y - ey, z: Player.body.z - ez };
+    const pyHit = pdv.y + 0.9;
+    const pd = Math.sqrt(pdv.x * pdv.x + pyHit * pyHit + pdv.z * pdv.z);
     if (pd < hurtRange) {
-      const dmg = Math.round(maxDmg * (1 - pd / hurtRange) * cover(Player.body.x, Player.body.y + 0.9, Player.body.z));
-      if (dmg > 0) Player.hurt(dmg, (Player.body.x - ex) / (pd + 0.01) * 9, (Player.body.z - ez) / (pd + 0.01) * 9);
+      const pp = (typeof Physics !== 'undefined' && Physics.bodyWorldX) ? { x: Physics.bodyWorldX(Player.body), y: Physics.bodyWorldY(Player.body), z: Physics.bodyWorldZ(Player.body) } : Player.body;
+      const dmg = Math.round(maxDmg * (1 - pd / hurtRange) * cover(pp.x, pp.y + 0.9, pp.z));
+      if (dmg > 0) Player.hurt(dmg, pdv.x / (pd + 0.01) * 9, pdv.z / (pd + 0.01) * 9);
     }
     Mobs.applyExplosion(ex, ey, ez, hurtRange, maxDmg, cover, src || null);
     Vehicles.applyExplosion(ex, ey, ez, hurtRange, maxDmg);

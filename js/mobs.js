@@ -64,6 +64,80 @@ const Mobs = {
 
   init(scene) { this.scene = scene; this.list = []; this.arrows = []; },
 
+  stepFarProjectile(p, dt) {
+    if (typeof Physics === 'undefined' || !Physics.ensureFarBody || !Physics.ensureFarBody(p)) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+      return;
+    }
+    const st = p._farPos;
+    st.x += p.vx * dt;
+    st.y += p.vy * dt;
+    st.z += p.vz * dt;
+    const sx = Math.floor(st.x / 16) * 16;
+    const sy = Math.floor(st.y / 16) * 16;
+    const sz = Math.floor(st.z / 16) * 16;
+    st.ox += sx; st.oy += sy; st.oz += sz;
+    st.x -= sx; st.y -= sy; st.z -= sz;
+    p.x = st.ox + st.x; p.y = st.oy + st.y; p.z = st.oz + st.z;
+  },
+
+  farDelta(a, b) {
+    if (typeof Physics !== 'undefined' && Physics.deltaBodies) return Physics.deltaBodies(a, b);
+    return { x: (b.x || 0) - (a.x || 0), y: (b.y || 0) - (a.y || 0), z: (b.z || 0) - (a.z || 0) };
+  },
+
+  farBodyPos(b) {
+    const st = (b && typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(b) : null;
+    return st ? { x: st.ox + st.x, y: st.oy + st.y, z: st.oz + st.z } : { x: b ? b.x : 0, y: b ? b.y : 0, z: b ? b.z : 0 };
+  },
+
+  targetBody(tgt) {
+    if (!tgt) return null;
+    if (tgt.isPlayer && typeof Player !== 'undefined' && Player.body) return Player.body;
+    if (tgt.mob && tgt.mob.body) return tgt.mob.body;
+    return null;
+  },
+
+  targetWorldPos(tgt) {
+    const b = this.targetBody(tgt);
+    if (b) {
+      const p = this.farBodyPos(b);
+      p.h = b.h || (tgt && tgt.h) || 1;
+      return p;
+    }
+    return { x: tgt ? tgt.x : 0, y: tgt ? tgt.y : 0, z: tgt ? tgt.z : 0, h: (tgt && tgt.h) || 1 };
+  },
+
+  deltaToTarget(b, tgt) {
+    const tb = this.targetBody(tgt);
+    if (tb) return this.farDelta(b, tb);
+    return this.deltaToPoint(b, tgt ? tgt.x : 0, tgt ? tgt.y : 0, tgt ? tgt.z : 0);
+  },
+
+  deltaToPoint(b, x, y, z) {
+    const st = (b && typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(b) : null;
+    if (st) return { x: (x - st.ox) - st.x, y: (y - st.oy) - st.y, z: (z - st.oz) - st.z };
+    return { x: (x || 0) - (b ? b.x : 0), y: (y || 0) - (b ? b.y : 0), z: (z || 0) - (b ? b.z : 0) };
+  },
+
+  targetHorizDist(b, tgt) {
+    const d = this.deltaToTarget(b, tgt);
+    return Math.sqrt(d.x * d.x + d.z * d.z) || 0;
+  },
+
+  nudgeBodyXZ(b, dx, dz) {
+    if (!b) return;
+    const st = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(b) : null;
+    if (st) {
+      st.x += dx; st.z += dz;
+      const sx = Math.floor(st.x / 16) * 16, sz = Math.floor(st.z / 16) * 16;
+      st.ox += sx; st.oz += sz; st.x -= sx; st.z -= sz;
+      b.x = st.ox + st.x; b.y = st.oy + st.y; b.z = st.oz + st.z;
+    } else {
+      b.x += dx; b.z += dz;
+    }
+  },
+
   liveFloops() {
     return this.list.filter(m => m && !m.dead && m.type === 'floop');
   },
@@ -90,8 +164,9 @@ const Mobs = {
     // Keep the closest loaded Mr. Floop to the player and silently despawn extras.
     const p = (typeof Player !== 'undefined' && Player.body) ? Player.body : { x: 0, y: 0, z: 0 };
     floops.sort((a, b) => {
-      const da = (a.body.x - p.x) ** 2 + (a.body.z - p.z) ** 2 + ((a.body.y || 0) - (p.y || 0)) ** 2;
-      const db = (b.body.x - p.x) ** 2 + (b.body.z - p.z) ** 2 + ((b.body.y || 0) - (p.y || 0)) ** 2;
+      const ad = this.farDelta(p, a.body), bd = this.farDelta(p, b.body);
+      const da = ad.x * ad.x + ad.z * ad.z + ad.y * ad.y;
+      const db = bd.x * bd.x + bd.z * bd.z + bd.y * bd.y;
       return da - db;
     });
     for (let i = 1; i < floops.length; i++) this.despawnSilent(floops[i]);
@@ -503,6 +578,8 @@ const Mobs = {
       floopHurtVoiceCd: 0, recentFloopHurtLines: [],
       lastSrc: null, dead: false,
     };
+    group.userData.farBody = mob.body;
+
     // Keep untinted material colors so night/cave lighting can be applied
     // repeatedly without frogs or other textured parts drifting bright.
     group.traverse(o => {
@@ -573,6 +650,8 @@ const Mobs = {
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
     const spr = new THREE.Sprite(mat);
     spr.scale.set(4.4, 0.55, 1);
+    spr.userData.farBody = mob.body;
+    spr.userData.farBodyYOffset = (mob.body && mob.body.h ? mob.body.h : 1.8) + 0.55;
     this.scene.add(spr);
     mob.bubble = spr;
     mob.bubbleT = 3.2;
@@ -713,14 +792,18 @@ const Mobs = {
   },
 
   applyExplosion(ex, ey, ez, range, maxDmg, cover, src) {
+    const boomBody = { x: ex, y: ey, z: ez };
     for (const m of this.list) {
       if (m.dead) continue;
       const b = m.body;
-      const d = Math.sqrt((b.x - ex) ** 2 + (b.y + 0.8 - ey) ** 2 + (b.z - ez) ** 2);
+      const dv = this.farDelta(boomBody, b);
+      const dy = dv.y + 0.8;
+      const d = Math.sqrt(dv.x * dv.x + dy * dy + dv.z * dv.z);
       if (d < range) {
-        const mult = cover ? cover(b.x, b.y + 0.8, b.z) : 1;
+        const bp = this.farBodyPos(b);
+        const mult = cover ? cover(bp.x, bp.y + 0.8, bp.z) : 1;
         const dmg = Math.round(maxDmg * (1 - d / range) * mult);
-        if (dmg > 0) this.hurt(m, dmg, (b.x - ex) / (d + 0.01) * 8, (b.z - ez) / (d + 0.01) * 8, src || null);
+        if (dmg > 0) this.hurt(m, dmg, dv.x / (d + 0.01) * 8, dv.z / (d + 0.01) * 8, src || null);
       }
     }
   },
@@ -728,7 +811,14 @@ const Mobs = {
   // ---------- arrows (player + mob owned, friendly fire enabled) ----------
   shootArrow(x, y, z, tx, ty, tz, owner, opts) {
     opts = opts || {};
-    const dx = tx - x, dy = ty - y, dz = tz - z;
+    let ox = 0, oy = 0, oz = 0;
+    if (typeof Physics !== 'undefined' && Physics._originFor) {
+      const th = Physics.FAR_COORD_THRESHOLD || 1000000000;
+      if (Math.abs(x) >= th || Math.abs(y) >= th || Math.abs(z) >= th || Math.abs(tx) >= th || Math.abs(ty) >= th || Math.abs(tz) >= th) {
+        ox = Physics._originFor(x); oy = Physics._originFor(y); oz = Physics._originFor(z);
+      }
+    }
+    const dx = (tx - ox) - (x - ox), dy = (ty - oy) - (y - oy), dz = (tz - oz) - (z - oz);
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
     const speed = opts.speed || (owner === 'player' ? 24 : 17);
     const g = new THREE.Mesh(
@@ -737,14 +827,17 @@ const Mobs = {
     );
     g.position.set(x, y, z);
     this.scene.add(g);
-    this.arrows.push({
+    const arrow = {
       x, y, z,
       vx: dx / dist * speed,
       vy: (opts.straight || opts.aimed) ? (dy / dist * speed) : (dy / dist * speed + dist * 0.42),
       vz: dz / dist * speed,
       gravity: (opts.gravity !== undefined) ? opts.gravity : (opts.straight ? 0 : 18),
-      mesh: g, life: opts.life || 5, stuck: 0, owner: owner || null,
-    });
+      w: 0.08, h: 0.08, mesh: g, life: opts.life || 5, stuck: 0, owner: owner || null,
+    };
+    if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(arrow);
+    g.userData.farBody = arrow;
+    this.arrows.push(arrow);
     SFX.arrow({ x, y, z });
   },
 
@@ -759,15 +852,21 @@ const Mobs = {
       }
       if (a.stuck) continue;
       a.vy -= (a.gravity !== undefined ? a.gravity : 18) * dt;
-      a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt;
-      a.mesh.position.set(a.x, a.y, a.z);
-      a.mesh.lookAt(a.x + a.vx, a.y + a.vy, a.z + a.vz);
+      this.stepFarProjectile(a, dt);
+      if (a._farPos) {
+        a.mesh.position.set(a._farPos.x, a._farPos.y, a._farPos.z);
+        a.mesh.lookAt(a._farPos.x + a.vx, a._farPos.y + a.vy, a._farPos.z + a.vz);
+      } else {
+        a.mesh.position.set(a.x, a.y, a.z);
+        a.mesh.lookAt(a.x + a.vx, a.y + a.vy, a.z + a.vz);
+      }
       let consumed = false;
       // hit the player? (mob arrows only; creative players are not targets)
       if (a.owner !== 'player' && !Player.dead && Player.gamemode !== 'creative') {
         const p = Player.body;
-        if (a.x > p.x - p.w - 0.1 && a.x < p.x + p.w + 0.1 &&
-            a.y > p.y && a.y < p.y + p.h && a.z > p.z - p.w - 0.1 && a.z < p.z + p.w + 0.1) {
+        const d = this.farDelta(p, a);
+        if (d.x > -p.w - 0.1 && d.x < p.w + 0.1 &&
+            d.y > 0 && d.y < p.h && d.z > -p.w - 0.1 && d.z < p.w + 0.1) {
           Player.hurt(3, a.vx * 0.25, a.vz * 0.25);
           consumed = true;
         }
@@ -777,8 +876,9 @@ const Mobs = {
         for (const m of this.list) {
           if (m.dead || m === a.owner) continue;
           const b = m.body;
-          if (a.x > b.x - b.w - 0.1 && a.x < b.x + b.w + 0.1 &&
-              a.y > b.y && a.y < b.y + b.h && a.z > b.z - b.w - 0.1 && a.z < b.z + b.w + 0.1) {
+          const d = this.farDelta(b, a);
+          if (d.x > -b.w - 0.1 && d.x < b.w + 0.1 &&
+              d.y > 0 && d.y < b.h && d.z > -b.w - 0.1 && d.z < b.w + 0.1) {
             this.hurt(m, 3, a.vx * 0.25, a.vz * 0.25, a.owner === 'player' ? 'player' : a.owner);
             consumed = true;
             break;
@@ -800,9 +900,21 @@ const Mobs = {
   // ---------- ray helpers ----------
   rayBox(m, ox, oy, oz, dx, dy, dz, maxDist) {
     const b = m.body;
-    const min = [b.x - b.w - 0.1, b.y, b.z - b.w - 0.1];
-    const max = [b.x + b.w + 0.1, b.y + b.h, b.z + b.w + 0.1];
-    const o = [ox, oy, oz], d = [dx, dy, dz];
+    let originX = 0, originY = 0, originZ = 0;
+    const th = (typeof Physics !== 'undefined' && Physics.FAR_COORD_THRESHOLD) ? Physics.FAR_COORD_THRESHOLD : 1000000000;
+    if (typeof Physics !== 'undefined' && Physics._originFor && (Math.abs(ox) >= th || Math.abs(oy) >= th || Math.abs(oz) >= th)) {
+      originX = Physics._originFor(ox);
+      originY = Physics._originFor(oy);
+      originZ = Physics._originFor(oz);
+    }
+    const st = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(b) : null;
+    const bx = st ? (st.ox - originX) + st.x : b.x - originX;
+    const by = st ? (st.oy - originY) + st.y : b.y - originY;
+    const bz = st ? (st.oz - originZ) + st.z : b.z - originZ;
+    const rox = ox - originX, roy = oy - originY, roz = oz - originZ;
+    const min = [bx - b.w - 0.1, by, bz - b.w - 0.1];
+    const max = [bx + b.w + 0.1, by + b.h, bz + b.w + 0.1];
+    const o = [rox, roy, roz], d = [dx, dy, dz];
     let t0 = 0, t1 = maxDist;
     for (let ax = 0; ax < 3; ax++) {
       if (Math.abs(d[ax]) < 1e-8) {
@@ -846,13 +958,14 @@ const Mobs = {
   makeTargetForMob(o) {
     if (!o || o.dead || !o.body) return null;
     const b = o.body;
-    return { x: b.x, y: b.y, z: b.z, h: b.h, mob: o, isPlayer: false };
+    const p = this.farBodyPos(b);
+    return { x: p.x, y: p.y, z: p.z, h: b.h, mob: o, isPlayer: false };
   },
 
   makePlayerTarget() {
     if (typeof Player === 'undefined' || Player.dead || Player.gamemode === 'creative' || !Player.body) return null;
-    const p = Player.body;
-    return { x: p.x, y: p.y, z: p.z, h: p.h, mob: null, isPlayer: true };
+    const p = this.farBodyPos(Player.body);
+    return { x: p.x, y: p.y, z: p.z, h: Player.body.h, mob: null, isPlayer: true };
   },
 
   targetKey(tgt) {
@@ -869,15 +982,15 @@ const Mobs = {
     if (!tgt.isPlayer && !tgt.mob && !Number.isFinite(tgt.x)) return false;
     if (typeof World === 'undefined' || !World.lineOfSight) return true;
     const b = m.body;
-    const tx = tgt.isPlayer ? Player.body.x : (tgt.mob ? tgt.mob.body.x : tgt.x);
-    const tyBase = tgt.isPlayer ? Player.body.y : (tgt.mob ? tgt.mob.body.y : tgt.y);
-    const tz = tgt.isPlayer ? Player.body.z : (tgt.mob ? tgt.mob.body.z : tgt.z);
-    const th = tgt.isPlayer ? (Player.body.h || tgt.h || 1.8) : (tgt.mob ? (tgt.mob.body.h || tgt.h || 1) : (tgt.h || 1));
+    const bp = this.farBodyPos(b);
+    const tp = this.targetWorldPos(tgt);
+    const tx = tp.x, tyBase = tp.y, tz = tp.z;
+    const th = tp.h || tgt.h || 1;
     // Try eyes first, then chest. A thin tree/leaf/step should not make mobs blind,
     // but solid terrain between caves should block target acquisition.
-    const sx = b.x, sz = b.z;
-    const syEye = b.y + Math.max(0.35, b.h * 0.82);
-    const syChest = b.y + Math.max(0.25, b.h * 0.55);
+    const sx = bp.x, sz = bp.z;
+    const syEye = bp.y + Math.max(0.35, b.h * 0.82);
+    const syChest = bp.y + Math.max(0.25, b.h * 0.55);
     const tyEye = tyBase + Math.max(0.30, th * 0.82);
     const tyChest = tyBase + Math.max(0.20, th * 0.55);
     return !!(World.lineOfSight(sx, syEye, sz, tx, tyEye, tz) || World.lineOfSight(sx, syChest, sz, tx, tyChest, tz));
@@ -966,16 +1079,16 @@ const Mobs = {
     let bestD2 = Infinity;
     const playerTgt = this.makePlayerTarget();
     if (playerTgt && this.canSeeTarget(m, playerTgt)) {
-      const p = Player.body;
+      const d = this.deltaToTarget(m.body, playerTgt);
       best = playerTgt;
-      bestD2 = (p.x - m.body.x) ** 2 + (p.z - m.body.z) ** 2 + ((p.y - m.body.y) ** 2) * 0.25;
+      bestD2 = d.x * d.x + d.z * d.z + (d.y * d.y) * 0.25;
     }
     for (const o of this.list) {
       if (!o || o.dead || o === m || !JELLY_MOB_TYPES.includes(o.type)) continue;
       const cand = this.makeTargetForMob(o);
       if (!this.canSeeTarget(m, cand)) continue;
-      const ob = o.body;
-      const d2 = (ob.x - m.body.x) ** 2 + (ob.z - m.body.z) ** 2 + ((ob.y - m.body.y) ** 2) * 0.25;
+      const d = this.farDelta(m.body, o.body);
+      const d2 = d.x * d.x + d.z * d.z + (d.y * d.y) * 0.25;
       // Do not make monsters path across half the world for a jelly, but do let
       // them naturally pick nearby Jelly People over a farther player.
       if (d2 < bestD2 && d2 < 28 * 28) {
@@ -1029,8 +1142,8 @@ const Mobs = {
       if (!o || o.dead || o === m || !HOSTILES.includes(o.type)) continue;
       const cand = this.makeTargetForMob(o);
       if (!this.canSeeTarget(m, cand)) continue;
-      const ob = o.body;
-      const d2 = (ob.x - m.body.x) ** 2 + (ob.z - m.body.z) ** 2 + ((ob.y - m.body.y) ** 2) * 0.25;
+      const d = this.farDelta(m.body, o.body);
+      const d2 = d.x * d.x + d.z * d.z + (d.y * d.y) * 0.25;
       if (d2 < bestD) { bestD = d2; best = cand; }
     }
     if (best) { this.rememberTarget(m, best); return best; }
@@ -1365,7 +1478,8 @@ const Mobs = {
     if (needNew) {
       const dirs = [];
       if (tgt) {
-        const dx = tgt.x - b.x, dz = tgt.z - b.z;
+        const pd = this.deltaToTarget(b, tgt);
+        const dx = pd.x, dz = pd.z;
         const dl = Math.sqrt(dx * dx + dz * dz) || 1;
         const tx = dx / dl, tz = dz / dl;
         // Search around the blockage first, then try away/nearby random patrols.
@@ -1400,7 +1514,8 @@ const Mobs = {
     // Drop waypoints already reached.
     while (mob.path && mob.path.length) {
       const wp = mob.path[0];
-      const dx = wp.x - b.x, dz = wp.z - b.z;
+      const wpDelta = this.deltaToPoint(b, wp.x, wp.y, wp.z);
+    const dx = wpDelta.x, dz = wpDelta.z;
       if (dx * dx + dz * dz > 0.42 * 0.42) break;
       mob.path.shift();
     }
@@ -1437,7 +1552,8 @@ const Mobs = {
       }
     }
 
-    const directDx = tgt.x - b.x, directDz = tgt.z - b.z;
+    const directDelta = this.deltaToTarget(b, tgt);
+    const directDx = directDelta.x, directDz = directDelta.z;
     const directLen = Math.sqrt(directDx * directDx + directDz * directDz) || 1;
     const direct = [directDx / directLen, directDz / directLen];
 
@@ -1469,7 +1585,8 @@ const Mobs = {
     if (wi > 0) mob.path.splice(0, wi);
 
     mob.pathWantsJump = wp.cellY !== undefined && wp.cellY > Math.floor(b.y + 0.05);
-    const dx = wp.x - b.x, dz = wp.z - b.z;
+    const wpDelta = this.deltaToPoint(b, wp.x, wp.y, wp.z);
+    const dx = wpDelta.x, dz = wpDelta.z;
     const dl = Math.sqrt(dx * dx + dz * dz) || 1;
     const pathDir = [dx / dl, dz / dl];
 
@@ -1756,8 +1873,9 @@ const Mobs = {
       for (let j = i + 1; j < ents.length; j++) {
         if (++pairs > maxPairs) break;
         const e2 = ents[j], bb = e2.body;
-        if (Math.abs((ab.y + (ab.h || 1.8) * 0.5) - (bb.y + (bb.h || 1.8) * 0.5)) > Math.max(ab.h || 1.8, bb.h || 1.8) * 0.65) continue;
-        let dx = ab.x - bb.x, dz = ab.z - bb.z;
+        const sep = this.farDelta(bb, ab); // ab relative to bb, precision-safe
+        if (Math.abs(sep.y + (ab.h || 1.8) * 0.5 - (bb.h || 1.8) * 0.5) > Math.max(ab.h || 1.8, bb.h || 1.8) * 0.65) continue;
+        let dx = sep.x, dz = sep.z;
         let d2 = dx * dx + dz * dz;
         const want = Math.max(0.18, (ab.w || 0.3) + (bb.w || 0.3) + 0.04);
         if (d2 >= want * want) continue;
@@ -1772,16 +1890,20 @@ const Mobs = {
         const pushA = a.movable ? Math.min(0.15, overlap * (bothMovable ? 0.5 : 1.0) + 0.01) : 0;
         const pushB = e2.movable ? Math.min(0.15, overlap * (bothMovable ? 0.5 : 1.0) + 0.01) : 0;
         if (pushA > 0) {
-          const ax = ab.x + nx * pushA, az = ab.z + nz * pushA;
+          const ax = ((typeof Physics !== 'undefined' && Physics.bodyWorldX) ? Physics.bodyWorldX(ab) : ab.x) + nx * pushA;
+          const az = ((typeof Physics !== 'undefined' && Physics.bodyWorldZ) ? Physics.bodyWorldZ(ab) : ab.z) + nz * pushA;
           if (this.entityClearAt(a, ax, az)) {
-            ab.x = ax; ab.z = az; ab.vx = (ab.vx || 0) + nx * 0.10; ab.vz = (ab.vz || 0) + nz * 0.10;
+            this.nudgeBodyXZ(ab, nx * pushA, nz * pushA);
+            ab.vx = (ab.vx || 0) + nx * 0.10; ab.vz = (ab.vz || 0) + nz * 0.10;
             if (a.localPlayer) movedLocalPlayer = true;
           }
         }
         if (pushB > 0) {
-          const bx = bb.x - nx * pushB, bz = bb.z - nz * pushB;
+          const bx = ((typeof Physics !== 'undefined' && Physics.bodyWorldX) ? Physics.bodyWorldX(bb) : bb.x) - nx * pushB;
+          const bz = ((typeof Physics !== 'undefined' && Physics.bodyWorldZ) ? Physics.bodyWorldZ(bb) : bb.z) - nz * pushB;
           if (this.entityClearAt(e2, bx, bz)) {
-            bb.x = bx; bb.z = bz; bb.vx = (bb.vx || 0) - nx * 0.10; bb.vz = (bb.vz || 0) - nz * 0.10;
+            this.nudgeBodyXZ(bb, -nx * pushB, -nz * pushB);
+            bb.vx = (bb.vx || 0) - nx * 0.10; bb.vz = (bb.vz || 0) - nz * 0.10;
             if (e2.localPlayer) movedLocalPlayer = true;
           }
         }
@@ -1825,7 +1947,8 @@ const Mobs = {
       // while wandering near walls/doors/crowds, which is the visible twitch.
       if (m.idleAvoidT > 0) m.idleAvoidT = Math.max(0, m.idleAvoidT - dt);
       if (m.idlePauseT > 0) m.idlePauseT = Math.max(0, m.idlePauseT - dt);
-      const distPlayer = Math.sqrt((b.x - p.x) ** 2 + (b.z - p.z) ** 2);
+      const playerDelta = this.farDelta(b, p);
+      const distPlayer = Math.sqrt(playerDelta.x * playerDelta.x + playerDelta.z * playerDelta.z);
       const nearAnyMultiplayerPlayer = (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'host' && Multiplayer.isEntityNearAnyPlayer)
         ? Multiplayer.isEntityNearAnyPlayer(b.x, b.y, b.z, 80) : false;
       if (distPlayer > 80 && !nearAnyMultiplayerPlayer) {
@@ -1843,7 +1966,8 @@ const Mobs = {
       }
 
       let tgt = HOSTILES.includes(m.type) ? this.targetOf(m) : (JELLY_MOB_TYPES.includes(m.type) ? this.jellyTargetOf(m) : null);
-      let distT = tgt ? Math.sqrt((b.x - tgt.x) ** 2 + (b.z - tgt.z) ** 2) : 999;
+      const targetDelta = () => this.deltaToTarget(b, tgt);
+      let distT = tgt ? this.targetHorizDist(b, tgt) : 999;
       // If this is only a last-known spot, do not let attack code treat it like a
       // real body.  When reached, forget it and fall back to proper wandering.
       if (tgt && tgt.memoryOnly && distT < 0.9) {
@@ -1907,13 +2031,14 @@ const Mobs = {
         const engaged = tgt && distT < 15 && hasTargetLOS();
         if (engaged) {
           faceTarget = true;
-          const dx = (tgt.x - b.x) / (distT + 0.01), dz = (tgt.z - b.z) / (distT + 0.01);
+          const td = targetDelta(); const dx = td.x / (distT + 0.01), dz = td.z / (distT + 0.01);
           if (distT > 10) { wantMove = smartChase(22); speed = 2.2; }
           else if (distT < 6) { wantMove = this.safeMoveDir(m, [-dx, -dz], 1.6); speed = 1.8; }
           m.shootT -= dt;
           if (m.shootT <= 0 && distT > 2.5) {
             m.shootT = 2.1 + Math.random() * 0.7;
-            this.shootArrow(b.x, b.y + 1.5, b.z, tgt.x, tgt.y + 1.2, tgt.z, m);
+            const bp = this.farBodyPos(b), tp = this.targetWorldPos(tgt);
+            this.shootArrow(bp.x, bp.y + 1.5, bp.z, tp.x, tp.y + 1.2, tp.z, m);
           }
         } else if (tgt && distT < 22) {
           wantMove = smartChase(22) || m.wanderDir;
@@ -1933,7 +2058,7 @@ const Mobs = {
         }
       } else if (m.type === 'spider') {
         if (tgt && (Game.isNight || m.angryAt || m.angryPlayerT > 0) && distT < 14) {
-          const dx = (tgt.x - b.x) / (distT + 0.01), dz = (tgt.z - b.z) / (distT + 0.01);
+          const td = targetDelta(); const dx = td.x / (distT + 0.01), dz = td.z / (distT + 0.01);
           wantMove = smartChase(16); speed = 3.1;
           faceTarget = distT < 3;
           m.meleeT -= dt;
@@ -1949,7 +2074,7 @@ const Mobs = {
         // TUNG TUNG TUNG SAHUR: sprints at you with a bat
         if (tgt && distT < 24) {
           faceTarget = distT < 4;
-          const dx = (tgt.x - b.x) / (distT + 0.01), dz = (tgt.z - b.z) / (distT + 0.01);
+          const td = targetDelta(); const dx = td.x / (distT + 0.01), dz = td.z / (distT + 0.01);
           wantMove = smartChase(26); speed = 5.0;
           m.meleeT -= dt;
           if (distT < 1.9 && m.meleeT <= 0) {
@@ -1989,7 +2114,7 @@ const Mobs = {
           const targetMob = (tgt && !tgt.memoryOnly) ? (tgt.mob || null) : null;
           const targetIsFrog = targetMob && targetMob.type === 'creeper';
           faceTarget = true;
-          const dx = (tgt.x - b.x) / (distT + 0.01), dz = (tgt.z - b.z) / (distT + 0.01);
+          const td = targetDelta(); const dx = td.x / (distT + 0.01), dz = td.z / (distT + 0.01);
           if (targetIsFrog && distT < 2.35 && m.meleeT > 0.15) {
             // After throwing a punch at a frog, kite away instead of body-blocking
             // in front of the fuse like a senile little gummy bear.
@@ -2049,8 +2174,9 @@ const Mobs = {
         if (m.fleeT > 0) {
           m.fleeT -= dt;
           const src = m.angryAt && !m.angryAt.dead ? m.angryAt.body : p;
-          const d2 = Math.sqrt((b.x - src.x) ** 2 + (b.z - src.z) ** 2) + 0.01;
-          wantMove = this.safeMoveDir(m, [(b.x - src.x) / d2, (b.z - src.z) / d2], 1.6);
+          const fd = this.farDelta(src, b);
+          const d2 = Math.sqrt(fd.x * fd.x + fd.z * fd.z) + 0.01;
+          wantMove = this.safeMoveDir(m, [fd.x / d2, fd.z / d2], 1.6);
           speed = m.type === 'camel' ? 3.4 : 2.8;
         } else {
           wantMove = m.wanderDir;
@@ -2063,14 +2189,15 @@ const Mobs = {
         if (m.gunId) {
           if (engaged) {
             faceTarget = true;
-            const dx = (tgt.x - b.x) / (distT + 0.01), dz = (tgt.z - b.z) / (distT + 0.01);
+            const td = targetDelta(); const dx = td.x / (distT + 0.01), dz = td.z / (distT + 0.01);
             if (distT > 13) { wantMove = smartChase(24); speed = 2.4; }
             else if (distT < 7) { wantMove = this.safeMoveDir(m, [-dx, -dz], 1.6); speed = 2.0; }
             m.shootT -= dt;
             if (m.shootT <= 0 && distT > 2) {
               m.shootT = 1.8 + Math.random() * 0.8;
               const acc = Math.min(0.8, 0.5 + Game.dayCount * 0.02);
-              Guns.mobFire({ x: b.x, y: b.y + 1.6, z: b.z }, m.gunId, acc, tgt, m);
+              const bp = this.farBodyPos(b);
+              Guns.mobFire({ x: bp.x, y: bp.y + 1.6, z: bp.z }, m.gunId, acc, tgt, m);
             }
           } else if (tgt && distT < 24) {
             wantMove = smartChase(24) || m.wanderDir;
@@ -2079,7 +2206,7 @@ const Mobs = {
           } else wantMove = m.wanderDir;
         } else {
           if (tgt && distT < 16) {
-            const dx = (tgt.x - b.x) / (distT + 0.01), dz = (tgt.z - b.z) / (distT + 0.01);
+            const td = targetDelta(); const dx = td.x / (distT + 0.01), dz = td.z / (distT + 0.01);
             wantMove = smartChase(18); speed = 2.7;
             faceTarget = distT < 2.5;
             m.meleeT -= dt;
@@ -2098,9 +2225,11 @@ const Mobs = {
         if (m.angryAt && !m.angryAt.dead) {
           // Mr Floop has a temper
           const ab = m.angryAt.body;
-          const d2 = Math.sqrt((b.x - ab.x) ** 2 + (b.z - ab.z) ** 2) + 0.01;
+          const fd = this.farDelta(b, ab);
+          const d2 = Math.sqrt(fd.x * fd.x + fd.z * fd.z) + 0.01;
           if (d2 < 20) {
-            const floopTgt = { x: ab.x, y: ab.y, z: ab.z, h: ab.h || 1.8, mob: m.angryAt, isPlayer: false };
+            const ap = this.farBodyPos(ab);
+            const floopTgt = { x: ap.x, y: ap.y, z: ap.z, h: ab.h || 1.8, mob: m.angryAt, isPlayer: false };
             const canSeeAngry = this.canSeeTarget(m, floopTgt);
             if (canSeeAngry) this.rememberTarget(m, floopTgt);
             const keptFloopTgt = canSeeAngry ? floopTgt : this.rememberedTarget(m, 20);
@@ -2111,7 +2240,7 @@ const Mobs = {
             m.meleeT -= dt;
             if (d2 < 1.8 && m.meleeT <= 0) {
               m.meleeT = 1.0;
-              this.hurt(m.angryAt, 5, (ab.x - b.x) / d2 * 8, (ab.z - b.z) / d2 * 8, m);
+              this.hurt(m.angryAt, 5, fd.x / d2 * 8, fd.z / d2 * 8, m);
             }
           } else m.angryAt = null;
         } else if (m.state === 'approach') {
@@ -2125,7 +2254,7 @@ const Mobs = {
             speed = 1.1;
           } else { m.state = 'chat'; m.stateT = 2 + Math.random() * 2; }
         } else if (m.state === 'chat') {
-          m.targetYaw = Math.atan2(p.x - b.x, p.z - b.z);
+          m.targetYaw = Math.atan2(playerDelta.x, playerDelta.z);
           if (distPlayer > 7) m.state = 'wander';
         } else {
           wantMove = m.wanderDir;
@@ -2251,7 +2380,7 @@ const Mobs = {
 
       // ---- facing ----
       if (faceTarget && tgt) {
-        m.targetYaw = Math.atan2(tgt.x - b.x, tgt.z - b.z);
+        { const td = targetDelta(); m.targetYaw = Math.atan2(td.x, td.z); }
       } else if (wantMove && (Math.abs(b.vx) > 0.05 || Math.abs(b.vz) > 0.05)) {
         m.targetYaw = Math.atan2(wantMove[0], wantMove[1]);
       } else if (frogHop && !b.onGround) {

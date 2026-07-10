@@ -338,7 +338,7 @@ const Save = {
       World.diffs.set(k, id);
       // rebuild the per-chunk index (fast chunk-gen replay)
       const parts = k.split(',');
-      const ck = World.key(+parts[0] >> 4, +parts[2] >> 4);
+      const ck = World.chunkKeyForBlock ? World.chunkKeyForBlock(+parts[0], +parts[2]) : World.key(Math.floor(+parts[0] / 16), Math.floor(+parts[2] / 16));
       if (!World.diffIndex.has(ck)) World.diffIndex.set(ck, new Map());
       World.diffIndex.get(ck).set(k, id);
     }

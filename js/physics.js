@@ -5,6 +5,107 @@
 const Physics = {
   GRAV: 26,
 
+  // Far-coordinate gameplay precision layer. Rendering was already moved to a
+  // floating origin, but JavaScript Number math also loses sub-block precision
+  // when the player body itself sits at quadrillion-scale coordinates. Keep a
+  // tiny local physics copy near the current chunk while all World lookups still
+  // use the real absolute block coordinates.
+  FAR_COORD_THRESHOLD: 1000000000,
+  _farOriginX: 0,
+  _farOriginY: 0,
+  _farOriginZ: 0,
+  _farDepth: 0,
+
+  _finite(n, fallback) {
+    n = Number(n);
+    return Number.isFinite(n) ? n : (fallback || 0);
+  },
+
+  _originFor(v) {
+    v = this._finite(v, 0);
+    return Math.floor(v / 16) * 16;
+  },
+
+  ensureFarBody(b) {
+    if (!b) return false;
+    const ax = this._finite(b.x, 0), ay = this._finite(b.y, 0), az = this._finite(b.z, 0);
+    const want = Math.abs(ax) >= this.FAR_COORD_THRESHOLD || Math.abs(ay) >= this.FAR_COORD_THRESHOLD || Math.abs(az) >= this.FAR_COORD_THRESHOLD;
+    if (!want) {
+      if (b._farPos) delete b._farPos;
+      return false;
+    }
+    const st = b._farPos;
+    const sx = st ? st.ox + st.x : NaN;
+    const sy = st ? st.oy + st.y : NaN;
+    const sz = st ? st.oz + st.z : NaN;
+    // Reinitialize after /tp, dimension travel, respawn, vehicle snap, etc.
+    if (!st || !Number.isFinite(sx + sy + sz) || Math.abs(ax - sx) > 32 || Math.abs(ay - sy) > 32 || Math.abs(az - sz) > 32) {
+      const ox = this._originFor(ax);
+      const oy = this._originFor(ay);
+      const oz = this._originFor(az);
+      b._farPos = { ox, oy, oz, x: ax - ox, y: ay - oy, z: az - oz };
+    }
+    return true;
+  },
+
+  farState(b) {
+    return this.ensureFarBody(b) ? b._farPos : null;
+  },
+
+  bodyWorldX(b) {
+    const st = b && b._farPos;
+    return st ? st.ox + st.x : (b ? b.x : 0);
+  },
+
+  bodyWorldY(b) {
+    const st = b && b._farPos;
+    return st ? st.oy + st.y : (b ? b.y : 0);
+  },
+
+  bodyWorldZ(b) {
+    const st = b && b._farPos;
+    return st ? st.oz + st.z : (b ? b.z : 0);
+  },
+
+  // Difference b - a without throwing away sub-block precision at huge coords.
+  deltaBodies(a, b) {
+    const as = this.ensureFarBody(a) ? a._farPos : null;
+    const bs = this.ensureFarBody(b) ? b._farPos : null;
+    const ax = as ? as.x : (a ? a.x : 0), ay = as ? as.y : (a ? a.y : 0), az = as ? as.z : (a ? a.z : 0);
+    const bx = bs ? bs.x : (b ? b.x : 0), by = bs ? bs.y : (b ? b.y : 0), bz = bs ? bs.z : (b ? b.z : 0);
+    return {
+      x: (bs ? bs.ox : 0) - (as ? as.ox : 0) + (bx - ax),
+      y: (bs ? bs.oy : 0) - (as ? as.oy : 0) + (by - ay),
+      z: (bs ? bs.oz : 0) - (as ? as.oz : 0) + (bz - az),
+    };
+  },
+
+  _withFarOrigin(ox, oy, oz, fn) {
+    // Backwards compatible with the older _withFarOrigin(ox, oz, fn) calls.
+    if (typeof oz === 'function') { fn = oz; oz = oy; oy = 0; }
+    const oldX = this._farOriginX, oldY = this._farOriginY, oldZ = this._farOriginZ, oldD = this._farDepth;
+    this._farOriginX = ox || 0;
+    this._farOriginY = oy || 0;
+    this._farOriginZ = oz || 0;
+    this._farDepth = oldD + 1;
+    try { return fn(); }
+    finally { this._farOriginX = oldX; this._farOriginY = oldY; this._farOriginZ = oldZ; this._farDepth = oldD; }
+  },
+
+  _withFarBody(b, fn) {
+    if (!this.ensureFarBody(b)) return fn(b);
+    const st = b._farPos;
+    const lb = Object.assign({}, b);
+    lb.x = st.x;
+    lb.y = st.y;
+    lb.z = st.z;
+    return this._withFarOrigin(st.ox, st.oy, st.oz, () => fn(lb));
+  },
+
+  _worldXFromLocalCell(x) { return (this._farDepth ? this._farOriginX : 0) + x; },
+  _worldYFromLocalCell(y) { return (this._farDepth ? this._farOriginY : 0) + y; },
+  _worldZFromLocalCell(z) { return (this._farDepth ? this._farOriginZ : 0) + z; },
+
   sidewaysStairBoxes(data) {
     const nx = data && data.nx ? Math.sign(data.nx) : 0;
     const nz = data && data.nz ? Math.sign(data.nz) : 0;
@@ -222,6 +323,16 @@ const Physics = {
   },
 
   boxHit(minX, minY, minZ, maxX, maxY, maxZ) {
+    // If an external caller gives us an absolute huge AABB, do the overlap test
+    // near zero and translate only the World block lookups back to absolute.
+    if (!this._farDepth && (Math.abs(minX) >= this.FAR_COORD_THRESHOLD || Math.abs(maxX) >= this.FAR_COORD_THRESHOLD ||
+        Math.abs(minY) >= this.FAR_COORD_THRESHOLD || Math.abs(maxY) >= this.FAR_COORD_THRESHOLD ||
+        Math.abs(minZ) >= this.FAR_COORD_THRESHOLD || Math.abs(maxZ) >= this.FAR_COORD_THRESHOLD)) {
+      const ox = this._originFor((minX + maxX) * 0.5);
+      const oy = this._originFor((minY + maxY) * 0.5);
+      const oz = this._originFor((minZ + maxZ) * 0.5);
+      return this._withFarOrigin(ox, oy, oz, () => this.boxesIn(minX - ox, minY - oy, minZ - oz, maxX - ox, maxY - oy, maxZ - oz).length > 0);
+    }
     return this.boxesIn(minX, minY, minZ, maxX, maxY, maxZ).length > 0;
   },
 
@@ -232,9 +343,13 @@ const Physics = {
     const y0 = Math.floor(minY), y1 = Math.floor(maxY - eps);
     const z0 = Math.floor(minZ), z1 = Math.floor(maxZ - eps);
     for (let bx = x0; bx <= x1; bx++) for (let by = y0; by <= y1; by++) for (let bz = z0; bz <= z1; bz++) {
-      const boxes = this.blockBoxes(World.getBlock(bx, by, bz), bx, by, bz);
+      const wx = this._worldXFromLocalCell(bx);
+      const wy = this._worldYFromLocalCell(by);
+      const wz = this._worldZFromLocalCell(bz);
+      const boxes = this.blockBoxes(World.getBlock(wx, wy, wz), wx, wy, wz);
       if (!boxes) continue;
       for (const bo of boxes) {
+        // wb stays in the same local coordinate space as minX/maxX.
         const wb = [bx + bo[0], by + bo[1], bz + bo[2], bx + bo[3], by + bo[4], bz + bo[5]];
         if (minX < wb[3] && maxX > wb[0] && minY < wb[4] && maxY > wb[1] && minZ < wb[5] && maxZ > wb[2]) out.push(wb);
       }
@@ -245,24 +360,33 @@ const Physics = {
   boxKey(wb) { return wb[0].toFixed(2) + '|' + wb[1].toFixed(2) + '|' + wb[2].toFixed(2) + '|' + wb[4].toFixed(2); },
 
   solidAt(x, y, z) {
-    return !!this.blockBoxes(World.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)), Math.floor(x), Math.floor(y), Math.floor(z));
+    if (!this._farDepth && (Math.abs(x) >= this.FAR_COORD_THRESHOLD || Math.abs(y) >= this.FAR_COORD_THRESHOLD || Math.abs(z) >= this.FAR_COORD_THRESHOLD)) {
+      const ox = this._originFor(x), oy = this._originFor(y), oz = this._originFor(z);
+      return this._withFarOrigin(ox, oy, oz, () => this.solidAt(x - ox, y - oy, z - oz));
+    }
+    const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+    const wx = this._worldXFromLocalCell(bx), wy = this._worldYFromLocalCell(by), wz = this._worldZFromLocalCell(bz);
+    return !!this.blockBoxes(World.getBlock(wx, wy, wz), wx, wy, wz);
   },
 
   inWater(b, yOff) {
+    if (!this._farDepth && this.ensureFarBody(b)) return this._withFarBody(b, lb => this.inWater(lb, yOff));
     const y = b.y + (yOff || 0.2);
     for (const [dx, dz] of [[0, 0], [b.w * 0.9, 0], [-b.w * 0.9, 0], [0, b.w * 0.9], [0, -b.w * 0.9]]) {
-      if (isWater(World.getBlock(Math.floor(b.x + dx), Math.floor(y), Math.floor(b.z + dz)))) return true;
+      const bx = Math.floor(b.x + dx), bz = Math.floor(b.z + dz);
+      if (isWater(World.getBlock(this._worldXFromLocalCell(bx), this._worldYFromLocalCell(Math.floor(y)), this._worldZFromLocalCell(bz)))) return true;
     }
     return false;
   },
 
   inLava(b, yOff) {
+    if (!this._farDepth && this.ensureFarBody(b)) return this._withFarBody(b, lb => this.inLava(lb, yOff));
     const minX = Math.floor(b.x - b.w), maxX = Math.floor(b.x + b.w);
     const minZ = Math.floor(b.z - b.w), maxZ = Math.floor(b.z + b.w);
     const minY = Math.floor(b.y + (yOff || 0.05));
     const maxY = Math.floor(b.y + Math.max(yOff || 0.2, b.h * 0.65));
     for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) for (let z = minZ; z <= maxZ; z++) {
-      if (isLava(World.getBlock(x, y, z))) return true;
+      if (isLava(World.getBlock(this._worldXFromLocalCell(x), this._worldYFromLocalCell(y), this._worldZFromLocalCell(z)))) return true;
     }
     return false;
   },
@@ -299,11 +423,38 @@ const Physics = {
   },
 
   groundBelow(b, depth) {
+    if (!this._farDepth && this.ensureFarBody(b)) return this._withFarBody(b, lb => this.groundBelow(lb, depth));
     return this.boxHit(b.x - b.w, b.y - depth, b.z - b.w, b.x + b.w, b.y + 0.01, b.z + b.w);
   },
 
   move(b, dt, opts) {
     opts = opts || {};
+    if (!opts._farLocal && this.ensureFarBody(b)) {
+      const st = b._farPos;
+      const lb = Object.assign({}, b);
+      lb.x = st.x;
+      lb.y = st.y;
+      lb.z = st.z;
+      this._withFarOrigin(st.ox, st.oy, st.oz, () => {
+        this.move(lb, dt, Object.assign({}, opts, { _farLocal: true }));
+      });
+
+      // Keep the local physics body near its current chunk/vertical section so
+      // sub-block movement never degrades, even when the displayed coordinate is
+      // enormous on X, Y, or Z.
+      const sx = Math.floor(lb.x / 16) * 16;
+      const sy = Math.floor(lb.y / 16) * 16;
+      const sz = Math.floor(lb.z / 16) * 16;
+      st.ox += sx; st.oy += sy; st.oz += sz;
+      st.x = lb.x - sx; st.y = lb.y - sy; st.z = lb.z - sz;
+
+      b.vx = lb.vx; b.vy = lb.vy; b.vz = lb.vz;
+      b.onGround = lb.onGround; b.hitH = lb.hitH;
+      b.x = st.ox + st.x;
+      b.y = st.oy + st.y;
+      b.z = st.oz + st.z;
+      return;
+    }
     const wasGround = b.onGround;
     b.hitH = false;
     b.onGround = false;
@@ -357,6 +508,13 @@ const Physics = {
   },
 
   blockIntersects(bx, by, bz, b) {
+    if (b && this.ensureFarBody(b)) {
+      const st = b._farPos;
+      const lbx = bx - st.ox, lby = by - st.oy, lbz = bz - st.oz;
+      return lbx + 1 > st.x - b.w && lbx < st.x + b.w &&
+             lby + 1 > st.y && lby < st.y + b.h &&
+             lbz + 1 > st.z - b.w && lbz < st.z + b.w;
+    }
     return bx + 1 > b.x - b.w && bx < b.x + b.w &&
            by + 1 > b.y && by < b.y + b.h &&
            bz + 1 > b.z - b.w && bz < b.z + b.w;
@@ -366,10 +524,13 @@ const Physics = {
   placementBlocked(placeId, bx, by, bz, body) {
     const boxes = this.blockBoxes(placeId, bx, by, bz);
     if (!boxes) return false;
+    const far = body && this.ensureFarBody(body) ? body._farPos : null;
+    const px = far ? far.x : body.x, py = far ? far.y : body.y, pz = far ? far.z : body.z;
+    const cbx = far ? bx - far.ox : bx, cby = far ? by - far.oy : by, cbz = far ? bz - far.oz : bz;
     for (const bo of boxes) {
-      if (bx + bo[3] > body.x - body.w && bx + bo[0] < body.x + body.w &&
-          by + bo[4] > body.y && by + bo[1] < body.y + body.h &&
-          bz + bo[5] > body.z - body.w && bz + bo[2] < body.z + body.w) return true;
+      if (cbx + bo[3] > px - body.w && cbx + bo[0] < px + body.w &&
+          cby + bo[4] > py && cby + bo[1] < py + body.h &&
+          cbz + bo[5] > pz - body.w && cbz + bo[2] < pz + body.w) return true;
     }
     return false;
   },

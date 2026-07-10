@@ -82,7 +82,10 @@ const UI = {
     const ci = this.el('chatInput');
     ci.addEventListener('keydown', e => {
       e.stopPropagation();
-      if (e.key === 'Enter') {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        this.autocompleteChat(ci);
+      } else if (e.key === 'Enter') {
         const v = ci.value.trim();
         this.closeChat();
         if (v) this.runChat(v);
@@ -389,6 +392,136 @@ const UI = {
     });
   },
 
+  normalizeCommandName(name) {
+    return String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/['’]/g, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  },
+
+  commandNames() {
+    return ['gamemode', 'gm', 'time', 'give', 'setblock', 'tp', 'locate', 'locatetp', 'heal', 'allowcommands', 'allowcmds', 'seed', 'save', 'help'];
+  },
+
+  blockCommandEntries() {
+    const out = [];
+    const seen = new Set();
+    const add = (name, id) => {
+      const n = this.normalizeCommandName(name);
+      if (!n || seen.has(n)) return;
+      const def = Reg[id];
+      if (!def || !def.block || id === B.AIR || isFluid(id)) return;
+      seen.add(n);
+      out.push({ name: n, id });
+    };
+    if (typeof B !== 'undefined') {
+      for (const [k, id] of Object.entries(B)) add(k, id);
+    }
+    for (const id of Object.keys(Reg || {})) {
+      const def = Reg[id];
+      if (def && def.block) {
+        add(def.name, +id);
+        const n = this.normalizeCommandName(def.name);
+        if (n && !n.endsWith('_block')) add(n + '_block', +id);
+      }
+    }
+    // Common Minecraft-ish aliases players will naturally type.
+    const alias = {
+      grass_block: B.GRASS,
+      snowy_grass_block: B.SNOWY_GRASS,
+      snow_grass: B.SNOWY_GRASS,
+      wood: B.LOG,
+      oak_log: B.LOG,
+      wooden_planks: B.PLANKS,
+      cobblestone: B.COBBLE,
+      crafting_table: B.CRAFT,
+      workbench: B.CRAFT,
+      torch: B.TORCH,
+      air: B.AIR,
+    };
+    for (const [k, id] of Object.entries(alias)) {
+      if (id === B.AIR) {
+        const n = this.normalizeCommandName(k);
+        if (!seen.has(n)) { seen.add(n); out.push({ name: n, id }); }
+      } else add(k, id);
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  },
+
+  resolveBlockName(query) {
+    const q = this.normalizeCommandName(query);
+    if (!q) return null;
+    const entries = this.blockCommandEntries();
+    let hit = entries.find(e => e.name === q);
+    if (!hit && q.endsWith('_block')) hit = entries.find(e => e.name === q.slice(0, -6));
+    if (!hit) hit = entries.find(e => e.name.startsWith(q));
+    return hit || null;
+  },
+
+  autocompleteChat(input) {
+    if (!input || !input.value.startsWith('/')) return;
+    const value = input.value;
+    const caret = input.selectionStart == null ? value.length : input.selectionStart;
+    const before = value.slice(0, caret);
+    const after = value.slice(caret);
+    const raw = before.slice(1);
+    const parts = raw.split(/\s+/);
+    const cmdPart = parts[0] || '';
+    const cmd = cmdPart.toLowerCase();
+    let choices = [];
+    let prefix = '';
+    let replaceStart = 1;
+
+    if (parts.length <= 1 && !/\s$/.test(raw)) {
+      prefix = cmdPart.toLowerCase();
+      choices = this.commandNames().filter(c => c.startsWith(prefix));
+      replaceStart = 1;
+    } else if ((cmd === 'setblock' && parts.length >= 5) || (cmd === 'give' && parts.length >= 2)) {
+      const blockMode = cmd === 'setblock';
+      const argStartIndex = blockMode ? 4 : 1;
+      const argParts = parts.slice(argStartIndex);
+      prefix = this.normalizeCommandName(argParts.join(' '));
+      choices = this.blockCommandEntries().map(e => e.name).filter(n => n.startsWith(prefix));
+      // Replace from the current token/argument start so multi-word names collapse cleanly.
+      let spaces = 0;
+      replaceStart = 1;
+      for (let i = 0; i < before.length; i++) {
+        if (/\s/.test(before[i])) {
+          spaces++;
+          if (spaces === argStartIndex) { replaceStart = i + 1; break; }
+        }
+      }
+    }
+    if (!choices.length) return;
+    choices.sort();
+    const base = value + '|' + caret + '|' + prefix;
+    if (!this._autocompleteState || this._autocompleteState.base !== base) this._autocompleteState = { base, idx: 0 };
+    else this._autocompleteState.idx = (this._autocompleteState.idx + 1) % choices.length;
+    const pick = choices[this._autocompleteState.idx];
+    const next = value.slice(0, replaceStart) + pick + after;
+    input.value = next;
+    const pos = replaceStart + pick.length;
+    input.setSelectionRange(pos, pos);
+    if (choices.length > 1) this.chat('Autocomplete: ' + pick + '  (' + choices.length + ' matches; press Tab again)', '#aaa');
+  },
+
+  parseCommandCoord(tok, base) {
+    tok = String(tok || '').trim();
+    if (!tok) return NaN;
+    if (tok[0] === '~') {
+      const off = tok.length === 1 ? 0 : Number(tok.slice(1));
+      return Math.floor(base) + (Number.isFinite(off) ? off : NaN);
+    }
+    return Number(tok);
+  },
+
+  coordPlayableForCommand(x, z) {
+    return typeof World === 'undefined' || !World.coordsPlayable || World.coordsPlayable(x, z);
+  },
+
   runChat(text) {
     if (!text.startsWith('/')) {
       this.chat('<You> ' + text, '#fff');
@@ -454,14 +587,40 @@ const UI = {
       if (found.error === 'dimension') { this.chat('That structure type belongs to the overworld. Use a return portal first.', '#ff8080'); return; }
       if (found.error) { this.chat('No ' + found.type + ' found nearby.', '#ff8080'); return; }
       World.update(found.x, found.z, 8, found.y);
+      if (Player.body._farPos) delete Player.body._farPos;
       Player.body.x = found.x; Player.body.y = found.y; Player.body.z = found.z;
       Player.body.vx = Player.body.vy = Player.body.vz = 0;
+      if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(Player.body);
       this.chat('Teleported to ' + found.type + ' at x ' + Math.floor(found.x) + ', y ' + Math.floor(found.y) + ', z ' + Math.floor(found.z) + '.', '#7df5ec');
+    } else if (cmd === 'setblock') {
+      if (arg.length < 4) { this.chat('Usage: /setblock <x|~> <y|~> <z|~> <block_name>', '#ff8080'); return; }
+      const x = this.parseCommandCoord(arg[0], Player.body.x);
+      const y = this.parseCommandCoord(arg[1], Player.body.y);
+      const z = this.parseCommandCoord(arg[2], Player.body.z);
+      if (![x, y, z].every(Number.isFinite)) { this.chat('Usage: /setblock <x|~> <y|~> <z|~> <block_name>', '#ff8080'); return; }
+      if (!this.coordPlayableForCommand(x, z)) { this.chat("That coordinate is past this JS build's safe playable limit, so /setblock was cancelled.", '#ff8080'); return; }
+      const hit = this.resolveBlockName(arg.slice(3).join(' '));
+      if (!hit) { this.chat('Unknown block. Type part of the block name and press Tab.', '#ff8080'); return; }
+      const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+      World.setBlock(bx, by, bz, hit.id);
+      World.remeshCellsNow([[bx, by, bz]], 8);
+      const nm = hit.id === B.AIR ? 'air' : (Reg[hit.id] ? Reg[hit.id].name : hit.name);
+      this.chat('Set block at ' + bx + ' ' + by + ' ' + bz + ' to ' + nm + '.', '#7df5ec');
     } else if (cmd === 'tp') {
-      const [x, y, z] = arg.map(Number);
-      if ([x, y, z].some(isNaN)) { this.chat('Usage: /tp <x> <y> <z>', '#ff8080'); return; }
+      if (arg.length < 3) { this.chat('Usage: /tp <x|~> <y|~> <z|~>', '#ff8080'); return; }
+      const x = this.parseCommandCoord(arg[0], Player.body.x);
+      const y = this.parseCommandCoord(arg[1], Player.body.y);
+      const z = this.parseCommandCoord(arg[2], Player.body.z);
+      if (![x, y, z].every(Number.isFinite)) { this.chat('Usage: /tp <x|~> <y|~> <z|~>', '#ff8080'); return; }
+      if (!this.coordPlayableForCommand(x, z)) {
+        this.chat("That coordinate is past this JS build's safe playable limit, so /tp was cancelled instead of crashing.", '#ff8080');
+        this.chat('Try staying under about ±4,000,000,000,000,000 on X/Z unless the engine gets a BigInt coordinate rewrite.', '#aaa');
+        return;
+      }
+      if (Player.body._farPos) delete Player.body._farPos;
       Player.body.x = x; Player.body.y = y; Player.body.z = z;
       Player.body.vx = Player.body.vy = Player.body.vz = 0;
+      if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(Player.body);
       this.chat('Teleported. Hopefully somewhere with a floor.', '#7df5ec');
     } else if (cmd === 'heal') {
       Player.hp = 20; Player.hunger = 20;
@@ -481,7 +640,7 @@ const UI = {
     } else if (cmd === 'save') {
       this.chat(Save.saveCurrent({ force: true }) ? 'World saved.' : 'Save failed.', '#7df5ec');
     } else if (cmd === 'help') {
-      this.chat('/gamemode c|s · /time day|night · /give <item> [n] · /tp x y z · /locate help · /locatetp <structure> · /heal · /seed · /save', '#ccc');
+      this.chat('/gamemode c|s · /time day|night · /give <item> [n] · /setblock x y z block · /tp x y z · /locate help · /locatetp <structure> · /heal · /seed · /save', '#ccc');
       this.chat('Multiplayer (host): /allowcommands [on|off] — let all players use commands (cheats). Press M for ping.', '#ccc');
     } else {
       this.chat('Unknown command. Try /help', '#ff8080');
@@ -1363,7 +1522,7 @@ const UI = {
         const text = input.value.slice(0, 30).trim();
         World.signs.set(key, text);
         if (typeof Multiplayer !== 'undefined' && Multiplayer.broadcastSign) Multiplayer.broadcastSign(key, text);
-        World.dirty.add(World.key(h.bx >> 4, h.bz >> 4)); // remesh syncs the floating text
+        World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(h.bx, h.bz) : World.key(Math.floor(h.bx / 16), Math.floor(h.bz / 16))); // remesh syncs the floating text
       }
       this.close();
     });

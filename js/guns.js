@@ -24,10 +24,20 @@ const Guns = {
   },
 
   tracer(x0, y0, z0, x1, y1, z1, color, thick) {
+    let ox = 0, oy = 0, oz = 0;
+    if (typeof Physics !== 'undefined' && Physics._originFor) {
+      const th = Physics.FAR_COORD_THRESHOLD || 1000000000;
+      if (Math.abs(x0) >= th || Math.abs(y0) >= th || Math.abs(z0) >= th || Math.abs(x1) >= th || Math.abs(y1) >= th || Math.abs(z1) >= th) {
+        ox = Physics._originFor(x0);
+        oy = Physics._originFor(y0);
+        oz = Physics._originFor(z0);
+      }
+    }
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute([x0, y0, z0, x1, y1, z1], 3));
+    g.setAttribute('position', new THREE.Float32BufferAttribute([x0 - ox, y0 - oy, z0 - oz, x1 - ox, y1 - oy, z1 - oz], 3));
     const m = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 });
     const line = new THREE.Line(g, m);
+    line.position.set(ox, oy, oz);
     this.scene.add(line);
     this.tracers.push({ line, life: thick ? 0.16 : 0.07, max: thick ? 0.16 : 0.07 });
   },
@@ -106,7 +116,14 @@ const Guns = {
   mobFire(from, gunId, accuracy, tgt, shooter) {
     const d = this.defs[gunId] || this.defs[I.PISTOL];
     const tx = tgt.x, ty = tgt.y + (tgt.h || 1.6) * 0.75, tz = tgt.z;
-    const dx = tx - from.x, dy = ty - from.y, dz = tz - from.z;
+    let fox = 0, foy = 0, foz = 0;
+    if (typeof Physics !== 'undefined' && Physics._originFor) {
+      const th = Physics.FAR_COORD_THRESHOLD || 1000000000;
+      if (Math.abs(from.x) >= th || Math.abs(from.y) >= th || Math.abs(from.z) >= th || Math.abs(tx) >= th || Math.abs(ty) >= th || Math.abs(tz) >= th) {
+        fox = Physics._originFor(from.x); foy = Physics._originFor(from.y); foz = Physics._originFor(from.z);
+      }
+    }
+    const dx = (tx - fox) - (from.x - fox), dy = (ty - foy) - (from.y - foy), dz = (tz - foz) - (from.z - foz);
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
     const dir = this.spreadDir({ x: dx / dist, y: dy / dist, z: dz / dist }, d.spread + (1 - accuracy) * 0.09);
     SFX.gunshot(gunId, from);
@@ -121,10 +138,11 @@ const Guns = {
     let playerT = Infinity;
     if (!Player.dead && Player.gamemode !== 'creative') {
       const p = Player.body;
-      const pdx = p.x - from.x, pdy = (p.y + 1.3) - from.y, pdz = p.z - from.z;
+      const shotBody = { x: from.x, y: from.y, z: from.z };
+      const pd = (typeof Physics !== 'undefined' && Physics.deltaBodies) ? Physics.deltaBodies(shotBody, p) : { x: p.x - from.x, y: p.y - from.y, z: p.z - from.z };
+      const pdx = pd.x, pdy = pd.y + 1.3, pdz = pd.z;
       const t = Math.max(0, Math.min(blockDist, pdx * dir.x + pdy * dir.y + pdz * dir.z));
-      const cx = from.x + dir.x * t, cy = from.y + dir.y * t, cz = from.z + dir.z * t;
-      const miss = Math.sqrt((cx - p.x) ** 2 + (cy - (p.y + 1.3)) ** 2 + (cz - p.z) ** 2);
+      const miss = Math.sqrt((dir.x * t - pdx) ** 2 + (dir.y * t - pdy) ** 2 + (dir.z * t - pdz) ** 2);
       if (miss < 0.75) playerT = t;
     }
 
@@ -140,6 +158,28 @@ const Guns = {
     this.tracer(from.x, from.y, from.z, ex, ey, ez, 0xff6060, false);
   },
 
+  stepFarProjectile(p, dt) {
+    if (typeof Physics === 'undefined' || !Physics.ensureFarBody || !Physics.ensureFarBody(p)) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+      return;
+    }
+    const st = p._farPos;
+    st.x += p.vx * dt;
+    st.y += p.vy * dt;
+    st.z += p.vz * dt;
+    const sx = Math.floor(st.x / 16) * 16;
+    const sy = Math.floor(st.y / 16) * 16;
+    const sz = Math.floor(st.z / 16) * 16;
+    st.ox += sx; st.oy += sy; st.oz += sz;
+    st.x -= sx; st.y -= sy; st.z -= sz;
+    p.x = st.ox + st.x; p.y = st.oy + st.y; p.z = st.oz + st.z;
+  },
+
+  farDelta(a, b) {
+    if (typeof Physics !== 'undefined' && Physics.deltaBodies) return Physics.deltaBodies(a, b);
+    return { x: (b.x || 0) - (a.x || 0), y: (b.y || 0) - (a.y || 0), z: (b.z || 0) - (a.z || 0) };
+  },
+
   spawnRocket(from, dir, src) {
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.16, 0.16, 0.5),
@@ -147,11 +187,14 @@ const Guns = {
     );
     mesh.position.set(from.x + dir.x * 0.6, from.y + dir.y * 0.6, from.z + dir.z * 0.6);
     this.scene.add(mesh);
-    this.rockets.push({
+    const rocket = {
       x: mesh.position.x, y: mesh.position.y, z: mesh.position.z,
       vx: dir.x * 24, vy: dir.y * 24, vz: dir.z * 24,
-      mesh, life: 5, src,
-    });
+      w: 0.12, h: 0.12, mesh, life: 5, src,
+    };
+    if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(rocket);
+    mesh.userData.farBody = rocket;
+    this.rockets.push(rocket);
     SFX.rocketLaunch(from);
   },
 
@@ -173,9 +216,14 @@ const Guns = {
       const r = this.rockets[i];
       r.life -= dt;
       r.vy -= 3 * dt;
-      r.x += r.vx * dt; r.y += r.vy * dt; r.z += r.vz * dt;
-      r.mesh.position.set(r.x, r.y, r.z);
-      r.mesh.lookAt(r.x + r.vx, r.y + r.vy, r.z + r.vz);
+      this.stepFarProjectile(r, dt);
+      if (r._farPos) {
+        r.mesh.position.set(r._farPos.x, r._farPos.y, r._farPos.z);
+        r.mesh.lookAt(r._farPos.x + r.vx, r._farPos.y + r.vy, r._farPos.z + r.vz);
+      } else {
+        r.mesh.position.set(r.x, r.y, r.z);
+        r.mesh.lookAt(r.x + r.vx, r.y + r.vy, r.z + r.vz);
+      }
       if (Math.random() < 0.6) Particles.burst(r.x, r.y, r.z, [0.6, 0.6, 0.6], 1, 0.5);
 
       let boom = r.life <= 0 || Physics.solidAt(r.x, r.y, r.z);
@@ -183,8 +231,9 @@ const Guns = {
         for (const m of Mobs.list) {
           if (m.dead) continue;
           const b = m.body;
-          if (r.x > b.x - b.w - 0.2 && r.x < b.x + b.w + 0.2 && r.y > b.y - 0.2 && r.y < b.y + b.h + 0.2 &&
-              r.z > b.z - b.w - 0.2 && r.z < b.z + b.w + 0.2) { boom = true; break; }
+          const d = this.farDelta(b, r); // rocket relative to mob body
+          if (d.x > -b.w - 0.2 && d.x < b.w + 0.2 && d.y > -0.2 && d.y < b.h + 0.2 &&
+              d.z > -b.w - 0.2 && d.z < b.w + 0.2) { boom = true; break; }
         }
       }
       if (boom) {

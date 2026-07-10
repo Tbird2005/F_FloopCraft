@@ -30,14 +30,14 @@ const Jelly = {
     if (!this._houseSpatial) this.rebuildHouseSpatial();
     return true;
   },
-  keyOf(x, y, z) { return (typeof World !== 'undefined' && World.pkey) ? World.pkey(x|0, y|0, z|0) : ((x|0) + ',' + (y|0) + ',' + (z|0)); },
+  keyOf(x, y, z) { const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z); return (typeof World !== 'undefined' && World.pkey) ? World.pkey(bx, by, bz) : (bx + ',' + by + ',' + bz); },
   splitKey(key) { const p = String(key || '').split(',').map(Number); return p.length === 3 && p.every(Number.isFinite) ? p : null; },
   resetStorageCache() {
     this._houseSpatial = new Map();
     this._houseUpdateCursor = 0;
     this._legacySpawnerScanClean = false;
   },
-  spatialKeyForBlock(x, z) { return ((x|0) >> 4) + ',' + ((z|0) >> 4); },
+  spatialKeyForBlock(x, z) { const cx = (typeof World !== 'undefined' && World.chunkCoord) ? World.chunkCoord(x) : Math.floor(Math.floor(x) / 16); const cz = (typeof World !== 'undefined' && World.chunkCoord) ? World.chunkCoord(z) : Math.floor(Math.floor(z) / 16); return cx + ',' + cz; },
   spatialKeyForHouseKey(key) {
     const p = this.splitKey(key);
     return p ? this.spatialKeyForBlock(p[0], p[2]) : '';
@@ -65,8 +65,8 @@ const Jelly = {
   houseEntriesNear(x, y, z, radius) {
     if (!this.ensureStorage()) return [];
     const r = Math.max(1, radius || this.HOUSE_ADOPT_RADIUS);
-    const minCx = ((Math.floor(x - r)) >> 4), maxCx = ((Math.floor(x + r)) >> 4);
-    const minCz = ((Math.floor(z - r)) >> 4), maxCz = ((Math.floor(z + r)) >> 4);
+    const minCx = (typeof World !== 'undefined' && World.chunkCoord) ? World.chunkCoord(x - r) : Math.floor(Math.floor(x - r) / 16), maxCx = (typeof World !== 'undefined' && World.chunkCoord) ? World.chunkCoord(x + r) : Math.floor(Math.floor(x + r) / 16);
+    const minCz = (typeof World !== 'undefined' && World.chunkCoord) ? World.chunkCoord(z - r) : Math.floor(Math.floor(z - r) / 16), maxCz = (typeof World !== 'undefined' && World.chunkCoord) ? World.chunkCoord(z + r) : Math.floor(Math.floor(z + r) / 16);
     const out = [];
     for (let cz = minCz; cz <= maxCz; cz++) {
       for (let cx = minCx; cx <= maxCx; cx++) {
@@ -459,7 +459,7 @@ const Jelly = {
     if (World.diffs && World.diffs.has && World.diffs.has(key)) return true;
     const p = this.splitKey(key);
     if (!p || !World.diffIndex || !World.key) return false;
-    const bucket = World.diffIndex.get(World.key(p[0] >> 4, p[2] >> 4));
+    const bucket = World.diffIndex.get(World.chunkKeyForBlock ? World.chunkKeyForBlock(p[0], p[2]) : World.key(Math.floor(p[0] / 16), Math.floor(p[2] / 16))); 
     return !!(bucket && bucket.has && bucket.has(key));
   },
 
@@ -533,7 +533,7 @@ const Jelly = {
   },
 
   onChestAccess(ctx = {}) {
-    const bx = ctx.x|0, by = ctx.y|0, bz = ctx.z|0;
+    const bx = Math.floor(+ctx.x), by = Math.floor(+ctx.y), bz = Math.floor(+ctx.z);
     // For normal opening, the block is still present. For breaking/explosions,
     // World.setBlock has already changed the cell to AIR before registry cleanup
     // runs, so the caller must pass wasJellyChest/oldId. Do not let that path

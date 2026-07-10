@@ -454,7 +454,7 @@ const Game = {
     }
     UI.updateHotbar(); UI.updateStats(); UI.updateXp(); UI.updateModeLabel();
     if (!this.started) this.started = true;
-    UI.chat('Welcome to F_Floop Craft v 1.0.49!', '#ffd700');
+    UI.chat('Welcome to F_Floop Craft v 1.0.56!', '#ffd700');
     if (typeof Multiplayer !== 'undefined') {
       if (Multiplayer.role === 'host') Multiplayer.finishHostWorld();
       Multiplayer.updatePauseCode();
@@ -542,12 +542,23 @@ const Game = {
       return;
     }
     const p = Player.body;
-    const cx = Math.floor(p.x) >> 4;
-    const cy = Math.floor(p.y / 16);
-    const cz = Math.floor(p.z) >> 4;
+    const pst = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(p) : null;
+    const px = pst ? pst.ox + pst.x : p.x;
+    const py = pst ? pst.oy + pst.y : p.y;
+    const pz = pst ? pst.oz + pst.z : p.z;
+    const cx = World.chunkCoord ? World.chunkCoord(px) : Math.floor(px / 16);
+    const cy = Math.floor(py / 16);
+    const cz = World.chunkCoord ? World.chunkCoord(pz) : Math.floor(pz / 16);
     const key = cx + ',' + cy + ',' + cz;
     const mesh = this.ensureChunkBorderMesh();
     mesh.visible = true;
+    // Keep chunk-border geometry local to the current chunk-section origin.
+    // Absolute Float32 line vertices break at extreme coordinates even when normal
+    // chunk meshes are local/floating-origin corrected.
+    const originX = cx * 16, originY = cy * 16, originZ = cz * 16;
+    mesh.position.set(originX, originY, originZ);
+    if (mesh.updateMatrix) mesh.updateMatrix();
+    mesh.matrixWorldNeedsUpdate = true;
     if (!force && key === this.chunkBorderKey) return;
     this.chunkBorderKey = key;
 
@@ -562,6 +573,7 @@ const Game = {
     const pushTri = (arr, a, b, c) => arr.push(...a, ...b, ...c);
     const addLine = (arr, a, b) => arr.push(...a, ...b);
     const addFace = (faceArr, lineArr, quad) => {
+      quad = quad.map(v => [v[0] - originX, v[1] - originY, v[2] - originZ]);
       pushTri(faceArr, quad[0], quad[1], quad[2]);
       pushTri(faceArr, quad[0], quad[2], quad[3]);
       const constAxis = [0, 1, 2].find(i => quad.every(v => Math.abs(v[i] - quad[0][i]) < 0.0001));
@@ -1005,13 +1017,102 @@ const Game = {
       this.weather === 'thunder' ? ' ⛈' : ' 🌧';
     document.getElementById('dayLabel').textContent =
       (this.isNight ? '☾ ' : '☀ ') + 'Day ' + this.dayCount + wIcon;
-    let coordText = `x ${p.x.toFixed(0)}  y ${p.y.toFixed(0)}  z ${p.z.toFixed(0)}`;
+    const farPos = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(p) : null;
+    const dispX = farPos ? farPos.ox + farPos.x : p.x;
+    const dispZ = farPos ? farPos.oz + farPos.z : p.z;
+    let coordText = `x ${dispX.toFixed(0)}  y ${p.y.toFixed(0)}  z ${dispZ.toFixed(0)}`;
     if (this.debugChunkBorders) {
-      const cx = Math.floor(p.x) >> 4, cy = Math.floor(p.y / 16), cz = Math.floor(p.z) >> 4;
-      const lx = ((Math.floor(p.x) % 16) + 16) % 16, ly = ((Math.floor(p.y) % 16) + 16) % 16, lz = ((Math.floor(p.z) % 16) + 16) % 16;
+      const cx = World.chunkCoord ? World.chunkCoord(dispX) : Math.floor(dispX / 16), cy = Math.floor(p.y / 16), cz = World.chunkCoord ? World.chunkCoord(dispZ) : Math.floor(dispZ / 16);
+      const lx = ((Math.floor(dispX) % 16) + 16) % 16, ly = ((Math.floor(p.y) % 16) + 16) % 16, lz = ((Math.floor(dispZ) % 16) + 16) % 16;
       coordText += `  chunk ${cx},${cy},${cz}  local ${lx},${ly},${lz}`;
     }
     document.getElementById('coords').textContent = coordText;
+  },
+
+  renderScene() {
+    if (!this.renderer || !this.scene || !this.camera) return;
+    if (!this.inWorld || typeof Player === 'undefined' || !Player.body) {
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    // Floating render origin: keep gameplay/save coordinates absolute, but draw the
+    // current frame near 0,0 so WebGL float uniforms never have to carry huge world
+    // positions. This fixes the next farlands layer after local chunk vertices:
+    // block meshes no longer vanish after 32-bit chunk wrap, and camera/viewmodel
+    // rendering stays smooth even extremely far from spawn.
+    const farPos = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(Player.body) : null;
+    const ox = farPos ? farPos.ox : Math.floor(Player.body.x / 16) * 16;
+    const oy = farPos ? farPos.oy : (Math.abs(Player.body.y) >= ((typeof Physics !== 'undefined' && Physics.FAR_COORD_THRESHOLD) || 1000000000) ? Math.floor(Player.body.y / 16) * 16 : 0);
+    const oz = farPos ? farPos.oz : Math.floor(Player.body.z / 16) * 16;
+    if (!Number.isFinite(ox + oy + oz) || (ox === 0 && oy === 0 && oz === 0)) {
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    const shifted = [];
+    const localized = [];
+    const shift = (obj, dx, dy, dz) => {
+      if (!obj || !obj.position) return;
+      obj.position.x += dx;
+      obj.position.y += dy;
+      obj.position.z += dz;
+      if (obj.updateMatrix) obj.updateMatrix();
+      obj.matrixWorldNeedsUpdate = true;
+      shifted.push(obj);
+    };
+    const localizeFarBodyObject = (obj, body) => {
+      if (!obj || !obj.position || !body || typeof Physics === 'undefined' || !Physics.farState) return false;
+      const st = Physics.farState(body);
+      if (!st) return false;
+      localized.push({ obj, x: obj.position.x, y: obj.position.y, z: obj.position.z });
+      // Preserve fractional motion by subtracting origins before adding the small local offset.
+      // `(st.ox + st.x) - ox` would throw away the fraction at quadrillion-scale coords.
+      obj.position.x = (st.ox - ox) + st.x;
+      obj.position.y = (st.oy - oy) + st.y + ((obj.userData && Number.isFinite(+obj.userData.farBodyYOffset)) ? +obj.userData.farBodyYOffset : 0);
+      obj.position.z = (st.oz - oz) + st.z;
+      if (obj.updateMatrix) obj.updateMatrix();
+      obj.matrixWorldNeedsUpdate = true;
+      return true;
+    };
+
+    try {
+      shift(this.camera, -ox, -oy, -oz);
+      if (farPos) {
+        const eyeOff0 = (Player.eyeY ? Player.eyeY() : (Player.body.y + 1.62)) - Player.body.y;
+        const eyeOff = Number.isFinite(eyeOff0) && Math.abs(eyeOff0) < 10 ? eyeOff0 : Math.max(1.2, (Player.body.h || 1.8) * 0.9);
+        this.camera.position.x = farPos.x;
+        this.camera.position.y = farPos.y + eyeOff;
+        this.camera.position.z = farPos.z;
+        if (this.camera.updateMatrix) this.camera.updateMatrix();
+        this.camera.matrixWorldNeedsUpdate = true;
+      }
+      for (const obj of this.scene.children.slice()) {
+        if (!obj || obj === this.camera) continue;
+        if (obj.isAmbientLight) continue;
+        const farBody = obj.userData && obj.userData.farBody;
+        if (farBody && localizeFarBodyObject(obj, farBody)) continue;
+        shift(obj, -ox, -oy, -oz);
+      }
+      this.scene.updateMatrixWorld(true);
+      this.renderer.render(this.scene, this.camera);
+    } finally {
+      for (let i = localized.length - 1; i >= 0; i--) {
+        const e = localized[i];
+        e.obj.position.set(e.x, e.y, e.z);
+        if (e.obj.updateMatrix) e.obj.updateMatrix();
+        e.obj.matrixWorldNeedsUpdate = true;
+      }
+      for (let i = shifted.length - 1; i >= 0; i--) {
+        const obj = shifted[i];
+        obj.position.x += ox;
+        obj.position.y += oy;
+        obj.position.z += oz;
+        if (obj.updateMatrix) obj.updateMatrix();
+        obj.matrixWorldNeedsUpdate = true;
+      }
+      this.scene.updateMatrixWorld(true);
+    }
   },
 
   // ---------------- main loop ----------------
@@ -1021,20 +1122,25 @@ const Game = {
     const dt = Math.min(0.05, (now - this.clock) / 1000);
     this.clock = now;
 
-    if (!this.inWorld) { this.renderer.render(this.scene, this.camera); return; }
+    if (!this.inWorld) { this.renderScene(); return; }
     const p = Player.body;
+
+    // Absolute X/Z values past the safe playable envelope lose whole-block precision.
+    // Treat that envelope as a visible world border now: dismount if needed and
+    // place the player 10 blocks back inside instead of dumping them at spawn.
+    if (World && World.enforceWorldBorder) World.enforceWorldBorder(p);
 
     if (this.loading) {
       World.update(p.x, p.z, 8, p.y);
       const { missing, total } = World.countMissing(p.x, p.z, 2);
       document.getElementById('loadBar').style.width = Math.round((1 - missing / total) * 100) + '%';
       if (missing === 0) this.finishLoading();
-      this.renderer.render(this.scene, this.camera);
+      this.renderScene();
       return;
     }
 
     if (this.cinematicPlaying) {
-      this.renderer.render(this.scene, this.camera);
+      this.renderScene();
       return;
     }
 
@@ -1044,11 +1150,12 @@ const Game = {
     // freezes (mobs, drops, other players' relayed actions all stall).
     const mpHost = typeof Multiplayer !== 'undefined' && Multiplayer.role === 'host' && Multiplayer.connected;
     if (!this.started || (paused && !mpHost)) {
-      this.renderer.render(this.scene, this.camera);
+      this.renderScene();
       return;
     }
 
     Player.update(dt);
+    if (World && World.enforceWorldBorder) World.enforceWorldBorder(p);
     World.update(p.x, p.z, 1, p.y); // one gen + one mesh per frame keeps exploration smooth
     Water.update(dt);
     Lava.update(dt);
@@ -1082,7 +1189,7 @@ const Game = {
       }
     }
 
-    this.renderer.render(this.scene, this.camera);
+    this.renderScene();
   },
 };
 
