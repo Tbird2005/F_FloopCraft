@@ -28,7 +28,7 @@ const Water = {
   MAX_PER_TICK: 600,
 
   schedule(x, y, z) {
-    if (y < 0 || y >= World.H) return;
+    if (y < 0) return; // no H cap: fluids flow in the sparse zone above terrain too
     this.queue.add(x + ',' + y + ',' + z);
   },
 
@@ -177,7 +177,7 @@ const Lava = {
   MAX_PER_TICK: 300,
 
   schedule(x, y, z) {
-    if (y < 0 || y >= World.H) return;
+    if (y < 0) return; // no H cap: fluids flow in the sparse zone above terrain too
     this.queue.add(x + ',' + y + ',' + z);
   },
 

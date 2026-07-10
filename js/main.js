@@ -454,7 +454,7 @@ const Game = {
     }
     UI.updateHotbar(); UI.updateStats(); UI.updateXp(); UI.updateModeLabel();
     if (!this.started) this.started = true;
-    UI.chat('Welcome to F_Floop Craft v 1.0.56!', '#ffd700');
+    UI.chat('Welcome to F_Floop Craft v 1.0.58!', '#ffd700');
     if (typeof Multiplayer !== 'undefined') {
       if (Multiplayer.role === 'host') Multiplayer.finishHostWorld();
       Multiplayer.updatePauseCode();
@@ -936,6 +936,14 @@ const Game = {
     const p = Player.body;
     const chunksPerTick = weather === 'thunder' ? 5 : weather === 'rain' ? 4 : 3;
     World.sweepGrassAndDirtAround(p.x, p.y, p.z, chunksPerTick);
+    // hosts also tick the world around each connected player, so clients see
+    // grass/dirt updates near THEM too (only touches host-loaded chunks)
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'host' && Multiplayer.connected) {
+      for (const peer of Multiplayer.peers.values()) {
+        const s = peer && (peer.target || peer.state);
+        if (s && Number.isFinite(+s.x)) World.sweepGrassAndDirtAround(+s.x, +s.y || 0, +s.z, chunksPerTick);
+      }
+    }
   },
 
   updateStocks(dt) {
@@ -1121,6 +1129,9 @@ const Game = {
     const now = performance.now();
     const dt = Math.min(0.05, (now - this.clock) / 1000);
     this.clock = now;
+    // smoothed FPS for the M panel
+    this._fpsAcc = (this._fpsAcc || 0) + 1;
+    if (now - (this._fpsT0 || 0) >= 500) { this.fps = Math.round(this._fpsAcc * 1000 / (now - (this._fpsT0 || now - 500))); this._fpsAcc = 0; this._fpsT0 = now; }
 
     if (!this.inWorld) { this.renderScene(); return; }
     const p = Player.body;

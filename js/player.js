@@ -1924,7 +1924,9 @@ const Player = {
       return;
     }
     if (id === B.DUNGEON_CORE) {
-      World.setBlock(bx, by, bz, B.DUNGEON_BRICK_INACTIVE, Object.assign(noUpdate ? { noUpdate: true } : {}, { skipPortalCheck: true }));
+      const dgHit = World.dungeonAtBlock ? World.dungeonAtBlock(bx, by, bz) : null;
+      const inactiveId = (typeof dungeonBrickInactiveForRank === 'function') ? dungeonBrickInactiveForRank(dgHit && dgHit.rank) : B.DUNGEON_BRICK_INACTIVE;
+      World.setBlock(bx, by, bz, inactiveId, Object.assign(noUpdate ? { noUpdate: true } : {}, { skipPortalCheck: true }));
       if (World.deactivateDungeonAt) World.deactivateDungeonAt(bx, by, bz);
       Particles.blockBurst(bx, by, bz, id);
       if (Reg[id].hard > 0.1) this.damageHeld(1);
@@ -2289,6 +2291,7 @@ const Player = {
         this.vmMesh.rotation.y = -0.5;
       }
     } else {
+      // bare hand: plain skin box (the user prefers it untextured — leave it be)
       this.vmMesh = new THREE.Mesh(
         new THREE.BoxGeometry(0.14, 0.14, 0.42),
         new THREE.MeshBasicMaterial({ color: 0xd8a882, depthTest: false })

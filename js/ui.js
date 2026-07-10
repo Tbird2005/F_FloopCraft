@@ -146,19 +146,22 @@ const UI = {
       document.body.appendChild(el);
     }
     const render = () => {
+      const fps = (typeof Game !== 'undefined' && Game.fps) ? Game.fps : 0;
+      const fc = fps >= 50 ? '#7CFC00' : fps >= 25 ? '#ffd97a' : '#ff6060';
+      const fpsLine = 'FPS: <span style="color:' + fc + '">' + fps + '</span><br>';
       if (typeof Multiplayer === 'undefined' || Multiplayer.role === 'solo' || !Multiplayer.connected) {
-        el.innerHTML = '<b>Ping</b><br><span style="color:#aaa">Not in multiplayer.</span>';
+        el.innerHTML = fpsLine + '<b>Ping</b><br><span style="color:#aaa">Not in multiplayer.</span>';
         return;
       }
       const list = Multiplayer.getPingList ? Multiplayer.getPingList() : [];
-      el.innerHTML = '<b>Ping</b><br>' + (list.length ? list.map(p => {
+      el.innerHTML = fpsLine + '<b>Ping</b><br>' + (list.length ? list.map(p => {
         const c = p.ping < 80 ? '#7CFC00' : p.ping < 180 ? '#ffd97a' : '#ff6060';
         return p.name + ': <span style="color:' + c + '">' + p.ping + 'ms</span>';
       }).join('<br>') : '<span style="color:#aaa">No other players.</span>');
     };
     render();
     el.style.display = 'block';
-    this._pingTimer = setInterval(render, 1000);
+    this._pingTimer = setInterval(render, 500);
   },
 
   // ---------------- hotbar / stats / xp ----------------
@@ -524,7 +527,8 @@ const UI = {
 
   runChat(text) {
     if (!text.startsWith('/')) {
-      this.chat('<You> ' + text, '#fff');
+      const myName = (typeof Multiplayer !== 'undefined' && Multiplayer.localName) ? Multiplayer.localName : 'You';
+      this.chat('<' + myName + '> ' + text, '#fff');
       if (typeof Multiplayer !== 'undefined' && Multiplayer.sendChat) Multiplayer.sendChat(text);
       if (/merry christmas/i.test(text)) this.chat('<Mr Floop> MERRY CHRISTMAS!!', '#7CFC00');
       return;
@@ -622,6 +626,30 @@ const UI = {
       Player.body.vx = Player.body.vy = Player.body.vz = 0;
       if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(Player.body);
       this.chat('Teleported. Hopefully somewhere with a floor.', '#7df5ec');
+    } else if (cmd === 'goto' || cmd === 'bring') {
+      const q = arg.join(' ');
+      if (!q) { this.chat('Usage: /' + cmd + ' <player name> — press M for the player list.', '#ff8080'); return; }
+      if (typeof Multiplayer === 'undefined' || !Multiplayer.connected || Multiplayer.role === 'solo') {
+        this.chat('You are not in a multiplayer session.', '#ff8080'); return;
+      }
+      const hit = Multiplayer.findPeerByName(q);
+      if (!hit) { this.chat('No player named "' + q + '". Press M for the player list.', '#ff8080'); return; }
+      if (cmd === 'goto') {
+        const pos = Multiplayer.peerPosition(hit.id);
+        if (!pos) { this.chat(hit.name + ' has no known position yet.', '#ff8080'); return; }
+        if (pos.dim !== undefined && typeof Dimensions !== 'undefined' && pos.dim !== Dimensions.current) {
+          this.chat(hit.name + ' is in another dimension.', '#ff8080'); return;
+        }
+        World.update(pos.x, pos.z, 8, pos.y);
+        if (Player.body._farPos) delete Player.body._farPos;
+        Player.body.x = pos.x; Player.body.y = pos.y + 0.2; Player.body.z = pos.z;
+        Player.body.vx = Player.body.vy = Player.body.vz = 0;
+        if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(Player.body);
+        this.chat('Teleported to ' + hit.name + '.', '#7df5ec');
+      } else {
+        Multiplayer.bringPlayer(hit.id);
+        this.chat('Bringing ' + hit.name + ' to you...', '#7df5ec');
+      }
     } else if (cmd === 'heal') {
       Player.hp = 20; Player.hunger = 20;
       this.updateStats();
@@ -641,7 +669,7 @@ const UI = {
       this.chat(Save.saveCurrent({ force: true }) ? 'World saved.' : 'Save failed.', '#7df5ec');
     } else if (cmd === 'help') {
       this.chat('/gamemode c|s · /time day|night · /give <item> [n] · /setblock x y z block · /tp x y z · /locate help · /locatetp <structure> · /heal · /seed · /save', '#ccc');
-      this.chat('Multiplayer (host): /allowcommands [on|off] — let all players use commands (cheats). Press M for ping.', '#ccc');
+      this.chat('Multiplayer: /goto <player> · /bring <player> · (host) /allowcommands [on|off]. Press M for players/FPS.', '#ccc');
     } else {
       this.chat('Unknown command. Try /help', '#ff8080');
     }
@@ -1314,7 +1342,11 @@ const UI = {
       B.WOOL, ...woolColorBlocks,
       B.BONE_BLOCK, B.FLOOP_METAL, B.FLOOP_LAMP, B.PRESENT, B.STARDUST, B.EMERALD_BLOCK,
       ...Object.values(JELLY_BLOCK_BY_COLOR), ...Object.values(JELLY_LAMP_BY_COLOR), B.JELLY_HOUSE,
-      B.DUNGEON_BRICK, B.DUNGEON_BRICK_INACTIVE, B.DUNGEON_CORE,
+      B.DUNGEON_BRICK, B.DUNGEON_BRICK_INACTIVE,
+      B.DUNGEON_BRICK_BLUE, B.DUNGEON_BRICK_BLUE_INACTIVE,
+      B.DUNGEON_BRICK_GOLD, B.DUNGEON_BRICK_GOLD_INACTIVE,
+      B.DUNGEON_BRICK_DIAMOND, B.DUNGEON_BRICK_DIAMOND_INACTIVE,
+      B.DUNGEON_CORE,
       B.DUNGEON_DOOR_GREEN, B.DUNGEON_DOOR_BLUE, B.DUNGEON_DOOR_GOLD, B.DUNGEON_DOOR_DIAMOND,
       B.LORE, B.MR_FLOOP_DRINKING_WATER, B.BEDROCK,
     ]);

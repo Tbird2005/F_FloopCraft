@@ -76,6 +76,10 @@ const B = {
   DUNGEON_SPAWNER_GREEN: 468, DUNGEON_SPAWNER_BLUE: 469, DUNGEON_SPAWNER_GOLD: 470, DUNGEON_SPAWNER_DIAMOND: 471,
   BROKEN_SPAWNER: 472,
   WORLD_BORDER: 473,
+  // per-rank dungeon masonry (447/448 stay as the green pair for old saves)
+  DUNGEON_BRICK_BLUE: 474, DUNGEON_BRICK_BLUE_INACTIVE: 475,
+  DUNGEON_BRICK_GOLD: 476, DUNGEON_BRICK_GOLD_INACTIVE: 477,
+  DUNGEON_BRICK_DIAMOND: 478, DUNGEON_BRICK_DIAMOND_INACTIVE: 479,
   // dynamic mixed double slabs: exact bottom/top slab IDs are encoded from here upward
   DSLAB_MIX_C0: 500,
   // dynamic vertical slab variants + two-piece slab combos
@@ -179,7 +183,21 @@ function dungeonDoorAxisAt(id, x, y, z) {
 }
 function dungeonDoorKeyForId(id) { const r = dungeonRankInfo(id); return r ? r.key : 0; }
 function dungeonDoorNameForId(id) { const r = dungeonRankInfo(id); return r ? r.name : 'Unknown'; }
-function isActiveDungeonBlock(id) { return id === B.DUNGEON_BRICK || isDungeonDoor(id); }
+const DUNGEON_BRICK_BY_RANK = {
+  green: B.DUNGEON_BRICK, blue: B.DUNGEON_BRICK_BLUE, gold: B.DUNGEON_BRICK_GOLD, diamond: B.DUNGEON_BRICK_DIAMOND,
+};
+const DUNGEON_BRICK_INACTIVE_BY_RANK = {
+  green: B.DUNGEON_BRICK_INACTIVE, blue: B.DUNGEON_BRICK_BLUE_INACTIVE, gold: B.DUNGEON_BRICK_GOLD_INACTIVE, diamond: B.DUNGEON_BRICK_DIAMOND_INACTIVE,
+};
+const ACTIVE_DUNGEON_BRICK_IDS = new Set(Object.values(DUNGEON_BRICK_BY_RANK));
+const INACTIVE_DUNGEON_BRICK_IDS = new Set(Object.values(DUNGEON_BRICK_INACTIVE_BY_RANK));
+const DUNGEON_BRICK_TO_INACTIVE = {};
+for (const rk of Object.keys(DUNGEON_BRICK_BY_RANK)) DUNGEON_BRICK_TO_INACTIVE[DUNGEON_BRICK_BY_RANK[rk]] = DUNGEON_BRICK_INACTIVE_BY_RANK[rk];
+function dungeonBrickForRank(rank) { return DUNGEON_BRICK_BY_RANK[(rank || 'green').toLowerCase()] || B.DUNGEON_BRICK; }
+function dungeonBrickInactiveForRank(rank) { return DUNGEON_BRICK_INACTIVE_BY_RANK[(rank || 'green').toLowerCase()] || B.DUNGEON_BRICK_INACTIVE; }
+function isActiveDungeonBrick(id) { return ACTIVE_DUNGEON_BRICK_IDS.has(id); }
+function isInactiveDungeonBrick(id) { return INACTIVE_DUNGEON_BRICK_IDS.has(id); }
+function isActiveDungeonBlock(id) { return ACTIVE_DUNGEON_BRICK_IDS.has(id) || isDungeonDoor(id); }
 function isDungeonGeneratedBlock(id) { return isActiveDungeonBlock(id) || id === B.DUNGEON_CORE; }
 const DUNGEON_CHEST_BY_RANK = {
   green: B.DUNGEON_CHEST_GREEN, blue: B.DUNGEON_CHEST_BLUE, gold: B.DUNGEON_CHEST_GOLD, diamond: B.DUNGEON_CHEST_DIAMOND,
@@ -1220,20 +1238,23 @@ for (const [id, parts] of Object.entries(SLAB_COMBO_PIECES)) {
 defBlock(B.LOOT_CRATE, 'Floop Loot Crate', { hard: 2, tool: 'axe', flammable: true, xp: 0, interact: 'chest', tex: { all: 'loot_crate' } });
 defBlock(B.STOCKS, 'Floop Exchange', { hard: 7, tool: 'pickaxe', reqTier: 0, interact: 'stocks', lightLevel: 6, tex: { top: 'stocks_top', side: 'stocks_side', bottom: 'stocks_top' } });
 defBlock(B.STONE_BRICKS, 'Stone Bricks', { hard: 5.5, tool: 'pickaxe', reqTier: 0, tex: { all: 'stone_bricks' } });
-defBlock(B.DUNGEON_BRICK, 'Active Dungeon Brick', {
-  hard: Infinity, drop: null, tex: { all: 'dungeon_brick' },
-  tip: 'Protected dungeon stone. Break the dungeon core to deactivate it.'
-});
-defBlock(B.DUNGEON_BRICK_INACTIVE, 'Deactivated Dungeon Brick', {
-  hard: 5.8, tool: 'pickaxe', reqTier: 0, tex: { all: 'dungeon_brick_inactive' }
-});
+for (const rk of ['green', 'blue', 'gold', 'diamond']) {
+  const nice = rk[0].toUpperCase() + rk.slice(1);
+  defBlock(dungeonBrickForRank(rk), 'Active ' + nice + ' Dungeon Brick', {
+    hard: Infinity, drop: null, tex: { all: 'dungeon_brick_' + rk },
+    tip: 'Protected ' + rk + ' dungeon stone. Break the dungeon core to deactivate it.'
+  });
+  defBlock(dungeonBrickInactiveForRank(rk), 'Deactivated ' + nice + ' Dungeon Brick', {
+    hard: 5.8, tool: 'pickaxe', reqTier: 0, tex: { all: 'dungeon_brick_' + rk + '_inactive' }
+  });
+}
 defBlock(B.DUNGEON_CORE, 'Dungeon Core', {
   hard: 7.5, tool: 'pickaxe', reqTier: 1, drop: null, light: true, lightLevel: 10, tex: { all: 'dungeon_core' },
   tip: 'Break this to conquer the dungeon and make its active blocks mineable.'
 });
-defBlock(B.ROPE_LADDER, 'Rope Ladder', {
+defBlock(B.ROPE_LADDER, 'Rope', {
   hard: 0.45, tool: 'axe', solid: false, opaque: false, cutout: true, shape: 'cross', drop: { id: B.ROPE_LADDER }, tex: { all: 'rope_ladder' },
-  tip: 'A free-hanging ladder used in dungeon shafts.'
+  tip: 'A climbable hanging rope. Needs no wall — place it on any block and keep stacking it downward.'
 });
 for (const rank of DUNGEON_RANKS) {
   defBlock(dungeonSpawnerBlockForRank(rank.rank), rank.name + ' Dungeon Spawner', {
@@ -1246,12 +1267,12 @@ for (const rank of DUNGEON_RANKS) {
     tip: 'Part of a 3x3 ranked dungeon gate. Requires a ' + rank.name + ' Dungeon Key.'
   });
   defBlock(dungeonChestBlockForRank(rank.rank), rank.name + ' Dungeon Chest', {
-    hard: 2.6, tool: 'axe', drop: null, interact: 'chest', tex: { top: 'dungeon_chest_top_' + rank.rank, side: 'dungeon_chest_front_' + rank.rank, bottom: 'dungeon_chest_top_' + rank.rank },
-    tip: rank.name + ' ranked dungeon storage. Protected until this dungeon is conquered.'
+    hard: 2.6, tool: 'axe', interact: 'chest', tex: { top: 'dungeon_chest_top_' + rank.rank, side: 'dungeon_chest_front_' + rank.rank, bottom: 'dungeon_chest_top_' + rank.rank },
+    tip: rank.name + ' ranked dungeon storage. Mine it after conquering to take it home.'
   });
   defBlock(dungeonCrateBlockForRank(rank.rank), rank.name + ' Floop Box', {
-    hard: 2.2, tool: 'axe', drop: null, interact: 'chest', tex: { all: 'dungeon_crate_' + rank.rank },
-    tip: rank.name + ' ranked dungeon loot box. Protected until this dungeon is conquered.'
+    hard: 2.2, tool: 'axe', interact: 'chest', tex: { all: 'dungeon_crate_' + rank.rank },
+    tip: rank.name + ' ranked dungeon loot box. Mine it after conquering to take it home.'
   });
 }
 defBlock(B.SNOWY_GRASS, 'Snowy Grass', { hard: 0.7, tool: 'shovel', drop: { id: B.DIRT }, tex: { top: 'snow', side: 'snowy_grass_side', bottom: 'dirt' } });
@@ -1749,8 +1770,6 @@ const Atlas = {
       // big gloss highlight
       c.fillStyle = 'rgba(255,255,255,0.8)'; c.fillRect(x + 2, y + 2, 4, 2); c.fillRect(x + 2, y + 4, 2, 2);
       c.fillStyle = 'rgba(255,255,255,0.3)'; c.fillRect(x + 11, y + 3, 2, 6);
-      // rounded corners
-      c.clearRect(x, y, 1, 1); c.clearRect(x + 15, y, 1, 1); c.clearRect(x, y + 15, 1, 1); c.clearRect(x + 15, y + 15, 1, 1);
     });
     jellyTex('jelly_block_pink', 'pink');
     jellyTex('jelly_block_cyan', 'cyan');
@@ -1775,7 +1794,6 @@ const Atlas = {
       px(c, x, y, 3, 12, '#ffffff'); px(c, x, y, 12, 12, '#ffffff');
       // gel gloss
       c.fillStyle = 'rgba(255,255,255,0.7)'; c.fillRect(x + 2, y + 2, 3, 1);
-      c.clearRect(x, y, 1, 1); c.clearRect(x + 15, y, 1, 1); c.clearRect(x, y + 15, 1, 1); c.clearRect(x + 15, y + 15, 1, 1);
     });
     jellyLampTex('jelly_lamp_pink', 'pink');
     jellyLampTex('jelly_lamp_cyan', 'cyan');
@@ -2029,7 +2047,9 @@ const Atlas = {
     reg('wool_black', (c, x, y) => woolTile(c, x, y, '#2c2c34', '#1c1c22', '#3d3d48'));
     reg('world_border', (c, x, y) => {
       fill(c, x, y, '#1a0610');
-      for (let i = -16; i < 32; i += 4) {
+      // stay inside this tile: the old -16..32 loop painted the same 4px stripe
+      // pattern across the NEIGHBORING atlas tiles too, wiping out wool_black
+      for (let i = 0; i < T; i += 4) {
         c.fillStyle = '#ff1744';
         c.fillRect(x + i, y, 2, T);
         c.fillStyle = '#5d0017';
@@ -2194,17 +2214,26 @@ const Atlas = {
       }
       speck(c, x, y, specks, 20);
       if (rune) {
-        // one faintly glowing sigil brick
-        c.fillStyle = 'rgba(123,77,255,0.30)'; c.fillRect(x + 8, y + 4, 6, 3);
-        c.fillStyle = '#7b4dff'; c.fillRect(x + 10, y + 4, 1, 3); c.fillRect(x + 9, y + 5, 3, 1);
-        px(c, x, y, 12, 4, '#b591ff');
+        // one faintly glowing sigil brick, tinted per dungeon rank
+        c.fillStyle = rune; c.globalAlpha = 0.30; c.fillRect(x + 8, y + 4, 6, 3); c.globalAlpha = 1;
+        c.fillStyle = rune; c.fillRect(x + 10, y + 4, 1, 3); c.fillRect(x + 9, y + 5, 3, 1);
+        c.globalAlpha = 0.75; px(c, x, y, 12, 4, '#ffffff'); c.globalAlpha = 1;
       } else {
         // old chiseled sigil, long dead
-        c.fillStyle = '#3f3c48'; c.fillRect(x + 10, y + 4, 1, 3); c.fillRect(x + 9, y + 5, 3, 1);
+        c.fillStyle = 'rgba(0,0,0,0.30)'; c.fillRect(x + 10, y + 4, 1, 3); c.fillRect(x + 9, y + 5, 3, 1);
       }
     };
-    reg('dungeon_brick', (c, x, y) => dungeonBrickTile(c, x, y, [58, 55, 82], '#14131d', ['#262434', '#413d5c', '#4a3f66'], true));
-    reg('dungeon_brick_inactive', (c, x, y) => dungeonBrickTile(c, x, y, [98, 95, 108], '#34323d', ['#6b6774', '#4a4654', '#77707c'], false));
+    const DUNGEON_BRICK_PALETTES = {
+      green: { base: [44, 70, 52], mortar: '#0e1a12', specks: ['#2a4a34', '#3d6647', '#38594a'], rune: '#35c96f', inBase: [88, 100, 90], inMortar: '#3a453c', inSpecks: ['#6f7d70', '#525f54', '#7b887c'] },
+      blue: { base: [46, 56, 92], mortar: '#0e1426', specks: ['#2c3658', '#3f4d80', '#37406a'], rune: '#3195ff', inBase: [88, 92, 110], inMortar: '#3a3e4e', inSpecks: ['#6d7284', '#4e5468', '#7a8093'] },
+      gold: { base: [88, 72, 40], mortar: '#241b0a', specks: ['#5e4c26', '#7d6636', '#6d5a30'], rune: '#f2c037', inBase: [104, 96, 78], inMortar: '#463f2c', inSpecks: ['#7d7663', '#5d5747', '#8b8471'] },
+      diamond: { base: [40, 76, 82], mortar: '#0c1e22', specks: ['#265257', '#37707a', '#2f6168'], rune: '#5ee9ff', inBase: [84, 102, 104], inMortar: '#39494b', inSpecks: ['#6b8284', '#4d6264', '#7a9193'] },
+    };
+    for (const rk of ['green', 'blue', 'gold', 'diamond']) {
+      const P = DUNGEON_BRICK_PALETTES[rk];
+      reg('dungeon_brick_' + rk, (c, x, y) => dungeonBrickTile(c, x, y, P.base, P.mortar, P.specks, P.rune));
+      reg('dungeon_brick_' + rk + '_inactive', (c, x, y) => dungeonBrickTile(c, x, y, P.inBase, P.inMortar, P.inSpecks, false));
+    }
     reg('dungeon_core', (c, x, y) => {
       // arcane heart: layered energy diamond over dark metal, corner braces
       fill(c, x, y, '#0d0c14');
@@ -2346,12 +2375,19 @@ const Atlas = {
       c.fillStyle = '#5d3c1f'; c.fillRect(x + 1, y + 8, 14, 1);
     });
     reg('rope_ladder', (c, x, y) => {
-      fill(c, x, y, 'rgba(0,0,0,0)');
-      c.fillStyle = '#7a5630';
-      c.fillRect(x + 4, y, 2, T); c.fillRect(x + 10, y, 2, T);
-      for (let yy = 2; yy < 16; yy += 4) c.fillRect(x + 3, y + yy, 10, 2);
-      c.fillStyle = '#b78a52'; c.fillRect(x + 5, y, 1, T); c.fillRect(x + 11, y, 1, T);
-      for (let yy = 3; yy < 16; yy += 4) c.fillRect(x + 4, y + yy, 8, 1);
+      // hanging rope: a twisted strand with grab knots, tiles vertically
+      c.clearRect(x, y, T, T);
+      for (let yy = 0; yy < T; yy++) {
+        const sway = ((yy % 8) < 4) ? 0 : 1; // gentle braid wobble
+        c.fillStyle = '#8a6234'; c.fillRect(x + 7 + sway, y + yy, 2, 1);
+        c.fillStyle = (yy % 3 === 0) ? '#b78a52' : '#6b4826';
+        c.fillRect(x + 7 + sway + (yy % 2), y + yy, 1, 1);
+      }
+      // knots every half tile
+      c.fillStyle = '#5d3c1f'; c.fillRect(x + 6, y + 3, 5, 2); c.fillRect(x + 5, y + 11, 5, 2);
+      c.fillStyle = '#b78a52'; c.fillRect(x + 6, y + 3, 2, 1); c.fillRect(x + 5, y + 11, 2, 1);
+      // frayed wisps
+      px(c, x, y, 5, 5, '#8a6234'); px(c, x, y, 11, 12, '#8a6234');
     });
     const spawnerTile = (c, x, y, main, glow, broken) => {
       // barred cage over a dark interior; live ones have a glowing core + halo

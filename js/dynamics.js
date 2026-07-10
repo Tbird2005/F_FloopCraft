@@ -278,7 +278,7 @@ const Dynamics = {
           for (let t = 0; t < 2 && !placed; t++) {
             const nx = p.x + (Math.random() - 0.5) * 48;
             const nz = p.z + (Math.random() - 0.5) * 48;
-            const ny = Math.min(World.H - 1, p.y + 14 + Math.random() * 12);
+            const ny = p.y + 14 + Math.random() * 12; // no H cap: rain follows skybases too
             // only spawn drops under open sky — nothing raining through cave roofs
             if (World.getSkyLight(Math.floor(nx), Math.floor(ny), Math.floor(nz)) >= 14) {
               wx = nx; wy = ny; wz = nz;

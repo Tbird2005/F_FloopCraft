@@ -21,12 +21,14 @@ const Multiplayer = {
   lastSend: 0,
   lastTimeSend: 0,
   peers: new Map(),
+  peerNames: new Map(), // game player id -> display name (kept in sync by the host)
+  localName: '',
   joinErrorEl: null,
   joinButtonEl: null,
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v114',
+  versionTag: 'ffloopcraft-v116',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -34,6 +36,27 @@ const Multiplayer = {
     this.joinInputEl = document.getElementById('mpCodeInput');
     this.statusEl = document.getElementById('mpStatus');
     this.updatePauseCode();
+    this.initLocalName();
+  },
+
+  // In-game name = the PC username. http origin asks the dev server; file://
+  // pages try to read it from a /Users/<name>/ path; otherwise a stored
+  // fallback name is used so everyone still has SOMETHING stable.
+  initLocalName() {
+    const cached = localStorage.getItem('ffc_playername') || '';
+    const p = decodeURIComponent(location.pathname);
+    const m = p.match(/[/\\]Users[/\\]([^/\\]+)[/\\]/i) || p.match(/[/\\]home[/\\]([^/\\]+)[/\\]/);
+    this.localName = (m && m[1]) || cached || ('Floop' + Math.random().toString(36).slice(2, 6).toUpperCase());
+    localStorage.setItem('ffc_playername', this.localName);
+    if (location.protocol === 'http:' || location.protocol === 'https:') {
+      fetch('/whoami').then(r => r.json()).then(j => {
+        if (j && j.name) {
+          this.localName = String(j.name).slice(0, 24);
+          localStorage.setItem('ffc_playername', this.localName);
+          if (this.connected && this.announceName) this.announceName();
+        }
+      }).catch(() => {});
+    }
   },
 
   hasPeerJS() {
@@ -187,6 +210,7 @@ const Multiplayer = {
       if (msg.type === 'join_request') {
         conn._gameId = msg.id || conn.peer || ('guest_' + Math.random().toString(36).slice(2, 8));
         this.connections.set(conn._gameId, conn);
+        if (this.setPeerName) this.setPeerName(conn._gameId, msg.name);
         this.sendTo(conn, { type: 'joined', id: this.id, snapshot: this.makeSnapshot() });
         this.sendTo(conn, { type: 'peer_state', id: this.id, state: this.playerState() });
         this.sendTo(conn, { type: 'allow_commands', allowed: this.clientCommandsAllowed }); // sync current permission
@@ -195,7 +219,8 @@ const Multiplayer = {
             this.sendTo(conn, { type: 'peer_state', id: pid, state: existing.target });
           }
         }
-        if (typeof UI !== 'undefined') UI.chat('A player joined your world.', '#7df5ec');
+        if (this.broadcastNameTable) this.broadcastNameTable();
+        if (typeof UI !== 'undefined') UI.chat((this.peerNames.get(conn._gameId) || 'A player') + ' joined your world.', '#7df5ec');
         return;
       }
 
@@ -205,11 +230,14 @@ const Multiplayer = {
     const drop = () => {
       const id = conn._gameId;
       if (id) {
+        const name = this.peerNames.get(id) || 'A player';
         this.connections.delete(id);
         this.removePeer(id);
+        this.peerNames.delete(id);
         if (this.hostReleaseAllChestLocks) this.hostReleaseAllChestLocks(id); // free any chest they were in
         this.broadcast({ type: 'peer_left', id }, id);
-        if (typeof UI !== 'undefined') UI.chat('A player left your world.', '#ffb347');
+        if (this.broadcastNameTable) this.broadcastNameTable();
+        if (typeof UI !== 'undefined') UI.chat(name + ' left your world.', '#ffb347');
       }
     };
     conn.on('close', drop);
@@ -272,7 +300,7 @@ const Multiplayer = {
       this.hostConn = conn;
       this.wireClientConnection(conn, () => {
         if (finished) return;
-        this.sendTo(conn, { type: 'join_request', id: this.id });
+        this.sendTo(conn, { type: 'join_request', id: this.id, name: this.localName });
       }, (why) => {
         clearTimeout(joinTimeout);
         fail(why || 'Invalid code or host is offline.');
@@ -417,7 +445,10 @@ const Multiplayer = {
     }
 
     if (msg.type === 'chat') {
-      if (msg.id !== this.id && typeof UI !== 'undefined') UI.chat('<Player> ' + String(msg.text || '').slice(0, 120), '#d8f7ff');
+      if (msg.id !== this.id && typeof UI !== 'undefined') {
+        const who = msg.name || this.peerNames.get(msg.id || fromId) || 'Player';
+        UI.chat('<' + who + '> ' + String(msg.text || '').slice(0, 120), '#d8f7ff');
+      }
       if (this.role === 'host' && cameFromClient) this.broadcast(msg, msg.id || fromId);
       return;
     }
@@ -499,9 +530,11 @@ const Multiplayer = {
     let n = 1;
     for (const [pid, ms] of table) {
       const me = pid === this.id, host = pid === hostId;
-      let name = host ? 'Host' : ('Player ' + (n++));
+      let name = me ? this.localName
+        : this.peerNames.get(pid) || (host ? 'Host' : ('Player ' + (n++)));
+      if (host) name += ' [host]';
       if (me) name += ' (You)';
-      out.push({ name, ping: Math.max(0, Math.round(+ms || 0)) });
+      out.push({ id: pid, name, ping: Math.max(0, Math.round(+ms || 0)) });
     }
     return out;
   },
@@ -687,7 +720,7 @@ const Multiplayer = {
 
   sendChat(text) {
     if (!this.connected || this.role === 'solo') return;
-    this.send({ type: 'chat', text: String(text || '').slice(0, 120) });
+    this.send({ type: 'chat', text: String(text || '').slice(0, 120), name: this.localName });
   },
 
   getPeer(id) {
@@ -710,12 +743,53 @@ const Multiplayer = {
   createPeerObject(id) {
     const group = new THREE.Group();
     group.name = 'remote_player_' + id;
-    const matBody = new THREE.MeshLambertMaterial({ color: 0x3c7bd6 });
-    const matSkin = new THREE.MeshLambertMaterial({ color: 0xd8a882 });
+    // pixel-art player skin (shared canvas textures via Mobs.skinTex; fresh
+    // materials per peer because light tint mutates material.color)
+    const useSkins = typeof Mobs !== 'undefined' && Mobs.skinTex;
+    const P = {
+      shirt: (c) => {
+        c.fillStyle = '#3c7bd6'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#3369b8'; c.fillRect(7, 0, 2, 16);           // zipper
+        c.fillStyle = '#2d5ba3'; c.fillRect(0, 0, 16, 2);           // collar
+        c.fillStyle = '#5490e0'; c.fillRect(1, 3, 3, 1); c.fillRect(12, 5, 3, 1); // fold light
+        c.fillStyle = '#2d5ba3'; c.fillRect(0, 14, 16, 2);          // hem
+      },
+      skinArm: (c) => {
+        c.fillStyle = '#3c7bd6'; c.fillRect(0, 0, 16, 16);          // sleeve
+        c.fillStyle = '#2d5ba3'; c.fillRect(0, 6, 16, 1);           // sleeve end
+        c.fillStyle = '#d8a882'; c.fillRect(0, 7, 16, 9);           // bare arm
+        c.fillStyle = '#c79877'; c.fillRect(0, 13, 16, 1);          // wrist crease
+      },
+      jeans: (c) => {
+        c.fillStyle = '#27415f'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#20374f'; c.fillRect(7, 0, 2, 16);
+        c.fillStyle = '#1a1a1a'; c.fillRect(0, 13, 16, 3);          // shoes
+      },
+      headSide: (c) => {
+        c.fillStyle = '#d8a882'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#4a3016'; c.fillRect(0, 0, 16, 5);           // hair
+        c.fillStyle = '#5c3d1e'; c.fillRect(2, 5, 2, 1); c.fillRect(9, 5, 3, 1); // hair edge
+      },
+      headTop: (c) => { c.fillStyle = '#4a3016'; c.fillRect(0, 0, 16, 16); c.fillStyle = '#5c3d1e'; c.fillRect(3, 3, 4, 4); c.fillRect(9, 8, 4, 4); },
+      headFace: (c) => {
+        c.fillStyle = '#d8a882'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#4a3016'; c.fillRect(0, 0, 16, 4);           // fringe
+        c.fillStyle = '#c79877'; c.fillRect(7, 8, 2, 2);            // nose
+        c.fillStyle = '#a86f4c'; c.fillRect(5, 12, 6, 1);           // mouth
+      },
+    };
+    const smat = (key, painter) => useSkins
+      ? new THREE.MeshLambertMaterial({ map: Mobs.skinTex('player_' + key, painter) })
+      : new THREE.MeshLambertMaterial({ color: 0x3c7bd6 });
+    const matBody = smat('shirt', P.shirt);
+    const matSkin = smat('arm', P.skinArm);
     const matDark = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.28), matBody);
     body.position.y = 1.02;
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.46), matSkin);
+    // the head model faces -z, so the face texture goes on material index 5
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.46), useSkins
+      ? [smat('head_side', P.headSide), smat('head_side', P.headSide), smat('head_top', P.headTop), smat('head_side', P.headSide), smat('head_side', P.headSide), smat('head_face', P.headFace)]
+      : new THREE.MeshLambertMaterial({ color: 0xd8a882 }));
     head.position.y = 1.55;
     const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.012), matDark);
     const eyeR = eyeL.clone();
@@ -723,7 +797,8 @@ const Multiplayer = {
     const armL = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.65, 0.17), matSkin);
     const armR = armL.clone();
     armL.position.set(-0.39, 1.02, 0); armR.position.set(0.39, 1.02, 0);
-    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.68, 0.20), matBody);
+    const legMat = smat('jeans', P.jeans);
+    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.68, 0.20), legMat);
     const legR = legL.clone();
     legL.position.set(-0.14, 0.34, 0); legR.position.set(0.14, 0.34, 0);
     group.add(body, head, eyeL, eyeR, armL, armR, legL, legR);
@@ -849,7 +924,9 @@ const Multiplayer = {
         const oldRunChat = UI.runChat.bind(UI);
         UI.runChat = function(text) {
           const t = String(text || '').trim();
-          if (t.startsWith('/') && typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && !Multiplayer.clientCommandsAllowed) {
+          // /goto and /bring are social teleports, not cheats — always allowed
+          const socialCmd = /^\/(goto|bring)\b/i.test(t);
+          if (t.startsWith('/') && !socialCmd && typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && !Multiplayer.clientCommandsAllowed) {
             this.chat('Commands are host-only. The host can run /allowcommands to enable them.', '#ff8080');
             return;
           }
@@ -3779,7 +3856,7 @@ const Multiplayer = {
     serializeDungeonForNet(dg) {
       if (!dg) return null;
       const conquered = !!(typeof World !== 'undefined' && dg.key && World.dungeonConquered && World.dungeonConquered.has(dg.key));
-      const mapId = (id) => conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(id) : id;
+      const mapId = (id) => conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(id, dg.rank) : id;
       return {
         key: dg.key || '',
         rank: dg.rank || '',
@@ -3835,7 +3912,7 @@ const Multiplayer = {
           const dg = World.dungeonFor(dkx, dkz);
           const bucket = dg && dg.byChunk && dg.byChunk.get(ck);
           const conquered = !!(dg && dg.key && World.dungeonConquered && World.dungeonConquered.has(dg.key));
-          if (bucket) for (const f of bucket) overlays.push([Math.floor(f.x), Math.floor(f.y), Math.floor(f.z), (conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(f.id) : f.id)|0]);
+          if (bucket) for (const f of bucket) overlays.push([Math.floor(f.x), Math.floor(f.y), Math.floor(f.z), (conquered && World.deactivatedDungeonBlockId ? World.deactivatedDungeonBlockId(f.id, dg.rank) : f.id)|0]);
         }
         const diffBucket = World.diffIndex && World.diffIndex.get(ck);
         if (diffBucket) for (const [pk, id] of diffBucket.entries()) {
@@ -5824,5 +5901,192 @@ const Multiplayer = {
       if (typeof Dynamics !== 'undefined' && Dynamics.updateFalling) Dynamics.updateFalling(dt || 0);
       this.clientWeatherVisualTick(dt || 0);
     }
+  };
+})();
+
+// ============================================================
+// Player names + /bring + /goto (installFloopNamesAndSocialTp)
+// The host owns the id->name table and rebroadcasts it on every
+// join/leave/rename; clients adopt it wholesale. Nametags are
+// canvas sprites parented to the remote player group.
+// ============================================================
+(function installFloopNamesAndSocialTp() {
+  const MP = Multiplayer;
+
+  const cleanName = (n) => String(n || '').replace(/[^\w \-\.]/g, '').trim().slice(0, 24);
+
+  MP.setPeerName = function(id, name) {
+    if (!id) return;
+    const nm = cleanName(name) || ('Player-' + String(id).slice(-4));
+    if (this.peerNames.get(id) === nm) return;
+    this.peerNames.set(id, nm);
+    const p = this.peers.get(id);
+    if (p) this.updateNameTag(p, nm);
+  };
+
+  MP.broadcastNameTable = function() {
+    if (this.role !== 'host' || !this.connected) return;
+    this.peerNames.set(this.id, cleanName(this.localName) || 'Host');
+    const names = {};
+    for (const [pid, nm] of this.peerNames) names[pid] = nm;
+    this.broadcast({ type: 'name_table', names, hostId: this.id });
+  };
+
+  // clients can re-announce (e.g. /whoami resolved after joining)
+  MP.announceName = function() {
+    if (!this.connected) return;
+    if (this.role === 'host') { this.broadcastNameTable(); return; }
+    this.send({ type: 'peer_name', id: this.id, name: this.localName });
+  };
+
+  // ---- floating nametags --------------------------------------------
+  MP.updateNameTag = function(p, name) {
+    if (!p || !p.group) return;
+    if (p.nameTagText === name && p.nameTag) return;
+    if (p.nameTag) { p.group.remove(p.nameTag); if (p.nameTag.material.map) p.nameTag.material.map.dispose(); p.nameTag.material.dispose(); }
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 56;
+    const c = cv.getContext('2d');
+    c.font = 'bold 30px Consolas, monospace';
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    const w = Math.min(248, c.measureText(name).width + 18);
+    c.fillStyle = 'rgba(6,8,14,0.55)';
+    c.fillRect(128 - w / 2, 6, w, 44);
+    c.fillStyle = '#fff';
+    c.fillText(name, 128, 29, 240);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.minFilter = THREE.LinearFilter;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    spr.scale.set(1.5, 0.33, 1);
+    spr.position.set(0, 2.06, 0);
+    p.group.add(spr);
+    p.nameTag = spr;
+    p.nameTagText = name;
+  };
+
+  const prevApplyPeerState = MP.applyPeerState.bind(MP);
+  MP.applyPeerState = function(id, state) {
+    prevApplyPeerState(id, state);
+    const p = this.peers.get(id);
+    if (p && !p.nameTag) {
+      const nm = this.peerNames.get(id);
+      if (nm) this.updateNameTag(p, nm);
+    }
+  };
+
+  // ---- name helpers for commands -------------------------------------
+  MP.findPeerByName = function(query) {
+    const q = String(query || '').toLowerCase().trim();
+    if (!q) return null;
+    let prefix = null;
+    for (const [pid, nm] of this.peerNames) {
+      if (pid === this.id) continue;
+      const n = nm.toLowerCase();
+      if (n === q) return { id: pid, name: nm };
+      if (!prefix && n.startsWith(q)) prefix = { id: pid, name: nm };
+    }
+    return prefix;
+  };
+
+  MP.peerPosition = function(pid) {
+    const p = this.peers.get(pid);
+    const s = p && (p.target || p.state);
+    if (!s || !Number.isFinite(+s.x)) return null;
+    return { x: +s.x, y: +s.y, z: +s.z, dim: s.dim };
+  };
+
+  // ---- /bring & /goto plumbing ---------------------------------------
+  const localDim = () => (typeof Dimensions !== 'undefined' ? Dimensions.current : undefined);
+
+  const applyForceTp = (msg) => {
+    const from = msg.byName || 'Someone';
+    const myDim = localDim();
+    if (msg.dim !== undefined && myDim !== undefined && msg.dim !== myDim) {
+      if (typeof UI !== 'undefined') UI.chat(from + ' tried to bring you, but you are in another dimension.', '#ff8080');
+      return;
+    }
+    World.update(msg.x, msg.z, 8, msg.y);
+    if (Player.body._farPos) delete Player.body._farPos;
+    Player.body.x = +msg.x; Player.body.y = +msg.y + 0.2; Player.body.z = +msg.z;
+    Player.body.vx = Player.body.vy = Player.body.vz = 0;
+    if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(Player.body);
+    if (typeof UI !== 'undefined') UI.chat(from + ' brought you to them.', '#7df5ec');
+  };
+
+  MP.bringPlayer = function(pid) {
+    const msg = {
+      type: 'mp_force_tp', target: pid,
+      x: Player.body.x, y: Player.body.y, z: Player.body.z,
+      dim: localDim(), byName: this.localName,
+    };
+    if (this.role === 'host') {
+      const conn = this.connections.get(pid);
+      if (conn) this.sendTo(conn, msg);
+    } else {
+      // route through the host: it applies locally or relays to the target
+      this.send(Object.assign({}, msg, { type: 'mp_bring_request' }));
+    }
+  };
+
+  // ---- dungeon deactivation replication -------------------------------
+  // deactivateDungeonAt() writes raw chunk data, so the normal per-setBlock
+  // 'block' packets never fire for it. Send one small message instead; the
+  // receiving side re-runs the same deterministic flip on its own chunks.
+  MP.onDungeonDeactivated = function(x, y, z) {
+    if (!this.connected || this.role === 'solo') return;
+    this.send({ type: 'dungeon_deactivated', x, y, z, dim: localDim(), id: this.id });
+  };
+
+  const applyRemoteDungeonDeactivation = (msg) => {
+    const myDim = localDim();
+    // wrong dimension: skip — the host's diffs bring the bricks over via the
+    // normal dim_state flow when the player switches back
+    if (msg.dim !== undefined && myDim !== undefined && msg.dim !== myDim) return;
+    if (typeof World === 'undefined' || !World.ready || !World.deactivateDungeonAt) return;
+    MP.applyingRemote = true;
+    try { World.deactivateDungeonAt(Math.floor(+msg.x), Math.floor(+msg.y), Math.floor(+msg.z)); }
+    finally { MP.applyingRemote = false; }
+  };
+
+  const prevReceive = MP.receiveNetworkMessage.bind(MP);
+  MP.receiveNetworkMessage = function(msg, fromId, cameFromClient) {
+    if (msg && msg.type === 'dungeon_deactivated') {
+      if (msg.id !== this.id) applyRemoteDungeonDeactivation(msg);
+      if (this.role === 'host' && cameFromClient) this.broadcast(msg, msg.id || fromId);
+      return;
+    }
+    if (msg && msg.type === 'name_table') {
+      if (this.role === 'client' && msg.names) {
+        this.peerNames = new Map(Object.entries(msg.names));
+        for (const [pid, p] of this.peers) {
+          const nm = this.peerNames.get(pid);
+          if (nm) this.updateNameTag(p, nm);
+        }
+      }
+      return;
+    }
+    if (msg && msg.type === 'peer_name') {
+      if (this.role === 'host') {
+        this.setPeerName(msg.id || fromId, msg.name);
+        this.broadcastNameTable();
+      }
+      return;
+    }
+    if (msg && msg.type === 'mp_force_tp') {
+      applyForceTp(msg);
+      return;
+    }
+    if (msg && msg.type === 'mp_bring_request') {
+      if (this.role === 'host') {
+        if (msg.target === this.id) {
+          applyForceTp(msg);
+        } else {
+          const conn = this.connections.get(msg.target);
+          if (conn) this.sendTo(conn, Object.assign({}, msg, { type: 'mp_force_tp' }));
+        }
+      }
+      return;
+    }
+    return prevReceive(msg, fromId, cameFromClient);
   };
 })();

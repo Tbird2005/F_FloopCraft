@@ -188,6 +188,40 @@ const Mobs = {
     return new THREE.Mesh(g, mats);
   },
 
+  // Cached 16x16 pixel-art skins (one canvas+texture per key, materials per mob
+  // instance because the voxel-light tint mutates material.color).
+  _skinCache: {},
+  skinTex(key, painter, size) {
+    let t = this._skinCache[key];
+    if (t) return t;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = size || 16;
+    painter(cv.getContext('2d'));
+    t = new THREE.CanvasTexture(cv);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    return (this._skinCache[key] = t);
+  },
+  // textured box: skin on every face, optional face canvas on the front (+z)
+  tbox(w, h, d, skinKey, painter, faceCanvas, opts) {
+    const g = new THREE.BoxGeometry(w, h, d);
+    const mk = () => new THREE.MeshLambertMaterial(Object.assign({ map: this.skinTex(skinKey, painter) }, opts || {}));
+    if (faceCanvas) {
+      const tex = new THREE.CanvasTexture(faceCanvas);
+      tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+      const face = new THREE.MeshLambertMaterial(Object.assign({ map: tex }, opts || {}));
+      const plain = mk();
+      return new THREE.Mesh(g, [plain, plain, plain, plain, face, plain]);
+    }
+    return new THREE.Mesh(g, mk());
+  },
+  // tiny deterministic speckle for skin painters
+  _skinSpeck(c, cols, n, seed) {
+    let s = (seed || 7) * 2654435761 % 2147483647;
+    const r = () => ((s = s * 16807 % 2147483647) / 2147483647);
+    for (let i = 0; i < n; i++) { c.fillStyle = cols[(r() * cols.length) | 0]; c.fillRect((r() * 16) | 0, (r() * 16) | 0, 1, 1); }
+  },
+
   faceCanvas(draw) {
     const cv = document.createElement('canvas');
     cv.width = 8; cv.height = 8;
@@ -338,13 +372,28 @@ const Mobs = {
     const g = new THREE.Group();
     const parts = { legs: [], wool: [] };
     if (type === 'creeper') {
-      // weird explosive frog
-      const green = 0x4db843;
-      const body = this.box(0.8, 0.45, 0.7, green);
+      // weird explosive frog: mottled skin, pale speckled belly, banded legs
+      const frogSkin = (c) => {
+        c.fillStyle = '#4db843'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#3d9635';
+        c.fillRect(2, 3, 3, 2); c.fillRect(9, 2, 3, 2); c.fillRect(5, 9, 3, 2); c.fillRect(12, 8, 2, 2); c.fillRect(1, 12, 2, 2);
+        this._skinSpeck(c, ['#8fdb84', '#3d9635', '#5fc954'], 26, 3);
+      };
+      const frogBelly = (c) => {
+        c.fillStyle = '#8fdb84'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#a8e89e'; for (let yy = 2; yy < 16; yy += 3) c.fillRect(1, yy, 14, 1);
+        this._skinSpeck(c, ['#79cc6e', '#b8f0ae'], 14, 5);
+      };
+      const frogLeg = (c) => {
+        c.fillStyle = '#3d9635'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#2e7a28'; c.fillRect(0, 4, 16, 2); c.fillRect(0, 10, 16, 2);
+        this._skinSpeck(c, ['#4db843', '#2e7a28'], 12, 7);
+      };
+      const body = this.tbox(0.8, 0.45, 0.7, 'frog_skin', frogSkin);
       body.position.y = 0.35;
-      const belly = this.box(0.7, 0.2, 0.6, 0x8fdb84);
+      const belly = this.tbox(0.7, 0.2, 0.6, 'frog_belly', frogBelly);
       belly.position.y = 0.18;
-      const head = this.box(0.7, 0.35, 0.45, green, this.frogFace());
+      const head = this.tbox(0.7, 0.35, 0.45, 'frog_skin', frogSkin, this.frogFace());
       head.position.set(0, 0.72, 0.2);
       g.add(body, belly, head);
       parts.head = head;
@@ -354,29 +403,47 @@ const Mobs = {
         const pupil = this.box(0.09, 0.1, 0.06, 0x000000);
         pupil.position.set(side * 0.22, 0.97, 0.35);
         g.add(eye, pupil);
-        const legBack = this.box(0.24, 0.3, 0.45, 0x3d9635);
+        const legBack = this.tbox(0.24, 0.3, 0.45, 'frog_leg', frogLeg);
         legBack.position.set(side * 0.45, 0.18, -0.25);
         legBack.rotation.x = -0.4;
-        const legFront = this.box(0.14, 0.28, 0.14, 0x3d9635);
+        const legFront = this.tbox(0.14, 0.28, 0.14, 'frog_leg', frogLeg);
         legFront.position.set(side * 0.3, 0.15, 0.3);
         g.add(legBack, legFront);
         parts.legs.push(legBack, legFront);
       }
     } else if (type === 'skeleton') {
-      const boneCol = 0xc9c9c9;
-      const body = this.box(0.45, 0.75, 0.22, 0xa8a8a8);
+      // ribcage torso, jointed bone limbs, cracked skull
+      const skelBody = (c) => {
+        c.fillStyle = '#8a8a8a'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#d8d8d8';
+        for (let yy = 2; yy < 12; yy += 3) c.fillRect(1, yy, 14, 2); // ribs
+        c.fillStyle = '#c0c0c0'; c.fillRect(7, 0, 2, 16);            // spine/sternum
+        c.fillStyle = '#6a6a6a'; c.fillRect(0, 13, 16, 3);           // pelvis shadow
+      };
+      const skelLimb = (c) => {
+        c.fillStyle = '#c9c9c9'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#e2e2e2'; c.fillRect(6, 0, 4, 16);            // shaft highlight
+        c.fillStyle = '#8a8a8a'; c.fillRect(0, 7, 16, 2);            // knee/elbow joint
+        c.fillStyle = '#a8a8a8'; c.fillRect(0, 0, 16, 2); c.fillRect(0, 14, 16, 2);
+      };
+      const skelSkull = (c) => {
+        c.fillStyle = '#c9c9c9'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#a8a8a8'; c.fillRect(0, 13, 16, 3);
+        c.fillStyle = '#8a8a8a'; c.fillRect(3, 4, 1, 4); c.fillRect(10, 7, 3, 1); // cracks
+      };
+      const body = this.tbox(0.45, 0.75, 0.22, 'skel_body', skelBody);
       body.position.y = 1.05;
-      const head = this.box(0.5, 0.5, 0.5, boneCol, this.skeletonFace());
+      const head = this.tbox(0.5, 0.5, 0.5, 'skel_skull', skelSkull, this.skeletonFace());
       head.position.y = 1.7;
       g.add(body, head);
       parts.head = head;
       for (const px of [-0.13, 0.13]) {
-        const leg = this.box(0.16, 0.7, 0.16, boneCol);
+        const leg = this.tbox(0.16, 0.7, 0.16, 'skel_limb', skelLimb);
         leg.position.set(px, 0.35, 0);
         g.add(leg); parts.legs.push(leg);
       }
       for (const px of [-0.3, 0.3]) {
-        const arm = this.box(0.14, 0.6, 0.14, boneCol);
+        const arm = this.tbox(0.14, 0.6, 0.14, 'skel_limb', skelLimb);
         arm.position.set(px, 1.15, 0);
         g.add(arm); parts.legs.push(arm);
       }
@@ -385,25 +452,49 @@ const Mobs = {
       bow.rotation.x = 0.4;
       g.add(bow);
     } else if (type === 'sheep') {
+      // white curl texture tinted by wool color, so dyed sheep still work
+      const woolCurls = (c) => {
+        c.fillStyle = '#ffffff'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#e2e2de';
+        for (let yy = 0; yy < 16; yy += 4) for (let xx = (yy / 4) % 2 * 2; xx < 16; xx += 4) c.fillRect(xx, yy, 2, 2);
+        this._skinSpeck(c, ['#f2f2ee', '#d6d6d0', '#ffffff'], 30, 11);
+      };
+      const sheepLeg = (c) => {
+        c.fillStyle = '#d8d8d0'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#e8e8e2'; c.fillRect(0, 0, 16, 5); // wool cuff
+        c.fillStyle = '#8a7a6a'; c.fillRect(0, 12, 16, 4); // hoof
+      };
       const woolCol = color ? COLOR_HEX[color] : 0xe8e8e8;
-      const body = this.box(0.9, 0.65, 0.6, woolCol);
+      const body = this.tbox(0.9, 0.65, 0.6, 'sheep_wool', woolCurls, null, { color: woolCol });
       body.position.y = 0.85;
-      const head = this.box(0.42, 0.42, 0.42, 0xe8e8e8, this.sheepFace());
+      const head = this.tbox(0.42, 0.42, 0.42, 'sheep_wool', woolCurls, this.sheepFace());
       head.position.set(0, 1.25, 0.5);
       g.add(body, head);
       parts.head = head;
       parts.wool.push(body);
       for (const [px, pz] of [[-0.25, 0.2], [0.25, 0.2], [-0.25, -0.2], [0.25, -0.2]]) {
-        const leg = this.box(0.16, 0.55, 0.16, 0xd8d8d0);
+        const leg = this.tbox(0.16, 0.55, 0.16, 'sheep_leg', sheepLeg);
         leg.position.set(px, 0.28, pz);
         g.add(leg); parts.legs.push(leg);
       }
     } else if (type === 'chicken') {
-      const body = this.box(0.5, 0.45, 0.6, 0xf5f5f5);
+      // feather streaks + layered wing rows
+      const chickenBody = (c) => {
+        c.fillStyle = '#f5f5f5'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#e4e4e0';
+        for (let yy = 3; yy < 16; yy += 4) for (let xx = 0; xx < 16; xx += 5) c.fillRect(xx + (yy % 2), yy, 3, 1);
+        this._skinSpeck(c, ['#ffffff', '#dcdcd6'], 16, 13);
+      };
+      const chickenWing = (c) => {
+        c.fillStyle = '#e8e8e8'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#d2d2cc'; c.fillRect(0, 5, 16, 1); c.fillRect(0, 10, 16, 1);
+        c.fillStyle = '#c2c2ba'; for (let xx = 1; xx < 16; xx += 4) { c.fillRect(xx, 12, 2, 4); }
+      };
+      const body = this.tbox(0.5, 0.45, 0.6, 'chicken_body', chickenBody);
       body.position.y = 0.5;
-      const head = this.box(0.3, 0.35, 0.3, 0xf5f5f5, this.chickenFace());
+      const head = this.tbox(0.3, 0.35, 0.3, 'chicken_body', chickenBody, this.chickenFace());
       head.position.set(0, 0.95, 0.25);
-      const tail = this.box(0.35, 0.3, 0.2, 0xe8e8e8);
+      const tail = this.tbox(0.35, 0.3, 0.2, 'chicken_wing', chickenWing);
       tail.position.set(0, 0.6, -0.3);
       g.add(body, head, tail);
       parts.head = head;
@@ -413,7 +504,7 @@ const Mobs = {
         g.add(leg); parts.legs.push(leg);
       }
       for (const side of [-1, 1]) {
-        const wing = this.box(0.08, 0.3, 0.4, 0xe8e8e8);
+        const wing = this.tbox(0.08, 0.3, 0.4, 'chicken_wing', chickenWing);
         wing.position.set(side * 0.3, 0.55, 0);
         g.add(wing); parts.legs.push(wing);
       }
@@ -437,45 +528,100 @@ const Mobs = {
         g.add(arm); parts.arms.push(arm); parts.legs.push(arm);
       }
     } else if (type === 'camel') {
-      const tan = 0xd2a24c;
-      const body = this.box(0.8, 0.7, 1.5, tan);
+      // shaggy sand fur, darker humps and hoofed legs
+      const camelFur = (c) => {
+        c.fillStyle = '#d2a24c'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#c1913e';
+        for (let yy = 2; yy < 16; yy += 3) for (let xx = 0; xx < 16; xx += 4) c.fillRect(xx + (yy % 3), yy, 2, 1);
+        this._skinSpeck(c, ['#e0b45e', '#b8853c'], 20, 17);
+      };
+      const camelHump = (c) => {
+        c.fillStyle = '#b8853c'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#a87632'; for (let yy = 1; yy < 16; yy += 3) c.fillRect(0, yy, 16, 1);
+        c.fillStyle = '#c99b4a'; c.fillRect(2, 1, 12, 2);
+      };
+      const camelLeg = (c) => {
+        c.fillStyle = '#b8853c'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#a87632'; c.fillRect(0, 6, 16, 1); c.fillRect(0, 11, 16, 1);
+        c.fillStyle = '#6b4f26'; c.fillRect(0, 13, 16, 3); // hoof
+      };
+      const body = this.tbox(0.8, 0.7, 1.5, 'camel_fur', camelFur);
       body.position.y = 1.15;
-      const hump1 = this.box(0.5, 0.35, 0.45, 0xb8853c);
+      const hump1 = this.tbox(0.5, 0.35, 0.45, 'camel_hump', camelHump);
       hump1.position.set(0, 1.65, 0.35);
-      const hump2 = this.box(0.5, 0.35, 0.45, 0xb8853c);
+      const hump2 = this.tbox(0.5, 0.35, 0.45, 'camel_hump', camelHump);
       hump2.position.set(0, 1.65, -0.35);
-      const neck = this.box(0.3, 0.6, 0.3, tan);
+      const neck = this.tbox(0.3, 0.6, 0.3, 'camel_fur', camelFur);
       neck.position.set(0, 1.7, 0.75);
-      const head = this.box(0.35, 0.35, 0.5, tan, this.camelFace());
+      const head = this.tbox(0.35, 0.35, 0.5, 'camel_fur', camelFur, this.camelFace());
       head.position.set(0, 2.05, 0.9);
       g.add(body, hump1, hump2, neck, head);
       parts.head = head;
       for (const [px, pz] of [[-0.28, 0.55], [0.28, 0.55], [-0.28, -0.55], [0.28, -0.55]]) {
-        const leg = this.box(0.18, 0.8, 0.18, 0xb8853c);
+        const leg = this.tbox(0.18, 0.8, 0.18, 'camel_leg', camelLeg);
         leg.position.set(px, 0.4, pz);
         g.add(leg); parts.legs.push(leg);
       }
     } else if (type === 'spider') {
-      const dark = 0x2a2028;
-      const body = this.box(0.85, 0.45, 0.85, dark);
+      // bristly abdomen with a red marking, banded chitin legs
+      const spiderBody = (c) => {
+        c.fillStyle = '#2a2028'; c.fillRect(0, 0, 16, 16);
+        this._skinSpeck(c, ['#3a3038', '#1a1418', '#453a44'], 34, 19);
+        c.fillStyle = '#c02020'; c.fillRect(7, 3, 2, 3); c.fillRect(6, 6, 4, 2); c.fillRect(7, 8, 2, 3);
+        c.fillStyle = '#801515'; c.fillRect(7, 6, 2, 2);
+      };
+      const spiderLeg = (c) => {
+        c.fillStyle = '#1a1418'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#332a32'; c.fillRect(4, 0, 2, 16); c.fillRect(10, 0, 2, 16); // joint bands
+        c.fillStyle = '#0d0a0d'; c.fillRect(14, 0, 2, 16);
+      };
+      const body = this.tbox(0.85, 0.45, 0.85, 'spider_body', spiderBody);
       body.position.y = 0.45;
-      const head = this.box(0.5, 0.4, 0.5, dark, this.spiderFace());
+      const head = this.tbox(0.5, 0.4, 0.5, 'spider_head', (c) => {
+        c.fillStyle = '#2a2028'; c.fillRect(0, 0, 16, 16);
+        this._skinSpeck(c, ['#3a3038', '#1a1418'], 22, 23);
+      }, this.spiderFace());
       head.position.set(0, 0.45, 0.6);
       g.add(body, head);
       parts.head = head;
       for (const side of [-1, 1]) {
         for (let l = 0; l < 4; l++) {
-          const leg = this.box(0.5, 0.08, 0.08, 0x1a1418);
+          const leg = this.tbox(0.5, 0.08, 0.08, 'spider_leg', spiderLeg);
           leg.position.set(side * 0.6, 0.4, -0.3 + l * 0.2);
           leg.rotation.z = -side * 0.45; // outer tips point DOWN (spiders are no longer doing yoga)
           g.add(leg); parts.legs.push(leg);
         }
       }
     } else if (type === 'humbug') {
-      const skin = 0x9aa0a6;
-      const body = this.box(0.55, 0.85, 0.35, 0x3a3f45);
+      // corporate menace: suit jacket with lapels and buttons, cuffed sleeves
+      const humbugSuit = (c) => {
+        c.fillStyle = '#3a3f45'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#2a2f35';
+        for (let i = 0; i < 6; i++) { c.fillRect(5 - i > 0 ? 5 - i : 0, i, 2, 1); c.fillRect(9 + i < 15 ? 9 + i : 14, i, 2, 1); } // lapel V
+        c.fillRect(7, 0, 2, 16); // jacket opening
+        c.fillStyle = '#c9ced4'; c.fillRect(6, 7, 1, 1); c.fillRect(6, 10, 1, 1); // buttons
+        c.fillStyle = '#6a7076'; c.fillRect(0, 0, 16, 1); // collar
+        c.fillStyle = '#c02020'; c.fillRect(7, 1, 2, 4);  // tie
+      };
+      const humbugArm = (c) => {
+        c.fillStyle = '#3a3f45'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#2a2f35'; c.fillRect(0, 5, 16, 1);
+        c.fillStyle = '#6a7076'; c.fillRect(0, 11, 16, 1); // cuff
+        c.fillStyle = '#9aa0a6'; c.fillRect(0, 12, 16, 4); // hand
+      };
+      const humbugLeg = (c) => {
+        c.fillStyle = '#2a2f35'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#22262b'; c.fillRect(7, 0, 2, 16);
+        c.fillStyle = '#17191c'; c.fillRect(0, 13, 16, 3); // shoes
+      };
+      const humbugHead = (c) => {
+        c.fillStyle = '#9aa0a6'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#8a9096'; c.fillRect(0, 0, 16, 3); // dour brow shading
+        this._skinSpeck(c, ['#a8aeb4', '#8a9096'], 12, 29);
+      };
+      const body = this.tbox(0.55, 0.85, 0.35, 'humbug_suit', humbugSuit);
       body.position.y = 1.0;
-      const head = this.box(0.58, 0.58, 0.58, skin, this.humbugFace());
+      const head = this.tbox(0.58, 0.58, 0.58, 'humbug_head', humbugHead, this.humbugFace());
       head.position.y = 1.85;
       const antenna = this.box(0.06, 0.35, 0.06, 0x6a7076);
       antenna.position.y = 2.3;
@@ -484,12 +630,12 @@ const Mobs = {
       g.add(body, head, antenna, antennaTip);
       parts.head = head;
       for (const px of [-0.15, 0.15]) {
-        const leg = this.box(0.2, 0.55, 0.2, 0x2a2f35);
+        const leg = this.tbox(0.2, 0.55, 0.2, 'humbug_leg', humbugLeg);
         leg.position.set(px, 0.28, 0);
         g.add(leg); parts.legs.push(leg);
       }
       for (const px of [-0.38, 0.38]) {
-        const arm = this.box(0.16, 0.6, 0.16, 0x3a3f45);
+        const arm = this.tbox(0.16, 0.6, 0.16, 'humbug_arm', humbugArm);
         arm.position.set(px, 1.15, 0);
         g.add(arm); parts.legs.push(arm);
       }
@@ -501,31 +647,69 @@ const Mobs = {
       }
     } else if (type === 'tung') {
       // TUNG TUNG TUNG SAHUR: a log with terrible intentions and a baseball bat
-      const wood = 0x6b502e;
-      const body = this.box(0.7, 1.7, 0.7, wood, this.tungFace());
+      const tungBark = (c) => {
+        c.fillStyle = '#6b502e'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#5a4226';
+        for (let xx = 0; xx < 16; xx += 3) c.fillRect(xx, 0, 1, 16); // bark grain
+        c.fillStyle = '#7a5c36'; c.fillRect(2, 0, 1, 16); c.fillRect(8, 0, 1, 16); c.fillRect(13, 0, 1, 16);
+        this._skinSpeck(c, ['#5a4226', '#7a5c36'], 14, 31);
+      };
+      const tungLimb = (c) => {
+        c.fillStyle = '#5a4226'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#4a3521'; c.fillRect(5, 0, 2, 16); c.fillRect(11, 0, 1, 16);
+        c.fillStyle = '#6b502e'; c.fillRect(0, 0, 1, 16);
+      };
+      const batWood = (c) => {
+        c.fillStyle = '#d2a24c'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#b8853c'; c.fillRect(4, 0, 1, 16); c.fillRect(10, 0, 1, 16); // grain
+        c.fillStyle = '#6b4f26'; c.fillRect(0, 12, 16, 4); // grip tape
+      };
+      const body = this.tbox(0.7, 1.7, 0.7, 'tung_bark', tungBark, this.tungFace());
       body.position.y = 1.3;
-      const rings = this.box(0.75, 0.12, 0.75, 0x5a4226);
+      const rings = this.tbox(0.75, 0.12, 0.75, 'tung_limb', tungLimb);
       rings.position.y = 2.0;
       g.add(body, rings);
       parts.head = body;
       for (const px of [-0.2, 0.2]) {
-        const leg = this.box(0.22, 0.45, 0.22, 0x5a4226);
+        const leg = this.tbox(0.22, 0.45, 0.22, 'tung_limb', tungLimb);
         leg.position.set(px, 0.22, 0);
         g.add(leg); parts.legs.push(leg);
       }
-      const arm = this.box(0.16, 0.7, 0.16, 0x5a4226);
+      const arm = this.tbox(0.16, 0.7, 0.16, 'tung_limb', tungLimb);
       arm.position.set(0.45, 1.5, 0);
       g.add(arm); parts.legs.push(arm);
-      const bat = this.box(0.14, 0.85, 0.14, 0xd2a24c);
+      const bat = this.tbox(0.14, 0.85, 0.14, 'tung_bat', batWood);
       bat.position.set(0.45, 2.0, 0.25);
       bat.rotation.x = 0.6;
       g.add(bat);
       parts.bat = bat;
     } else { // Mr Floop
-      const skin = 0x7ec48a;
-      const body = this.box(0.55, 0.85, 0.35, 0x3d6b8f);
+      // festive blue coat with white trim + gold buttons, mossy green skin
+      const floopCoat = (c) => {
+        c.fillStyle = '#3d6b8f'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#33597a'; c.fillRect(7, 0, 2, 16); // coat opening
+        c.fillStyle = '#ffd700'; c.fillRect(6, 4, 1, 1); c.fillRect(6, 8, 1, 1); c.fillRect(6, 12, 1, 1);
+        c.fillStyle = '#ffffff'; c.fillRect(0, 0, 16, 2); c.fillRect(0, 14, 16, 2); // fur trim
+        this._skinSpeck(c, ['#477aa3', '#33597a'], 12, 37);
+      };
+      const floopArm = (c) => {
+        c.fillStyle = '#3d6b8f'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#ffffff'; c.fillRect(0, 10, 16, 2); // cuff
+        c.fillStyle = '#7ec48a'; c.fillRect(0, 12, 16, 4); // hand
+      };
+      const floopLeg = (c) => {
+        c.fillStyle = '#2d4b66'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#243d54'; c.fillRect(7, 0, 2, 16);
+        c.fillStyle = '#17191c'; c.fillRect(0, 13, 16, 3); // boots
+      };
+      const floopHead = (c) => {
+        c.fillStyle = '#7ec48a'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#6fb37b'; c.fillRect(0, 0, 16, 3);
+        this._skinSpeck(c, ['#8fd49a', '#6fb37b'], 14, 41);
+      };
+      const body = this.tbox(0.55, 0.85, 0.35, 'floop_coat', floopCoat);
       body.position.y = 1.0;
-      const head = this.box(0.6, 0.6, 0.6, skin, this.floopFace());
+      const head = this.tbox(0.6, 0.6, 0.6, 'floop_head', floopHead, this.floopFace());
       head.position.y = 1.85;
       const nose = this.box(0.18, 0.18, 0.35, 0x5da36c);
       nose.position.set(0, 1.78, 0.42);
@@ -538,12 +722,12 @@ const Mobs = {
       g.add(body, head, nose, hat, hatTop, pom);
       parts.head = head;
       for (const px of [-0.15, 0.15]) {
-        const leg = this.box(0.2, 0.55, 0.2, 0x2d4b66);
+        const leg = this.tbox(0.2, 0.55, 0.2, 'floop_leg', floopLeg);
         leg.position.set(px, 0.28, 0);
         g.add(leg); parts.legs.push(leg);
       }
       for (const px of [-0.38, 0.38]) {
-        const arm = this.box(0.16, 0.6, 0.16, 0x3d6b8f);
+        const arm = this.tbox(0.16, 0.6, 0.16, 'floop_arm', floopArm);
         arm.position.set(px, 1.15, 0);
         g.add(arm); parts.legs.push(arm);
       }
@@ -849,6 +1033,18 @@ const Mobs = {
         this.scene.remove(a.mesh); a.mesh.geometry.dispose();
         this.arrows.splice(i, 1);
         continue;
+      }
+      // match voxel lighting like mobs/drops do (arrows used to glow in caves)
+      a._tintT = (a._tintT || 0) - dt;
+      if (a._tintT <= 0) {
+        a._tintT = 0.20;
+        const raw = World.getLightRaw(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z));
+        const l = Math.max(0.06, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
+        const mt = a.mesh.material;
+        if (mt && mt.color) {
+          if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone();
+          mt.color.copy(mt.userData.mobBaseCol).multiplyScalar(l);
+        }
       }
       if (a.stuck) continue;
       a.vy -= (a.gravity !== undefined ? a.gravity : 18) * dt;
@@ -1241,7 +1437,8 @@ const Mobs = {
     if (!World.hasChunk || !World.hasChunk(Math.floor(x), Math.floor(z))) return false;
     const w = MOB_WIDTHS[type] || 0.35;
     const h = MOB_HEIGHTS[type] || 1.8;
-    if (y < 1 || y + h >= World.H - 1) return false;
+    // no upper bound: the world is sparse-infinite above H (player skybases)
+    if (y < 1) return false;
     if (Physics.boxesIn(x - w, y + 0.04, z - w, x + w, y + h - 0.04, z + w).length) return false;
     const footId = World.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
     const belowId = World.getBlock(Math.floor(x), Math.floor(y - 0.16), Math.floor(z));
@@ -1252,7 +1449,7 @@ const Mobs = {
 
   pathCanStand(mob, cx, y, cz) {
     if (typeof World === 'undefined' || !World.hasChunk || !World.hasChunk(cx, cz)) return false;
-    if (y < 1 || y > World.H - 3) return false;
+    if (y < 1) return false; // no upper bound: sparse-infinite above H
     const dims = this.pathBodyDims(mob);
     const w = dims.w, h = dims.h;
     const x = cx + 0.5, z = cz + 0.5;
@@ -2570,12 +2767,14 @@ const Mobs = {
   surfaceSpot(p, minR, maxR) {
     const a = Math.random() * Math.PI * 2;
     const r = minR + Math.random() * (maxR - minR);
-    return this.surfaceSpotAt(Math.round(p.x + Math.cos(a) * r), Math.round(p.z + Math.sin(a) * r));
+    // scan from above the player too, so skybase platforms above H get spawns
+    return this.surfaceSpotAt(Math.round(p.x + Math.cos(a) * r), Math.round(p.z + Math.sin(a) * r), Math.floor(p.y) + 24);
   },
 
-  surfaceSpotAt(x, z) {
+  surfaceSpotAt(x, z, topHint) {
     if (!World.hasChunk(x, z)) return null;
-    for (let y = World.H - 2; y > 1; y--) {
+    const top = Math.max(World.H - 2, Math.floor(topHint || 0));
+    for (let y = top; y > 1; y--) {
       const id = World.getBlock(x, y, z);
       if (id !== B.AIR) {
         if (isFluid(id)) return null;

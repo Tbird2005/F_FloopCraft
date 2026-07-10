@@ -194,8 +194,18 @@ const World = {
     return this.isBorderLineColumn(x, z) || this.isOutsideBorderWallColumn(x, z);
   },
   borderSurfaceY(x, z) {
-    const h = this.heightAt(Math.max(this.minPlayableCoord(), Math.min(this.maxPlayableCoord(), Math.floor(x))), Math.max(this.minPlayableCoord(), Math.min(this.maxPlayableCoord(), Math.floor(z))));
-    return Math.max(1, Math.min(this.H - 2, h <= this.SEA ? this.SEA : h));
+    // Memoized: borderBlockOverride calls this for EVERY block read on a border
+    // column (meshing/physics), and heightAt runs up to 5 noise evaluations.
+    const key = Math.floor(x) + ',' + Math.floor(z);
+    const memo = this._borderSurfMemo || (this._borderSurfMemo = new Map());
+    let v = memo.get(key);
+    if (v === undefined) {
+      const h = this.heightAt(Math.max(this.minPlayableCoord(), Math.min(this.maxPlayableCoord(), Math.floor(x))), Math.max(this.minPlayableCoord(), Math.min(this.maxPlayableCoord(), Math.floor(z))));
+      v = Math.max(1, Math.min(this.H - 2, h <= this.SEA ? this.SEA : h));
+      if (memo.size > 8192) memo.clear();
+      memo.set(key, v);
+    }
+    return v;
   },
   borderBlockOverride(x, y, z) {
     x = Math.floor(x); z = Math.floor(z);
@@ -274,11 +284,19 @@ const World = {
   },
 
   rebuildLightBuckets() {
+    // These buckets serve ONLY sparseBlockLightAt (queries at y >= H). A light
+    // can reach at most 15 blocks, so anything below H-15 can never matter —
+    // and that is ~all of them (underground lava/torches). Filtering here keeps
+    // the buckets near-empty, which makes both rebuilds and queries ~free.
+    // (A border-wall chunk was calling this with 22k unfiltered lights: seconds
+    // of rebuild churn per mesh while chunks streamed in.)
     const buckets = new Map();
+    const yMin = this.H - 15;
     if (this.lights && this.lights.size) {
       for (const v of this.lights.values()) {
         if (!v || v.length < 3) continue;
         const x = Math.floor(v[0]), y = Math.floor(v[1]), z = Math.floor(v[2]);
+        if (y < yMin) continue;
         if (!Number.isFinite(x + y + z)) continue;
         const k = this.lightBucketKey(x, y, z);
         let arr = buckets.get(k);
@@ -303,6 +321,8 @@ const World = {
     if (!this.lightBuckets || this._lightBucketCount !== this.lights.size || this._lightBucketBuiltVersion !== (this._lightBucketVersion || 0)) {
       this.rebuildLightBuckets();
     }
+    // buckets only hold lights high enough to reach y >= H; usually none exist
+    if (!this.lightBuckets.size) return 0;
     const cx = this.chunkCoord(x), cy = Math.floor(y / 16), cz = this.chunkCoord(z);
     let best = 0;
     for (let dxs = -1; dxs <= 1; dxs++) {
@@ -1851,6 +1871,7 @@ const World = {
     const rankChest = typeof dungeonChestBlockForRank === 'function' ? dungeonChestBlockForRank(rankInfo.rank) : B.CHEST;
     const rankCrate = typeof dungeonCrateBlockForRank === 'function' ? dungeonCrateBlockForRank(rankInfo.rank) : B.LOOT_CRATE;
     const rankSpawner = typeof dungeonSpawnerBlockForRank === 'function' ? dungeonSpawnerBlockForRank(rankInfo.rank) : B.SPAWNER;
+    const rankBrick = typeof dungeonBrickForRank === 'function' ? dungeonBrickForRank(rankInfo.rank) : B.DUNGEON_BRICK;
     const conqueredAlready = this.dungeonConquered && this.dungeonConquered.has(k);
 
     const cells = new Map();
@@ -1870,7 +1891,7 @@ const World = {
         const shell = x < cx0 || x >= cx0 + w || y < y0 || y >= y0 + hgt || z < cz0 || z >= cz0 + l;
         if (shell) {
           if (!cells.has(this.pkey(x, y, z))) {
-            setC(x, y, z, B.DUNGEON_BRICK);
+            setC(x, y, z, rankBrick);
           }
         } else setC(x, y, z, B.AIR);
       }
@@ -1907,16 +1928,16 @@ const World = {
         for (let o = 0; o < 2; o++) {
           const ox = dz !== 0 ? o : 0, oz = dx !== 0 ? o : 0;
           for (let y = y0; y < y0 + 3; y++) setC(x + ox, y, z + oz, B.AIR);
-          if (!cells.has(this.pkey(x + ox, y0 - 1, z + oz))) setC(x + ox, y0 - 1, z + oz, B.DUNGEON_BRICK);
-          if (!cells.has(this.pkey(x + ox, y0 + 3, z + oz))) setC(x + ox, y0 + 3, z + oz, B.DUNGEON_BRICK);
+          if (!cells.has(this.pkey(x + ox, y0 - 1, z + oz))) setC(x + ox, y0 - 1, z + oz, rankBrick);
+          if (!cells.has(this.pkey(x + ox, y0 + 3, z + oz))) setC(x + ox, y0 + 3, z + oz, rankBrick);
         }
         for (let y = y0; y < y0 + 3; y++) {
           if (dx !== 0) {
-            if (!cells.has(this.pkey(x, y, z - 1))) setC(x, y, z - 1, B.DUNGEON_BRICK);
-            if (!cells.has(this.pkey(x, y, z + 2))) setC(x, y, z + 2, B.DUNGEON_BRICK);
+            if (!cells.has(this.pkey(x, y, z - 1))) setC(x, y, z - 1, rankBrick);
+            if (!cells.has(this.pkey(x, y, z + 2))) setC(x, y, z + 2, rankBrick);
           } else {
-            if (!cells.has(this.pkey(x - 1, y, z))) setC(x - 1, y, z, B.DUNGEON_BRICK);
-            if (!cells.has(this.pkey(x + 2, y, z))) setC(x + 2, y, z, B.DUNGEON_BRICK);
+            if (!cells.has(this.pkey(x - 1, y, z))) setC(x - 1, y, z, rankBrick);
+            if (!cells.has(this.pkey(x + 2, y, z))) setC(x + 2, y, z, rankBrick);
           }
         }
       }
@@ -1949,16 +1970,16 @@ const World = {
             setC(px, y, pz, B.AIR);
           }
         }
-        if (!cells.has(this.pkey(px, baseY - 1, pz))) setC(px, baseY - 1, pz, B.DUNGEON_BRICK);
-        if (!cells.has(this.pkey(px, baseY + 3, pz))) setC(px, baseY + 3, pz, B.DUNGEON_BRICK);
+        if (!cells.has(this.pkey(px, baseY - 1, pz))) setC(px, baseY - 1, pz, rankBrick);
+        if (!cells.has(this.pkey(px, baseY + 3, pz))) setC(px, baseY + 3, pz, rankBrick);
       }
       for (let y = baseY; y < baseY + 3; y++) {
         if (axis === 'z') {
-          if (!cells.has(this.pkey(x - 1, y, z))) setC(x - 1, y, z, B.DUNGEON_BRICK);
-          if (!cells.has(this.pkey(x + 2, y, z))) setC(x + 2, y, z, B.DUNGEON_BRICK);
+          if (!cells.has(this.pkey(x - 1, y, z))) setC(x - 1, y, z, rankBrick);
+          if (!cells.has(this.pkey(x + 2, y, z))) setC(x + 2, y, z, rankBrick);
         } else {
-          if (!cells.has(this.pkey(x, y, z - 1))) setC(x, y, z - 1, B.DUNGEON_BRICK);
-          if (!cells.has(this.pkey(x, y, z + 2))) setC(x, y, z + 2, B.DUNGEON_BRICK);
+          if (!cells.has(this.pkey(x, y, z - 1))) setC(x, y, z - 1, rankBrick);
+          if (!cells.has(this.pkey(x, y, z + 2))) setC(x, y, z + 2, rankBrick);
         }
       }
     };
@@ -2011,7 +2032,7 @@ const World = {
       const surfaceFloorY = Math.min(this.H - 5, Math.max(first.y + 8, this.heightAt(shaftX, shaftZ)));
       const setWall = (x, y, z) => {
         const old = cells.get(this.pkey(x, y, z));
-        if (!old || old.id === B.DUNGEON_BRICK) setC(x, y, z, B.DUNGEON_BRICK);
+        if (!old || old.id === rankBrick) setC(x, y, z, rankBrick);
       };
       carveGuaranteedPath({ x: shaftX, z: shaftZ }, walkPoints[0]);
 
@@ -2067,7 +2088,7 @@ const World = {
       }
       for (let z = shaftZ + 3; z <= shaftZ + 5; z++) {
         for (let x = shaftX - 1; x <= shaftX + 1; x++) {
-          setC(x, surfaceFloorY, z, B.DUNGEON_BRICK);
+          setC(x, surfaceFloorY, z, rankBrick);
           setC(x, surfaceFloorY + 1, z, B.AIR);
           setC(x, surfaceFloorY + 2, z, B.AIR);
           setC(x, surfaceFloorY + 3, z, B.AIR);
@@ -2143,15 +2164,19 @@ const World = {
     return null;
   },
 
-  deactivatedDungeonBlockId(id) {
-    if (id === B.DUNGEON_BRICK || id === B.DUNGEON_CORE || isDungeonDoor(id)) return B.DUNGEON_BRICK_INACTIVE;
+  deactivatedDungeonBlockId(id, rank) {
+    // each rank's active brick quiets into ITS OWN inactive brick
+    if (typeof DUNGEON_BRICK_TO_INACTIVE !== 'undefined' && DUNGEON_BRICK_TO_INACTIVE[id] !== undefined) return DUNGEON_BRICK_TO_INACTIVE[id];
+    if (id === B.DUNGEON_CORE || isDungeonDoor(id)) {
+      return (typeof dungeonBrickInactiveForRank === 'function') ? dungeonBrickInactiveForRank(rank) : B.DUNGEON_BRICK_INACTIVE;
+    }
     if (typeof isSpawnerBlock === 'function' && isSpawnerBlock(id)) return B.BROKEN_SPAWNER;
     if (id === B.SPAWNER) return B.BROKEN_SPAWNER;
     return id;
   },
 
   isProtectedDungeonBlock(x, y, z, id) {
-    if (id === B.DUNGEON_CORE || id === B.DUNGEON_BRICK_INACTIVE) return false;
+    if (id === B.DUNGEON_CORE || (typeof isInactiveDungeonBrick === 'function' ? isInactiveDungeonBrick(id) : id === B.DUNGEON_BRICK_INACTIVE)) return false;
     const storage = typeof isStorageChestBlock === 'function' ? isStorageChestBlock(id) : (id === B.LOOT_CRATE || id === B.CHEST || id === B.JELLY_CHEST);
     const spawnerLike = typeof isSpawnerBlock === 'function' ? isSpawnerBlock(id) : id === B.SPAWNER;
     const protectedContent = storage || spawnerLike || id === B.BROKEN_SPAWNER || id === B.ROPE_LADDER || id === B.LORE || id === B.TORCH;
@@ -2179,7 +2204,7 @@ const World = {
         const lx = this.localCoord(cell.x), lz = this.localCoord(cell.z);
         const idx = this.idx(lx, cell.y, lz);
         const oldId = ch.blocks[idx];
-        const newId = this.deactivatedDungeonBlockId(oldId);
+        const newId = this.deactivatedDungeonBlockId(oldId, dg.rank);
         if (newId === oldId) continue;
         ch.blocks[idx] = newId;
         const pk = this.pkey(cell.x, cell.y, cell.z);
@@ -2197,6 +2222,11 @@ const World = {
       }
     }
     if (touched.size && typeof UI !== 'undefined') UI.chat('Dungeon conquered. Its active blocks have gone quiet.', '#c77dff');
+    // this mass flip writes raw chunk data (not setBlock), so it needs its own
+    // replication: peers re-run the same deterministic flip on their side
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.onDungeonDeactivated && !Multiplayer.applyingRemote) {
+      Multiplayer.onDungeonDeactivated(x, y, z);
+    }
     return touched.size;
   },
 
