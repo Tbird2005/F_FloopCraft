@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v119',
+  versionTag: 'ffloopcraft-v1080',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -1301,7 +1301,7 @@ const Multiplayer = {
       return Mobs.list.filter(m => m && !m.dead).map(m => {
         if (!m.mpId) m.mpId = 'm' + (this.mobSeq++).toString(36) + '_' + Math.random().toString(36).slice(2, 5);
         const b = m.body;
-        return { mid:m.mpId, t:m.type, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), h:b.h, w:b.w, hp:m.hp, g:m.gunId || 0, c:m.color || 0, yaw:+(m.yaw||0).toFixed(4), flash:m.flash || 0 };
+        return { mid:m.mpId, t:m.type, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), h:b.h, w:b.w, hp:m.hp, g:m.gunId || 0, c:m.color || 0, yaw:+(m.yaw||0).toFixed(4), flash:m.flash || 0, atk:m.attackSwingT || 0 };
       });
     },
 
@@ -1391,7 +1391,7 @@ const Multiplayer = {
           } else World.furnaces.set(k, f);
         }
         for (const k of [...World.furnaces.keys()]) if (!incomingFurn.has(k) && !recent.has(k)) World.furnaces.delete(k);
-        if (typeof UI !== 'undefined' && UI.screen === 'furnace' && UI.refreshAll) UI.refreshAll();
+        if (typeof UI !== 'undefined' && (UI.screen === 'furnace' || UI.screen === 'oxygenBench') && UI.refreshAll) UI.refreshAll();
         for (const k of World.chunks.keys()) World.dirty.add(k);
       } finally { this.applyingRemote = false; }
     },
@@ -1411,7 +1411,7 @@ const Multiplayer = {
         const b = m.body;
         b.x = +s.x; b.y = +s.y; b.z = +s.z; b.vx = +s.vx || 0; b.vy = +s.vy || 0; b.vz = +s.vz || 0;
         m.hp = Number.isFinite(+s.hp) ? +s.hp : m.hp;
-        m.yaw = +s.yaw || 0; m.flash = +s.flash || 0;
+        m.yaw = +s.yaw || 0; m.flash = +s.flash || 0; m.attackSwingT = +s.atk || 0;
         if (m.group) { m.group.position.set(b.x, b.y, b.z); m.group.rotation.y = m.yaw; }
       }
       for (let i = Mobs.list.length - 1; i >= 0; i--) {
@@ -1939,25 +1939,94 @@ const Multiplayer = {
       p.armorMeshes = []; p.armorSig = sig;
       const addArmor = (parent, geom, pos, id, slot) => {
         if (!id || !Reg[id]) return;
-        const mat = this.makePeerArmorMaterial(id, slot);
-        const mesh = new THREE.Mesh(geom, mat);
+        const mesh = new THREE.Mesh(geom, this.makePeerArmorMaterial(id, slot));
         mesh.position.copy(pos);
+        mesh.renderOrder = 1;
         mesh.userData.disposeWithArmor = true;
         parent.add(mesh);
         p.armorMeshes.push(mesh);
       };
-      // Opaque, texture-mapped armor pieces. Slot 3 uses boot geometry instead of being ignored.
-      addArmor(p.parts.head, new THREE.BoxGeometry(0.54,0.32,0.54), new THREE.Vector3(0,0.08,0), armor[0] && armor[0].id, 0);
-      addArmor(p.parts.body, new THREE.BoxGeometry(0.64,0.84,0.36), new THREE.Vector3(0,0,0), armor[1] && armor[1].id, 1);
-      addArmor(p.parts.legL, new THREE.BoxGeometry(0.25,0.62,0.25), new THREE.Vector3(0,-0.02,0), armor[2] && armor[2].id, 2);
-      addArmor(p.parts.legR, new THREE.BoxGeometry(0.25,0.62,0.25), new THREE.Vector3(0,-0.02,0), armor[2] && armor[2].id, 2);
-      addArmor(p.parts.legL, new THREE.BoxGeometry(0.28,0.24,0.28), new THREE.Vector3(0,-0.24,0), armor[3] && armor[3].id, 3);
-      addArmor(p.parts.legR, new THREE.BoxGeometry(0.28,0.24,0.28), new THREE.Vector3(0,-0.24,0), armor[3] && armor[3].id, 3);
+      const addPart = (parent, geom, pos, id, slot, rot) => {
+        if (!id || !Reg[id]) return;
+        const mesh = new THREE.Mesh(geom, this.makePeerArmorMaterial(id, slot));
+        mesh.position.copy(pos);
+        if (rot) mesh.rotation.set(rot.x || 0, rot.y || 0, rot.z || 0);
+        mesh.renderOrder = 1;
+        mesh.userData.disposeWithArmor = true;
+        parent.add(mesh); p.armorMeshes.push(mesh);
+      };
+      const helmetId = armor[0] && armor[0].id, chestId = armor[1] && armor[1].id;
+      const legsId = armor[2] && armor[2].id, bootsId = armor[3] && armor[3].id;
+      const divingHelmet = helmetId === I.DIVING_HELMET, divingChest = chestId === I.DIVING_CHEST;
+      const divingLegs = legsId === I.DIVING_LEGS, divingBoots = bootsId === I.DIVING_BOOTS;
+
+      if (helmetId && !divingHelmet) addArmor(p.parts.head, new THREE.BoxGeometry(0.54,0.32,0.54), new THREE.Vector3(0,0.08,0), helmetId, 0);
+      if (divingHelmet) {
+        addPart(p.parts.head, new THREE.BoxGeometry(0.62,0.15,0.60), new THREE.Vector3(0,0.20,0), helmetId, 0);
+        addPart(p.parts.head, new THREE.BoxGeometry(0.60,0.10,0.58), new THREE.Vector3(0,-0.10,0), helmetId, 0);
+        addPart(p.parts.head, new THREE.BoxGeometry(0.11,0.25,0.20), new THREE.Vector3(-0.315,0.035,-0.055), helmetId, 0);
+        addPart(p.parts.head, new THREE.BoxGeometry(0.11,0.25,0.20), new THREE.Vector3(0.315,0.035,-0.055), helmetId, 0);
+        const visorMat = new THREE.MeshLambertMaterial({ color:0x7df5ec, transparent:true, opacity:0.50, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-3, polygonOffsetUnits:-3 });
+        visorMat.userData.baseColor = new THREE.Color(0x7df5ec);
+        const visor = new THREE.Mesh(new THREE.BoxGeometry(0.47,0.23,0.035), visorMat);
+        visor.position.set(0,0.045,-0.325); visor.renderOrder = 2; visor.userData.disposeWithArmor = true;
+        p.parts.head.add(visor); p.armorMeshes.push(visor);
+        addPart(p.parts.head, new THREE.BoxGeometry(0.08,0.08,0.055), new THREE.Vector3(-0.245,0.17,-0.337), helmetId, 0);
+        addPart(p.parts.head, new THREE.BoxGeometry(0.08,0.08,0.055), new THREE.Vector3(0.245,0.17,-0.337), helmetId, 0);
+      }
+
+      if (chestId && !divingChest) addArmor(p.parts.body, new THREE.BoxGeometry(0.64,0.84,0.36), new THREE.Vector3(0,0,0), chestId, 1);
+      if (divingChest) {
+        addPart(p.parts.body, new THREE.BoxGeometry(0.69,0.80,0.40), new THREE.Vector3(0,0,0), chestId, 1);
+        addPart(p.parts.body, new THREE.BoxGeometry(0.62,0.11,0.44), new THREE.Vector3(0,0.32,0), chestId, 1);
+        addPart(p.parts.body, new THREE.BoxGeometry(0.31,0.20,0.09), new THREE.Vector3(0,0.08,-0.235), chestId, 1);
+        addPart(p.parts.body, new THREE.BoxGeometry(0.07,0.62,0.045), new THREE.Vector3(-0.22,-0.02,-0.235), chestId, 1);
+        addPart(p.parts.body, new THREE.BoxGeometry(0.07,0.62,0.045), new THREE.Vector3(0.22,-0.02,-0.235), chestId, 1);
+        addPart(p.parts.armL, new THREE.BoxGeometry(0.34,0.22,0.40), new THREE.Vector3(0,0.24,0), chestId, 1);
+        addPart(p.parts.armR, new THREE.BoxGeometry(0.34,0.22,0.40), new THREE.Vector3(0,0.24,0), chestId, 1);
+      }
+
+      if (legsId && !divingLegs) {
+        addArmor(p.parts.legL, new THREE.BoxGeometry(0.25,0.62,0.25), new THREE.Vector3(0,-0.02,0), legsId, 2);
+        addArmor(p.parts.legR, new THREE.BoxGeometry(0.25,0.62,0.25), new THREE.Vector3(0,-0.02,0), legsId, 2);
+      }
+      if (divingLegs) for (const leg of [p.parts.legL, p.parts.legR]) {
+        addPart(leg, new THREE.BoxGeometry(0.29,0.61,0.29), new THREE.Vector3(0,-0.02,0), legsId, 2);
+        addPart(leg, new THREE.BoxGeometry(0.22,0.18,0.055), new THREE.Vector3(0,-0.10,-0.182), legsId, 2);
+        addPart(leg, new THREE.BoxGeometry(0.08,0.42,0.04), new THREE.Vector3(0.12,0.02,-0.172), legsId, 2);
+      }
+
+      if (bootsId && !divingBoots) {
+        addArmor(p.parts.legL, new THREE.BoxGeometry(0.28,0.24,0.28), new THREE.Vector3(0,-0.24,0), bootsId, 3);
+        addArmor(p.parts.legR, new THREE.BoxGeometry(0.28,0.24,0.28), new THREE.Vector3(0,-0.24,0), bootsId, 3);
+      }
+      if (divingBoots) for (const leg of [p.parts.legL, p.parts.legR]) {
+        addPart(leg, new THREE.BoxGeometry(0.32,0.27,0.38), new THREE.Vector3(0,-0.24,-0.045), bootsId, 3);
+        addPart(leg, new THREE.BoxGeometry(0.34,0.07,0.40), new THREE.Vector3(0,-0.37,-0.05), bootsId, 3);
+        addPart(leg, new THREE.BoxGeometry(0.24,0.08,0.06), new THREE.Vector3(0,-0.24,-0.272), bootsId, 3);
+      }
+
+      const tank = armor[4], tankDef = tank && Reg[tank.id];
+      if (tankDef && tankDef.oxygenTank) {
+        const large = tank.id === I.OXYGEN_TANK_5M;
+        const tankMat = this.makePeerArmorMaterial(tank.id, 4);
+        const addTankPart = (geom, x, y, z) => {
+          const mesh = new THREE.Mesh(geom, tankMat); mesh.position.set(x,y,z); mesh.userData.disposeWithArmor = true;
+          p.parts.body.add(mesh); p.armorMeshes.push(mesh);
+        };
+        if (large) {
+          addTankPart(new THREE.CylinderGeometry(0.13,0.13,0.68,8), -0.15,0,0.27);
+          addTankPart(new THREE.CylinderGeometry(0.13,0.13,0.68,8), 0.15,0,0.27);
+        } else addTankPart(new THREE.CylinderGeometry(0.15,0.15,0.62,8), 0,0,0.27);
+        addTankPart(new THREE.BoxGeometry(large ? 0.42 : 0.28,0.08,0.08), 0,0.24,0.27);
+        addTankPart(new THREE.BoxGeometry(0.055,0.42,0.055), 0.24,0.08,0.23);
+      }
     },
 
     peerArmorColorInfo(id) {
       const nm = Reg[id] && Reg[id].name ? Reg[id].name.toLowerCase() : '';
       // Match the real gearset colors used by the item icons, including Patapim purple.
+      if (nm.includes('diving') || nm.includes('oxygen tank')) return { main:'#dfe6e9', dark:'#41545e', hi:'#7df5ec', accent:'#ff9d2e', diving:true };
       if (nm.includes('patapim') && nm.includes('diamond') && nm.includes('jelly')) return { main:'#6ee8ff', dark:'#7a3fd0', hi:'#f8fff9', jelly:true };
       if (nm.includes('patapim')) return { main:'#b06cff', dark:'#7a3fd0', hi:'#ff7dfb' };
       if (nm.includes('emerald')) return { main:'#2ecc71', dark:'#168f48', hi:'#8ff0b4' };
@@ -1996,6 +2065,27 @@ const Multiplayer = {
       const specks = slot === 1 ? [[12,8],[5,9],[10,14],[3,6]] : [[12,4],[4,7],[11,11]];
       c.fillStyle = col.hi;
       for (const [x,y] of specks) c.fillRect(x, y, 1, 1);
+      if (col.diving) {
+        c.fillStyle = '#41545e';
+        if (slot === 0) {
+          c.fillRect(1,1,14,2); c.fillRect(1,12,14,3); c.fillRect(1,3,2,9); c.fillRect(13,3,2,9);
+          c.fillStyle = '#7df5ec'; c.fillRect(3,4,10,7); c.fillStyle = '#173642'; c.fillRect(4,5,8,5);
+          c.fillStyle = '#ff9d2e'; c.fillRect(2,9,2,2);
+        } else if (slot === 1) {
+          c.fillRect(1,1,14,2); c.fillRect(1,13,14,2); c.fillRect(7,1,2,14); c.fillRect(2,7,12,1);
+          c.fillStyle = '#7df5ec'; c.fillRect(3,3,2,9); c.fillRect(11,3,2,9);
+          c.fillStyle = '#ff9d2e'; c.fillRect(6,5,4,2);
+        } else if (slot === 2) {
+          c.fillRect(7,0,2,16); c.fillRect(1,10,5,2); c.fillRect(10,10,5,2);
+          c.fillStyle = '#7df5ec'; c.fillRect(2,2,2,7); c.fillRect(12,2,2,7);
+        } else if (slot === 3) {
+          c.fillRect(0,10,16,5); c.fillStyle = '#7df5ec'; c.fillRect(2,8,5,2); c.fillRect(9,8,5,2);
+          c.fillStyle = '#ff9d2e'; c.fillRect(3,3,2,3); c.fillRect(11,3,2,3);
+        } else if (slot === 4) {
+          c.fillRect(6,1,4,14); c.fillStyle = '#dfe6e9'; c.fillRect(3,3,10,2); c.fillRect(3,11,10,2);
+          c.fillStyle = '#7df5ec'; c.fillRect(4,6,8,4); c.fillStyle = '#ff9d2e'; c.fillRect(7,1,2,2);
+        }
+      }
       if (col.jelly) {
         const jelly = ['#ff7fd4', '#6ee8ff', '#9cff6e', '#c77dff', '#ff9d4a', '#ffe86e'];
         const blobs = slot === 0
@@ -2035,6 +2125,9 @@ const Multiplayer = {
         color: 0xffffff,
         transparent: false,
         opacity: 1,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
       });
       mat.userData.baseColor = new THREE.Color(0xffffff);
       this.peerArmorMatCache[key] = mat;
@@ -2469,7 +2562,7 @@ const Multiplayer = {
     return Mobs.list.filter(m => m && !m.dead).map(m => {
       if (!m.mpId) m.mpId = 'm' + (this.mobSeq++).toString(36) + '_' + Math.random().toString(36).slice(2, 5);
       const b = m.body;
-      return { mid:m.mpId, t:m.type, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), h:b.h, w:b.w, hp:m.hp, g:m.gunId || 0, c:m.color || 0, yaw:+(m.yaw||0).toFixed(4), targetYaw:+(m.targetYaw||m.yaw||0).toFixed(4), flash:m.flash || 0, fuse:m.fuse || 0, walk:+(m.walkAnim || 0).toFixed(3), jid:m.jellyId || '', hid:m.homeHouseId || '', mem:m.membership || '' };
+      return { mid:m.mpId, t:m.type, x:+b.x.toFixed(3), y:+b.y.toFixed(3), z:+b.z.toFixed(3), vx:+(b.vx||0).toFixed(3), vy:+(b.vy||0).toFixed(3), vz:+(b.vz||0).toFixed(3), h:b.h, w:b.w, hp:m.hp, g:m.gunId || 0, c:m.color || 0, yaw:+(m.yaw||0).toFixed(4), targetYaw:+(m.targetYaw||m.yaw||0).toFixed(4), flash:m.flash || 0, fuse:m.fuse || 0, atk:m.attackSwingT || 0, walk:+(m.walkAnim || 0).toFixed(3), jid:m.jellyId || '', hid:m.homeHouseId || '', mem:m.membership || '' };
     });
   };
 
@@ -2497,6 +2590,7 @@ const Multiplayer = {
       m.hp = Number.isFinite(+s.hp) ? +s.hp : m.hp;
       m.flash = Math.max(m.flash || 0, finite(s.flash, 0));
       m.fuse = finite(s.fuse, m.fuse || 0);
+      m.attackSwingT = Math.max(m.attackSwingT || 0, finite(s.atk, 0));
       if (!m.__mpHadLiveState) {
         const b = m.body;
         b.x = finite(s.x, b.x); b.y = finite(s.y, b.y); b.z = finite(s.z, b.z);
@@ -2532,6 +2626,7 @@ const Multiplayer = {
         m.targetYaw = finite(t.targetYaw, m.targetYaw || m.yaw);
         m.hp = Number.isFinite(+t.hp) ? +t.hp : m.hp;
         m.fuse = finite(t.fuse, m.fuse || 0);
+        m.attackSwingT = Math.max(m.attackSwingT || 0, finite(t.atk, 0));
       }
       const planar = Math.hypot(b.vx || 0, b.vz || 0);
       const moving = planar > 0.035 || Math.abs(b.vy || 0) > 0.08;
@@ -2541,8 +2636,13 @@ const Multiplayer = {
         m.parts.legs.forEach((leg, li) => {
           if (!leg) return;
           if (m.type === 'spider') leg.rotation.y = swing * (li % 2 ? 0.4 : -0.4);
+          else if (m.type === 'sprawler') leg.rotation.x = (li < 2 ? 0.18 : -0.18) + swing * (li % 2 ? 0.75 : -0.75);
           else if (m.type !== 'creeper') leg.rotation.x = swing * (li % 2 ? 1 : -1);
         });
+      }
+      if (m.type === 'sprawler' && m.parts && m.parts.head) {
+        m.attackSwingT = Math.max(0, (m.attackSwingT || 0) - (dt || 0));
+        m.parts.head.rotation.x = m.attackSwingT > 0 ? Math.sin(m.attackSwingT / 0.28 * Math.PI) * 0.7 : 0;
       }
       m.group.position.set(b.x, b.y, b.z);
       m.group.rotation.y = m.yaw || 0;
@@ -3080,7 +3180,7 @@ const Multiplayer = {
   if (typeof Player === 'undefined' || Player.__mpStableInventoryCleanupPatch) return;
   Player.__mpStableInventoryCleanupPatch = true;
   const asItemId = (id) => Number.isFinite(+id) ? (+id | 0) : 0;
-  const isDur = (d) => Number.isFinite(+d) && +d > 0;
+  const isDur = (d) => Number.isFinite(+d) && +d >= 0;
   Player.normalizeInventoryStacks = function(){
     if (typeof Reg === 'undefined') return;
     for (let i = 0; i < 36; i++) {
@@ -3558,7 +3658,7 @@ const Multiplayer = {
   const unpack = (s) => (typeof Save !== 'undefined' && Save.unpackStack) ? Save.unpackStack(s) : (!s ? null : { id:s[0], count:s[1] || 1, dur:s[2] });
   const itemId = (id) => Number.isFinite(+id) ? (+id | 0) : 0;
   const countOf = (n) => Math.max(1, Math.floor(+n || 1));
-  const hasDur = (d) => Number.isFinite(+d) && +d > 0;
+  const hasDur = (d) => Number.isFinite(+d) && +d >= 0;
   const stackMax = (id) => {
     const def = (typeof Reg !== 'undefined') ? Reg[itemId(id)] : null;
     return Math.max(1, (def && def.stack) || 64);
@@ -3589,12 +3689,11 @@ const Multiplayer = {
   // in this game is positional like Minecraft; only validate/clamp each slot.
   const normalizeInvSlots = (slots, size = 36) => cleanSlots(slots, size);
   const normalizeArmorSlots = (slots) => {
-    const out = new Array(4).fill(null);
+    const out = new Array(5).fill(null);
     const src = Array.isArray(slots) ? slots : [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const s = cleanStack(src[i]);
-      const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
+      if (s && equipmentSlotAccepts(s.id, i)) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -3682,7 +3781,7 @@ const Multiplayer = {
     pendingWorldgenRequests: new Set(),
 
     hostDefaultClientInventory(pid) {
-      const empty = { inv:new Array(36).fill(null), armor:new Array(4).fill(null), cursor:null, sel:0 };
+      const empty = { inv:new Array(36).fill(null), armor:new Array(5).fill(null), cursor:null, sel:0 };
       if (pid && !this.clientInventoryStates.has(pid)) this.clientInventoryStates.set(pid, empty);
       return pid ? this.clientInventoryStates.get(pid) : empty;
     },
@@ -4227,7 +4326,7 @@ const Multiplayer = {
   const nowMs = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   const finite = (v, fallback) => Number.isFinite(+v) ? +v : fallback;
   const idOf = (v) => Number.isFinite(+v) ? (+v | 0) : 0;
-  const hasDur = (v) => Number.isFinite(+v) && +v > 0;
+  const hasDur = (v) => Number.isFinite(+v) && +v >= 0;
   const stackMax = (id) => {
     const def = (typeof Reg !== 'undefined') ? Reg[idOf(id)] : null;
     return Math.max(1, (def && def.stack) || 64);
@@ -4276,12 +4375,11 @@ const Multiplayer = {
     return out;
   };
   const normalizeArmor = (slots) => {
-    const out = new Array(4).fill(null);
+    const out = new Array(5).fill(null);
     const src = Array.isArray(slots) ? slots : [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const s = unpack(src[i]);
-      const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
+      if (s && equipmentSlotAccepts(s.id, i)) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -4383,7 +4481,7 @@ const Multiplayer = {
 
     mcGetPlayerState(pid) {
       if (!pid) return null;
-      if (!this.mcPlayerStates.has(pid)) this.mcPlayerStates.set(pid, { inv:new Array(36).fill(null), armor:new Array(4).fill(null), cursor:null, sel:0, hp:20, hunger:20, xp:0, level:0 });
+      if (!this.mcPlayerStates.has(pid)) this.mcPlayerStates.set(pid, { inv:new Array(36).fill(null), armor:new Array(5).fill(null), cursor:null, sel:0, hp:20, hunger:20, xp:0, level:0 });
       return this.mcPlayerStates.get(pid);
     },
 
@@ -4579,7 +4677,7 @@ const Multiplayer = {
       this.applyingRemote = true;
       try {
         ch.blocks = this.mcDecodeBlocks(msg.blocks || []);
-        ch.light = null; ch.hasMesh = false;
+        ch.light = null; ch.blockRGB = null; ch.hasMesh = false;
         const meta = msg.meta || {};
         const putEntries = (map, entries, transform) => {
           if (!map || !Array.isArray(entries)) return;
@@ -4752,7 +4850,7 @@ const Multiplayer = {
   const MP = Multiplayer;
   const finite = (v, fallback) => Number.isFinite(+v) ? +v : fallback;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const hasDur = (d) => Number.isFinite(+d) && +d > 0;
+  const hasDur = (d) => Number.isFinite(+d) && +d >= 0;
   const idOf = (v) => Math.max(0, Math.floor(+v || 0));
   const stackMax = (id) => (typeof Reg !== 'undefined' && Reg[idOf(id)] && Reg[idOf(id)].stack) ? Math.max(1, Reg[idOf(id)].stack | 0) : 64;
   const packStack = (s) => {
@@ -4799,12 +4897,11 @@ const Multiplayer = {
     return out;
   };
   const normalizeArmorLoose = (slots) => {
-    const out = new Array(4).fill(null);
+    const out = new Array(5).fill(null);
     const src = Array.isArray(slots) ? slots : [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const s = unpackStack(src[i]);
-      const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
+      if (s && equipmentSlotAccepts(s.id, i)) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -5100,7 +5197,7 @@ const Multiplayer = {
   const MP = Multiplayer;
   const finite = (v, fb) => Number.isFinite(+v) ? +v : fb;
   const idOf = (v) => Math.floor(+((v && typeof v === 'object') ? v.id : v) || 0);
-  const hasDur = (v) => Number.isFinite(+v) && +v > 0;
+  const hasDur = (v) => Number.isFinite(+v) && +v >= 0;
   const stackMax = (id) => (typeof Reg !== 'undefined' && Reg[idOf(id)] && Reg[idOf(id)].stack) ? Math.max(1, Reg[idOf(id)].stack|0) : 64;
   const stackMatches = (s, id, dur) => {
     if (!s || idOf(s.id) !== idOf(id)) return false;
@@ -5154,7 +5251,7 @@ const Multiplayer = {
     if (typeof Player === 'undefined') return null;
     return {
       inv: normalizeStackArray(Player.inv || [], 36).map(pack),
-      armor: (Player.armor || []).slice(0,4).map(pack),
+      armor: (Player.armor || []).slice(0,5).map(pack),
       cursor: (typeof UI !== 'undefined' && UI.cursor) ? pack(UI.cursor) : 0,
       sel: Math.max(0, Math.min(8, Math.floor(+Player.sel || 0))),
       hp: finite(Player.hp, 20), hunger: finite(Player.hunger, 20), xp: finite(Player.xp, 0), level: finite(Player.level, 0),
@@ -5162,7 +5259,7 @@ const Multiplayer = {
   };
   const stateFromSnapshot = (snap) => ({
     inv: normalizeStackArray(((snap && snap.inv) || []).map(unpack), 36),
-    armor: new Array(4).fill(null).map((_, i) => unpack(snap && snap.armor && snap.armor[i])),
+    armor: new Array(5).fill(null).map((_, i) => unpack(snap && snap.armor && snap.armor[i])),
     cursor: unpack(snap && snap.cursor),
     sel: Math.max(0, Math.min(8, Math.floor(+((snap && snap.sel) || 0)))),
     hp: finite(snap && snap.hp, 20), hunger: finite(snap && snap.hunger, 20), xp: finite(snap && snap.xp, 0), level: finite(snap && snap.level, 0),
@@ -5544,7 +5641,7 @@ const Multiplayer = {
   const MP = Multiplayer;
   const finite = (v, fb) => Number.isFinite(+v) ? +v : fb;
   const idOf = (v) => Math.floor(+((v && typeof v === 'object') ? v.id : v) || 0);
-  const hasDur = (v) => Number.isFinite(+v) && +v > 0;
+  const hasDur = (v) => Number.isFinite(+v) && +v >= 0;
   const pack = (s) => {
     if (!s) return 0;
     if (typeof Save !== 'undefined' && Save.packStack) return Save.packStack(s);
@@ -5596,12 +5693,11 @@ const Multiplayer = {
     return out;
   };
   const normalizeArmor = (slots) => {
-    const out = new Array(4).fill(null);
+    const out = new Array(5).fill(null);
     const src = Array.isArray(slots) ? slots : [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const s = cleanStack(src[i]);
-      const def = s && typeof Reg !== 'undefined' ? Reg[s.id] : null;
-      if (def && def.armor && def.armor.slot === i) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
+      if (s && equipmentSlotAccepts(s.id, i)) out[i] = { id:s.id, count:1, ...(hasDur(s.dur) ? { dur:+s.dur } : {}), ...(s.data ? { data:s.data } : {}) };
     }
     return out;
   };
@@ -5900,6 +5996,7 @@ const Multiplayer = {
       return;
     }
     const ret = oldApplyRemoteBlock ? oldApplyRemoteBlock(msg) : undefined;
+    if (msg && msg.block === B.AIR && msg.old && typeof SFX !== 'undefined' && SFX.breakBlk) SFX.breakBlk({ x: +msg.x + 0.5, y: +msg.y + 0.5, z: +msg.z + 0.5 });
     if (msg && msg.meta) applyBlockMeta(msg.x, msg.y, msg.z, msg.meta);
     if (typeof World !== 'undefined' && World.dirty) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(msg.x, msg.z) : World.key(Math.floor(msg.x / 16), Math.floor(msg.z / 16))); 
     return ret;
@@ -6212,8 +6309,46 @@ const Multiplayer = {
         // slot edits only, and only from the lock holder; progress stays ours
         if (this.chestLockMap().get(FKEY(msg.key)) !== fromId) return;
         const f = furnaceEntry(String(msg.key));
-        f.in = unpack(msg.i); f.fuel = unpack(msg.f); f.out = unpack(msg.o);
+        const pos = String(msg.key).split(',').map(Number);
+        const bench = pos.length >= 3 && World.getBlock(pos[0], pos[1], pos[2]) === B.OXYGENATION_BENCH;
+        const input = unpack(msg.i), fuel = unpack(msg.f), output = unpack(msg.o);
+        if (bench && input && isOxygenTank(input.id)) {
+          const def = Reg[input.id]; input.count = 1; input.dur = Math.max(0, Math.min(def.maxDur, input.dur === undefined ? def.maxDur : +input.dur || 0));
+        }
+        if (bench && fuel && fuel.id === I.DARK_FLOOPIUM) fuel.count = Math.max(1, Math.min(Reg[fuel.id].stack || 64, fuel.count | 0));
+        f.in = bench ? (input && isOxygenTank(input.id) ? input : null) : input;
+        f.fuel = bench ? (fuel && fuel.id === I.DARK_FLOOPIUM ? fuel : null) : fuel;
+        f.out = bench ? null : output;
         dirtyFurnaceChunk(msg.key);
+      }
+      return;
+    }
+    if (msg && msg.type === 'oxygen_recharge_request') {
+      if (this.role === 'host' && cameFromClient && msg.key) {
+        const key = String(msg.key), conn = this.connections && this.connections.get(fromId);
+        const pos = key.split(',').map(Number);
+        let result = { ok:false, message:'Invalid oxygenation bench.' };
+        if (this.chestLockMap().get(FKEY(key)) === fromId && pos.length >= 3 && World.getBlock(pos[0], pos[1], pos[2]) === B.OXYGENATION_BENCH) {
+          const f = furnaceEntry(key);
+          result = refillOxygenTankState(f);
+          if (result.ok) dirtyFurnaceChunk(key);
+          if (conn) this.sendTo(conn, { type:'oxygen_recharge_result', key, result, f:{ i:pack(f.in), f:pack(f.fuel), o:0, burn:0, burnMax:0, cook:0 } });
+        } else if (conn) this.sendTo(conn, { type:'oxygen_recharge_result', key, result });
+      }
+      return;
+    }
+    if (msg && msg.type === 'oxygen_recharge_result') {
+      if (this.role === 'client' && msg.key && typeof UI !== 'undefined') {
+        if (msg.f) {
+          const f = furnaceEntry(String(msg.key));
+          f.in = unpack(msg.f.i); f.fuel = unpack(msg.f.f); f.out = null;
+          const recent = this._recentContainerEdits;
+          if (recent) recent.delete(String(msg.key));
+          dirtyFurnaceChunk(msg.key);
+        }
+        if (UI.chat) UI.chat((msg.result && msg.result.message) || (msg.result && msg.result.ok ? 'Oxygen tank recharged.' : 'Unable to recharge tank.'), msg.result && msg.result.ok ? '#7df5ec' : '#ffb347');
+        if (msg.result && msg.result.ok && typeof SFX !== 'undefined' && SFX.craft) SFX.craft();
+        if (UI.screen === 'oxygenBench' && UI.furnaceKey === String(msg.key) && UI.refreshAll) UI.refreshAll();
       }
       return;
     }
@@ -6223,8 +6358,8 @@ const Multiplayer = {
     }
     if (msg && msg.type === 'furnace_busy') {
       if (this.role === 'client' && typeof UI !== 'undefined') {
-        if (UI.screen === 'furnace' && UI.close) UI.close();
-        if (UI.chat) UI.chat('That furnace is in use by another player.', '#ffb347');
+        if ((UI.screen === 'furnace' || UI.screen === 'oxygenBench') && UI.close) UI.close();
+        if (UI.chat) UI.chat('That workstation is in use by another player.', '#ffb347');
       }
       return;
     }
@@ -6236,7 +6371,7 @@ const Multiplayer = {
         if (!editing) { cur.in = unpack(msg.f.i); cur.fuel = unpack(msg.f.f); cur.out = unpack(msg.f.o); }
         cur.burn = msg.f.burn || 0; cur.burnMax = msg.f.burnMax || 0; cur.cook = msg.f.cook || 0;
         dirtyFurnaceChunk(msg.key);
-        if (typeof UI !== 'undefined' && UI.screen === 'furnace' && UI.furnaceKey === String(msg.key) && UI.refreshAll) UI.refreshAll();
+        if (typeof UI !== 'undefined' && (UI.screen === 'furnace' || UI.screen === 'oxygenBench') && UI.furnaceKey === String(msg.key) && UI.refreshAll) UI.refreshAll();
       }
       return;
     }
@@ -6249,20 +6384,20 @@ const Multiplayer = {
     const oldOpen = UI.open.bind(UI);
     UI.open = function(name, data) {
       const ret = oldOpen(name, data);
-      if (name === 'furnace' && data && MP.connected && MP.role !== 'solo' && typeof World !== 'undefined') {
+      if ((name === 'furnace' || name === 'oxygenBench') && data && MP.connected && MP.role !== 'solo' && typeof World !== 'undefined') {
         const key = World.pkey(data.bx, data.by, data.bz);
         if (MP.role === 'client') {
           MP.send({ type: 'furnace_open_request', key });
         } else if (!MP.hostAcquireChestLock(FKEY(key), MP.id)) {
           this.close && this.close();
-          this.chat && this.chat('That furnace is in use by another player.', '#ffb347');
+          this.chat && this.chat('That workstation is in use by another player.', '#ffb347');
         }
       }
       return ret;
     };
     const oldClose = UI.close.bind(UI);
     UI.close = function(reopening) {
-      const wasFurnace = this.screen === 'furnace';
+      const wasFurnace = this.screen === 'furnace' || this.screen === 'oxygenBench';
       const fKey = wasFurnace ? this.furnaceKey : null;
       const ret = oldClose(reopening);
       if (wasFurnace && fKey && MP.connected && MP.role !== 'solo') {
@@ -6276,7 +6411,7 @@ const Multiplayer = {
   // client slot edits: send only when the slots actually changed
   MP.clientSendFurnaceState = function(force) {
     if (this.role !== 'client' || !this.connected || typeof UI === 'undefined' || typeof World === 'undefined') return;
-    if (UI.screen !== 'furnace' || !UI.furnaceKey) return;
+    if ((UI.screen !== 'furnace' && UI.screen !== 'oxygenBench') || !UI.furnaceKey) return;
     const f = World.furnaces.get(UI.furnaceKey);
     if (!f) return;
     const body = { i: pack(f.in), f: pack(f.fuel), o: pack(f.out) };

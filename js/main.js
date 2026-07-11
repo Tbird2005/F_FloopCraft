@@ -454,7 +454,7 @@ const Game = {
     }
     UI.updateHotbar(); UI.updateStats(); UI.updateXp(); UI.updateModeLabel();
     if (!this.started) this.started = true;
-    UI.chat('Welcome to F_Floop Craft v 1.0.62!', '#ffd700');
+    UI.chat('Welcome to F_Floop Craft v 1.0.80!', '#ffd700');
     if (typeof Multiplayer !== 'undefined') {
       if (Multiplayer.role === 'host') Multiplayer.finishHostWorld();
       Multiplayer.updatePauseCode();
@@ -1104,9 +1104,10 @@ const Game = {
     if (sunsetF > 0 && localWeather === 'clear') this.skyColor.lerp(this.skySunset, sunsetF);
 
     const eyeBlock = World.getBlock(Math.floor(Player.body.x), Math.floor(Player.eyeY()), Math.floor(Player.body.z));
-    if (isWater(eyeBlock)) {
+    if (isWater(eyeBlock) || isWaterlogged(eyeBlock)) {
+      const divingVisor = !!(Player.armor && Player.armor[0] && Player.armor[0].id === I.DIVING_HELMET);
       this.scene.fog.color.setHex(0x1a3a8f);
-      this.scene.fog.near = 2; this.scene.fog.far = 20;
+      this.scene.fog.near = divingVisor ? 6 : 2; this.scene.fog.far = divingVisor ? 55 : 20;
       this.renderer.setClearColor(0x1a3a8f);
     } else if (isLava(eyeBlock)) {
       this.scene.fog.color.setHex(0xd96514);

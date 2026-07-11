@@ -11,7 +11,7 @@ const Player = {
   hunger: 20, exhaustion: 0, regenT: 0, starveT: 0,
   air: 10, airT: 0, suffocateT: 0,
   xp: 0, level: 0,
-  armor: [null, null, null, null],
+  armor: [null, null, null, null, null],
   gamemode: 'survival',
   flying: false, lastSpace: 0,
   sprinting: false, sneaking: false, swimming: false,
@@ -281,7 +281,7 @@ const Player = {
 
   armorPoints() {
     let p = 0;
-    for (let i = 0; i < this.armor.length; i++) {
+    for (let i = 0; i < 4; i++) {
       const a = this.armor[i];
       const def = a && Reg[a.id];
       if (!def || !def.armor || def.armor.slot !== i) {
@@ -293,15 +293,23 @@ const Player = {
     return p;
   },
 
+  hasFullDivingSuit() {
+    return DIVING_ARMOR_IDS.every((id, i) => this.armor[i] && this.armor[i].id === id);
+  },
+
   sanitizeArmor() {
-    for (let i = 0; i < 4; i++) {
+    while (this.armor.length < 5) this.armor.push(null);
+    this.armor.length = 5;
+    for (let i = 0; i < 5; i++) {
       const a = this.armor[i];
       const def = a && Reg[a.id];
-      if (!def || !def.armor || def.armor.slot !== i) {
-        if (a && def) this.addItem(a.id, a.count || 1, a.dur, a.data);
+      if (!a) continue;
+      if (!def || !equipmentSlotAccepts(a.id, i)) {
+        if (def) this.addItem(a.id, a.count || 1, a.dur, a.data);
         this.armor[i] = null;
       } else {
         a.count = 1;
+        if (i === 4 && a.dur === undefined) a.dur = def.maxDur;
       }
     }
   },
@@ -429,7 +437,8 @@ const Player = {
     else if (Reg[pick].shape === 'slabT') pick = Reg[pick].drop.id;
     else if (isVSlab(pick)) pick = Reg[pick].drop.id;
     else if (isDSlab(pick)) { const drops = slabComboDropIds(pick); pick = drops[0] || B.PLANK_SLAB_B; }
-    else if (isWallTorch(pick)) pick = B.TORCH;
+    else if (isWallSeaTorch(pick)) pick = B.SEA_TORCH;
+    else if (isWallTorch(pick)) pick = torchItemId(pick);
     else if (isLadder(pick)) pick = B.LADDER_PX;
     else if (pick === B.FURNACE_LIT) pick = B.FURNACE;
     else if (isSnowSheet(pick)) pick = B.SNOW_SHEET_1;
@@ -561,6 +570,7 @@ const Player = {
       if (def.interact === 'casino') { UI.open('casino'); return true; }
       if (def.interact === 'lore') { UI.open('lore', hit); return true; }
       if (def.interact === 'furnace') { UI.open('furnace', hit); return true; }
+      if (def.interact === 'oxygenBench') { UI.open('oxygenBench', hit); return true; }
       if (def.interact === 'stocks') { UI.open('stocks'); return true; }
       if (def.interact === 'sign') { UI.open('sign', hit); return true; }
       if (def.interact === 'dungeonDoor') { this.openDungeonDoor(hit); return true; }
@@ -1060,9 +1070,15 @@ const Player = {
         return false;
       }
     }
-    if (s.id === B.TORCH) {
+    if ((Reg[s.id] && Reg[s.id].torchFloor) || s.id === B.SEA_TORCH) {
+      const sea = s.id === B.SEA_TORCH;
+      const submerged = sea && isWater(World.getBlock(bx, by, bz));
+      if (sea && !submerged) { UI.chat('Sea Torches can only be placed underwater.', '#80d8ff'); return false; }
+      if (sea) placeId = B.SEA_TORCH_WATER;
       if (hit.ny === 0 && (hit.nx !== 0 || hit.nz !== 0)) {
-        const wallId = hit.nx === 1 ? B.WTORCH_PX : hit.nx === -1 ? B.WTORCH_NX : hit.nz === 1 ? B.WTORCH_PZ : B.WTORCH_NZ;
+        const wallId = sea
+          ? (hit.nx === 1 ? B.SEA_WTORCH_WATER_PX : hit.nx === -1 ? B.SEA_WTORCH_WATER_NX : hit.nz === 1 ? B.SEA_WTORCH_WATER_PZ : B.SEA_WTORCH_WATER_NZ)
+          : wallTorchIdFor(s.id, hit.nx, hit.nz);
         const wallDef = Reg[hit.id];
         if (wallDef && wallDef.solid && wallDef.shape === 'cube') placeId = wallId;
         else return false;
@@ -2114,7 +2130,7 @@ const Player = {
         this.inv[i] = null;
       }
     }
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       if (this.armor[i]) {
         Drops.spawn(this.body.x, this.body.y + 1, this.body.z, this.armor[i].id, 1,
           null, this.armor[i].dur, this.armor[i].data);
@@ -2198,8 +2214,8 @@ const Player = {
     if (headBlock !== B.AIR) UI.setBlockOverlay(headBlock);
     else UI.setBlockOverlay(null);
 
-    const headWaterNow = isWater(World.getBlock(
-      Math.floor(this.body.x), Math.floor(this.eyeY()), Math.floor(this.body.z)));
+    const headCellId = World.getBlock(Math.floor(this.body.x), Math.floor(this.eyeY()), Math.floor(this.body.z));
+    const headWaterNow = isWater(headCellId) || isWaterlogged(headCellId);
 
     // Creative players still get the opaque head-in-block overlay so they
     // cannot use clipped/culling views as xray, but they do not take damage.
@@ -2245,7 +2261,24 @@ const Player = {
     }
 
     const headWater = headWaterNow;
-    if (headWater) {
+    const tank = this.armor[4];
+    const tankDef = tank && Reg[tank.id];
+    const tankActive = headWater && this.hasFullDivingSuit() && tankDef && tankDef.oxygenTank && (tank.dur === undefined ? tankDef.maxDur : tank.dur) > 0;
+    if (tankActive) {
+      if (tank.dur === undefined) tank.dur = tankDef.maxDur;
+      tank.dur = Math.max(0, tank.dur - dt);
+      this.air = 10; this.airT = 0;
+      this._tankHudT = (this._tankHudT || 0) + dt;
+      if (this._tankHudT >= 1 || tank.dur <= 0) {
+        this._tankHudT = 0;
+        UI.updateStats();
+        if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client' && Multiplayer.clientSendInventoryState) Multiplayer.clientSendInventoryState(true);
+      }
+      if (tank.dur <= 0 && !tank.data?.emptyWarned) {
+        tank.data = Object.assign({}, tank.data, { emptyWarned: true });
+        UI.chat('Your oxygen tank is empty. Refill it at an Oxygenation Bench.', '#7df5ec');
+      }
+    } else if (headWater) {
       this.airT += dt;
       if (this.airT >= 1.5) {
         this.airT = 0;

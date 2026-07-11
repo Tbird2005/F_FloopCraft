@@ -1,6 +1,14 @@
 // ============================================================
 // F_Floop Craft — world saving/loading (localStorage)
 // ============================================================
+const LEGACY_OCEAN_ITEM_IDS = {
+  1400: I.RAW_FISH, 1401: I.COOKED_FISH, 1402: I.SHARK_TOOTH, 1403: I.INK_SAC, 1404: I.PEARL,
+  1410: I.EGG_MINNOW, 1411: I.EGG_SALMON, 1412: I.EGG_TUNA, 1413: I.EGG_CLOWNFISH, 1414: I.EGG_PUFFERFISH,
+  1415: I.EGG_ANGLERFISH, 1416: I.EGG_SHARK, 1417: I.EGG_JELLYFISH, 1418: I.EGG_STINGRAY, 1419: I.EGG_OCTOPUS,
+  1420: I.EGG_DOLPHIN, 1421: I.EGG_SEAHORSE, 1422: I.EGG_BARRACUDA, 1423: I.EGG_SEA_SERPENT, 1424: I.EGG_GIANT_SQUID,
+  1425: I.EGG_SPRAWLER,
+};
+
 const Save = {
   currentId: null,
   quotaCooldownUntil: 0,
@@ -65,7 +73,8 @@ const Save = {
   },
   unpackStack(v) {
     if (!v) return null;
-    const id = Number.isFinite(+v[0]) ? (+v[0] | 0) : v[0];
+    const rawId = Number.isFinite(+v[0]) ? (+v[0] | 0) : v[0];
+    const id = LEGACY_OCEAN_ITEM_IDS[rawId] || rawId;
     if (typeof isRetiredStackId === 'function' && isRetiredStackId(id)) return null;
     const s = { id, count: Math.max(1, Math.floor(+v[1] || 1)) };
     if (Number.isFinite(+v[2])) s.dur = +v[2];
@@ -397,9 +406,9 @@ const Save = {
     Player.sel = sp.sel || 0;
     Player.inv = (sp.inv || []).map(v => this.unpackStack(v));
     while (Player.inv.length < 36) Player.inv.push(null);
-    Player.armor = (sp.armor || [0, 0, 0, 0]).map(v => this.unpackStack(v));
-    while (Player.armor.length < 4) Player.armor.push(null);
-    Player.armor.length = 4;
+    Player.armor = (sp.armor || [0, 0, 0, 0, 0]).map(v => this.unpackStack(v));
+    while (Player.armor.length < 5) Player.armor.push(null);
+    Player.armor.length = 5;
     Player.sanitizeArmor();
     Player.spawn = migratedRemovedDimension && typeof World !== 'undefined' && World.findSpawn
       ? World.findSpawn()

@@ -103,10 +103,10 @@ const World = {
             '#include <color_vertex>',
             `#include <color_vertex>
             {
-              float lb = vColor.g;
+              float packed = floor(vColor.g * 4095.0 + 0.5);
+              vec3 lb = vec3(mod(packed, 16.0), mod(floor(packed / 16.0), 16.0), floor(packed / 256.0)) / 15.0;
               float ls = vColor.b * dayF;
-              float l = max(max(lb, ls), 0.045);
-              vColor = vec3(vColor.r * l);
+              vColor = vColor.r * max(max(lb, vec3(ls)), vec3(0.045));
             }`
           );
         };
@@ -267,7 +267,7 @@ const World = {
 
   hasChunk(x, z) { return this.chunks.has(this.chunkKeyForBlock(x, z)); },
 
-  // ---------- lighting (0-15 sky & block channels) ----------
+  // ---------- lighting (0-15 sky + packed 4-bit RGB block channels) ----------
   _opaqueLUT: null, // id -> 0/1, built once (all defBlock calls happen at load)
   opaqueToLight(id) {
     let t = this._opaqueLUT;
@@ -286,8 +286,34 @@ const World = {
     return d && d.lightLevel ? d.lightLevel : 0;
   },
 
+  lightRGBMax(packed) { return Math.max(packed & 15, (packed >> 4) & 15, (packed >> 8) & 15); },
+
+  lightEmitRGB(id) {
+    const d = Reg[id], lvl = d && d.lightLevel ? Math.max(0, Math.min(15, d.lightLevel | 0)) : 0;
+    if (!lvl) return 0;
+    if (d.lightColor === undefined || d.lightColor === null) return lvl | (lvl << 4) | (lvl << 8);
+    const c = d.lightColor;
+    const r8 = Array.isArray(c) ? (+c[0] || 0) : ((c >> 16) & 255);
+    const g8 = Array.isArray(c) ? (+c[1] || 0) : ((c >> 8) & 255);
+    const b8 = Array.isArray(c) ? (+c[2] || 0) : (c & 255);
+    const q = v => Math.max(0, Math.min(15, Math.round(lvl * Math.max(0, Math.min(255, v)) / 255)));
+    const r = q(r8), g = q(g8), b = q(b8);
+    return r | (g << 4) | (b << 8);
+  },
+
+  getBlockLightRGBRaw(x, y, z) {
+    if (y >= this.H) return this.sparseBlockLightRGBAt(x, y, z);
+    if (y < 0) return 0;
+    const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
+    if (!ch || !ch.light) return 0;
+    const i = this.idx(this.localCoord(x), y, this.localCoord(z));
+    if (ch.blockRGB) return ch.blockRGB[i] || 0;
+    const l = ch.light[i] & 15;
+    return l | (l << 4) | (l << 8);
+  },
+
   getLightRaw(x, y, z) {
-    if (y >= this.H) return 0xF0 | this.sparseBlockLightAt(x, y, z);
+    if (y >= this.H) return 0xF0 | this.lightRGBMax(this.sparseBlockLightRGBAt(x, y, z));
     if (y < 0) return 0;
     const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch) return 0xF0;
@@ -295,11 +321,16 @@ const World = {
     // behave like open sky. Treating it as 15 skylight was re-seeding stale cave
     // light from chunks waiting to be recomputed after a roof hole got patched.
     if (!ch.light) return 0;
-    return ch.light[this.idx(this.localCoord(x), y, this.localCoord(z))];
+    const i = this.idx(this.localCoord(x), y, this.localCoord(z));
+    return (ch.light[i] & 0xF0) | this.lightRGBMax(ch.blockRGB ? ch.blockRGB[i] : ((ch.light[i] & 15) * 0x111));
   },
 
   getSkyLight(x, y, z) { return this.getLightRaw(x, y, z) >> 4; },
-  getBlockLight(x, y, z) { return this.getLightRaw(x, y, z) & 15; },
+  getBlockLight(x, y, z) { return this.lightRGBMax(this.getBlockLightRGBRaw(x, y, z)); },
+  getLightColor(x, y, z, dayF) {
+    const p = this.getBlockLightRGBRaw(x, y, z), sky = this.getSkyLight(x, y, z) / 15 * (dayF === undefined ? (this.dayFUniform ? this.dayFUniform.value : 1) : dayF);
+    return [Math.max((p & 15) / 15, sky), Math.max(((p >> 4) & 15) / 15, sky), Math.max(((p >> 8) & 15) / 15, sky)];
+  },
 
   markLightBucketsDirty() { this._lightBucketVersion = (this._lightBucketVersion || 0) + 1; },
 
@@ -333,169 +364,128 @@ const World = {
     this._lightBucketBuiltVersion = this._lightBucketVersion || 0;
   },
 
-  sparseBlockLightAt(x, y, z) {
-    // Player-built blocks above the generated H=80 terrain live sparsely in
-    // extraBlocks, not in the fixed chunk light array.  The old code scanned
-    // every torch/lamp in every loaded chunk for every high-Y face, which caused
-    // the big far/high block-place, explosion, and falling-sand hitches.  Bucket
-    // light sources by chunk-section and only sample the nearby 3x3x3 buckets.
+  sparseBlockLightRGBAt(x, y, z) {
+    // Player-built lights above H are sparse; sample only nearby section buckets.
     if (!this.lights || !this.lights.size) return 0;
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     if (!Number.isFinite(x + y + z)) return 0;
-    if (!this.lightBuckets || this._lightBucketCount !== this.lights.size || this._lightBucketBuiltVersion !== (this._lightBucketVersion || 0)) {
-      this.rebuildLightBuckets();
-    }
-    // buckets only hold lights high enough to reach y >= H; usually none exist
+    if (!this.lightBuckets || this._lightBucketCount !== this.lights.size || this._lightBucketBuiltVersion !== (this._lightBucketVersion || 0)) this.rebuildLightBuckets();
     if (!this.lightBuckets.size) return 0;
     const cx = this.chunkCoord(x), cy = Math.floor(y / 16), cz = this.chunkCoord(z);
-    let best = 0;
-    for (let dxs = -1; dxs <= 1; dxs++) {
-      for (let dys = -1; dys <= 1; dys++) {
-        for (let dzs = -1; dzs <= 1; dzs++) {
-          const arr = this.lightBuckets && this.lightBuckets.get((cx + dxs) + ',' + (cy + dys) + ',' + (cz + dzs));
-          if (!arr) continue;
-          for (const v of arr) {
-            const lx = v[0], ly = v[1], lz = v[2];
-            const ddy = Math.abs(ly - y);
-            if (ddy > 15) continue;
-            const ddx = Math.abs(lx - x);
-            if (ddx + ddy > 15) continue;
-            const ddz = Math.abs(lz - z);
-            const dist = ddx + ddy + ddz;
-            if (dist > 15) continue;
-            const em = this.lightEmit(this.getBlock(lx, ly, lz));
-            const lvl = em - dist;
-            if (lvl > best) { best = lvl; if (best >= 15) return 15; }
-          }
-        }
+    let br = 0, bg = 0, bb = 0;
+    for (let dxs = -1; dxs <= 1; dxs++) for (let dys = -1; dys <= 1; dys++) for (let dzs = -1; dzs <= 1; dzs++) {
+      const arr = this.lightBuckets.get((cx + dxs) + ',' + (cy + dys) + ',' + (cz + dzs));
+      if (!arr) continue;
+      for (const v of arr) {
+        const lx = v[0], ly = v[1], lz = v[2];
+        const dist = Math.abs(lx - x) + Math.abs(ly - y) + Math.abs(lz - z);
+        if (dist > 15) continue;
+        const em = this.lightEmitRGB(this.getBlock(lx, ly, lz));
+        br = Math.max(br, (em & 15) - dist);
+        bg = Math.max(bg, ((em >> 4) & 15) - dist);
+        bb = Math.max(bb, ((em >> 8) & 15) - dist);
+        if (br >= 15 && bg >= 15 && bb >= 15) return 0xFFF;
       }
     }
-    return Math.max(0, Math.min(15, best));
+    return Math.max(0, br) | (Math.max(0, bg) << 4) | (Math.max(0, bb) << 8);
   },
+
+  sparseBlockLightAt(x, y, z) { return this.lightRGBMax(this.sparseBlockLightRGBAt(x, y, z)); },
 
   computeChunkLight(ch) {
     const H = this.H;
     const L = ch.light = new Uint8Array(16 * 16 * H);
+    const C = ch.blockRGB = new Uint16Array(16 * 16 * H);
     const blocks = ch.blocks;
     const X0 = ch.cx * 16, Z0 = ch.cz * 16;
-    const qx = [], qy = [], qz = [], ql = [], qc = []; // BFS stack (channel: 0 sky, 1 block)
-
-    // sky columns + block sources.
-    // Only sky cells at TERRAIN STEPS join the BFS queue (a flat chunk used to
-    // queue ~11k cells and spike chunk loading; steps are where lateral spread matters)
-    const skyTop = new Int16Array(256); // first sky cell index per column
-    for (let lz = 0; lz < 16; lz++) {
-      for (let lx = 0; lx < 16; lx++) {
-        let open = true;
-        let top = H;
-        for (let y = H - 1; y >= 0; y--) {
-          const id = blocks[this.idx(lx, y, lz)];
-          if (open && this.opaqueToLight(id)) { open = false; top = y + 1; }
-          if (open) L[this.idx(lx, y, lz)] = 0xF0;
-          const em = this.lightEmit(id);
-          if (em > 0) {
-            L[this.idx(lx, y, lz)] = (L[this.idx(lx, y, lz)] & 0xF0) | em;
-            qx.push(lx); qy.push(y); qz.push(lz); ql.push(em); qc.push(1);
-          }
-        }
-        if (open) top = 0; // column open to bedrock
-        skyTop[lz * 16 + lx] = top;
-      }
-    }
-    for (let lz = 0; lz < 16; lz++) {
-      for (let lx = 0; lx < 16; lx++) {
-        const myTop = skyTop[lz * 16 + lx];
-        let maxNb = myTop;
-        if (lx > 0) maxNb = Math.max(maxNb, skyTop[lz * 16 + lx - 1]);
-        if (lx < 15) maxNb = Math.max(maxNb, skyTop[lz * 16 + lx + 1]);
-        if (lz > 0) maxNb = Math.max(maxNb, skyTop[(lz - 1) * 16 + lx]);
-        if (lz < 15) maxNb = Math.max(maxNb, skyTop[(lz + 1) * 16 + lx]);
-        // chunk-edge columns always seed (the neighbor chunk may sit lower)
-        if (lx === 0 || lx === 15 || lz === 0 || lz === 15) maxNb = Math.min(H, maxNb + 2);
-        for (let y = myTop; y < maxNb && y < H; y++) {
-          qx.push(lx); qy.push(y); qz.push(lz); ql.push(15); qc.push(0);
-        }
-      }
-    }
-    // Soft daylight edge spill. Direct sky columns stay at 15, but light that
-    // leaks sideways under a roof is capped and then attenuates normally. This
-    // keeps small overhangs from going pitch black without letting one tiny roof
-    // hole flood an entire cave with full daylight.
-    const hDirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-    const SKY_EDGE_SPILL = 10;
-    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
-      for (let y = 0; y < H; y++) {
-        const i = this.idx(lx, y, lz);
-        if ((L[i] >> 4) !== 15) continue;
-        for (const [dx, dz] of hDirs) {
-          const nx = lx + dx, nz = lz + dz;
-          if (nx < 0 || nx > 15 || nz < 0 || nz > 15) continue;
-          const ni = this.idx(nx, y, nz);
-          if (!this.opaqueToLight(blocks[ni]) && (L[ni] >> 4) < SKY_EDGE_SPILL) {
-            qx.push(nx); qy.push(y); qz.push(nz); ql.push(SKY_EDGE_SPILL); qc.push(0);
-          }
-        }
-      }
-    }
-    // seed from neighbor chunk borders
-    const seedFrom = (lx, y, lz, nx, nz) => {
-      const raw = this.getLightRaw(X0 + nx, y, Z0 + nz);
-      const s = (raw >> 4) - 1, b = (raw & 15) - 1;
-      if (s > 0) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(s); qc.push(0); }
-      if (b > 0) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(b); qc.push(1); }
+    const qx = [], qy = [], qz = [], ql = [], qc = []; // 0 sky, 1 red, 2 green, 3 blue
+    const chan = (p, c) => (p >> ((c - 1) * 4)) & 15;
+    const setChan = (i, c, lvl) => {
+      const shift = (c - 1) * 4, mask = 15 << shift;
+      C[i] = (C[i] & ~mask) | (lvl << shift);
+      L[i] = (L[i] & 0xF0) | this.lightRGBMax(C[i]);
     };
-    const nW = this.chunks.get(this.key(ch.cx - 1, ch.cz));
-    const nE = this.chunks.get(this.key(ch.cx + 1, ch.cz));
-    const nN = this.chunks.get(this.key(ch.cx, ch.cz - 1));
-    const nS = this.chunks.get(this.key(ch.cx, ch.cz + 1));
-    for (let y = 0; y < H; y++) {
-      for (let l = 0; l < 16; l++) {
-        if (nW && nW.light) seedFrom(0, y, l, -1, l);
-        if (nE && nE.light) seedFrom(15, y, l, 16, l);
-        if (nN && nN.light) seedFrom(l, y, 0, l, -1);
-        if (nS && nS.light) seedFrom(l, y, 15, l, 1);
+
+    const skyTop = new Int16Array(256);
+    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+      let open = true, top = H;
+      for (let y = H - 1; y >= 0; y--) {
+        const i = this.idx(lx, y, lz), id = blocks[i];
+        if (open && this.opaqueToLight(id)) { open = false; top = y + 1; }
+        if (open) L[i] = 0xF0;
+        const em = this.lightEmitRGB(id);
+        if (em) {
+          C[i] = em; L[i] = (L[i] & 0xF0) | this.lightRGBMax(em);
+          for (let c = 1; c <= 3; c++) { const v = chan(em, c); if (v) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(v); qc.push(c); } }
+        }
+      }
+      if (open) top = 0;
+      skyTop[lz * 16 + lx] = top;
+    }
+    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+      const myTop = skyTop[lz * 16 + lx];
+      let maxNb = myTop;
+      if (lx > 0) maxNb = Math.max(maxNb, skyTop[lz * 16 + lx - 1]);
+      if (lx < 15) maxNb = Math.max(maxNb, skyTop[lz * 16 + lx + 1]);
+      if (lz > 0) maxNb = Math.max(maxNb, skyTop[(lz - 1) * 16 + lx]);
+      if (lz < 15) maxNb = Math.max(maxNb, skyTop[(lz + 1) * 16 + lx]);
+      if (lx === 0 || lx === 15 || lz === 0 || lz === 15) maxNb = Math.min(H, maxNb + 2);
+      for (let y = myTop; y < maxNb && y < H; y++) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(15); qc.push(0); }
+    }
+    const hDirs = [[1, 0], [-1, 0], [0, 1], [0, -1]], SKY_EDGE_SPILL = 10;
+    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) for (let y = 0; y < H; y++) {
+      const i = this.idx(lx, y, lz);
+      if ((L[i] >> 4) !== 15) continue;
+      for (const [dx, dz] of hDirs) {
+        const nx = lx + dx, nz = lz + dz;
+        if (nx < 0 || nx > 15 || nz < 0 || nz > 15) continue;
+        const ni = this.idx(nx, y, nz);
+        if (!this.opaqueToLight(blocks[ni]) && (L[ni] >> 4) < SKY_EDGE_SPILL) { qx.push(nx); qy.push(y); qz.push(nz); ql.push(SKY_EDGE_SPILL); qc.push(0); }
       }
     }
+    const seedFrom = (lx, y, lz, nx, nz) => {
+      const raw = this.getLightRaw(X0 + nx, y, Z0 + nz), p = this.getBlockLightRGBRaw(X0 + nx, y, Z0 + nz);
+      const sky = (raw >> 4) - 1;
+      if (sky > 0) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(sky); qc.push(0); }
+      for (let c = 1; c <= 3; c++) { const v = chan(p, c) - 1; if (v > 0) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(v); qc.push(c); } }
+    };
+    const nW = this.chunks.get(this.key(ch.cx - 1, ch.cz)), nE = this.chunks.get(this.key(ch.cx + 1, ch.cz));
+    const nN = this.chunks.get(this.key(ch.cx, ch.cz - 1)), nS = this.chunks.get(this.key(ch.cx, ch.cz + 1));
+    for (let y = 0; y < H; y++) for (let l = 0; l < 16; l++) {
+      if (nW && nW.light) seedFrom(0, y, l, -1, l);
+      if (nE && nE.light) seedFrom(15, y, l, 16, l);
+      if (nN && nN.light) seedFrom(l, y, 0, l, -1);
+      if (nS && nS.light) seedFrom(l, y, 15, l, 1);
+    }
 
-    // flood fill (within this chunk only)
     while (qx.length) {
       const x = qx.pop(), y = qy.pop(), z = qz.pop(), lvl = ql.pop(), c = qc.pop();
-      const i = this.idx(x, y, z);
-      const id = blocks[i];
+      const i = this.idx(x, y, z), id = blocks[i];
       if (this.opaqueToLight(id) && this.lightEmit(id) === 0) continue;
-      const cur = c === 0 ? (L[i] >> 4) : (L[i] & 15);
+      const cur = c === 0 ? (L[i] >> 4) : chan(C[i], c);
       if (lvl < cur) continue;
-      if (lvl > cur) L[i] = c === 0 ? ((lvl << 4) | (L[i] & 15)) : ((L[i] & 0xF0) | lvl);
+      if (lvl > cur) c === 0 ? (L[i] = (lvl << 4) | (L[i] & 15)) : setChan(i, c, lvl);
       if (lvl <= 1) continue;
-      const spread = (nx, ny, nz, nl) => {
+      const spread = (nx, ny, nz) => {
         if (nx < 0 || nx > 15 || nz < 0 || nz > 15 || ny < 0 || ny >= H) return;
         const ni = this.idx(nx, ny, nz);
         if (this.opaqueToLight(blocks[ni])) return;
-        const ncur = c === 0 ? (L[ni] >> 4) : (L[ni] & 15);
+        const ncur = c === 0 ? (L[ni] >> 4) : chan(C[ni], c), nl = lvl - 1;
         if (nl > ncur) { qx.push(nx); qy.push(ny); qz.push(nz); ql.push(nl); qc.push(c); }
       };
-      // BFS sky spill attenuates in every direction. Direct sky columns are
-      // filled separately above; this prevents one roof hole from flooding caves.
-      spread(x, y - 1, z, lvl - 1);
-      spread(x, y + 1, z, lvl - 1);
-      spread(x + 1, y, z, lvl - 1);
-      spread(x - 1, y, z, lvl - 1);
-      spread(x, y, z + 1, lvl - 1);
-      spread(x, y, z - 1, lvl - 1);
+      spread(x, y - 1, z); spread(x, y + 1, z); spread(x + 1, y, z); spread(x - 1, y, z); spread(x, y, z + 1); spread(x, y, z - 1);
     }
   },
 
-  // ---------- incremental lighting (BFS add/remove, crosses chunk borders) ----------
+  // ---------- incremental RGB lighting (BFS add/remove, crosses chunk borders) ----------
   getChLight(x, y, z, channel) {
-    if (y < 0) return 0;
-    if (y >= this.H) return channel === 0 ? 15 : this.sparseBlockLightAt(x, y, z);
+    if (y < 0 || y >= this.H) return 0;
     const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
-    if (!ch) return channel === 0 ? 15 : 0;
-    // During grouped relights, loaded chunks may intentionally have null light.
-    // Do not let them seed fake sky/block light into neighboring cave cells.
-    if (!ch.light) return 0;
-    const v = ch.light[this.idx(this.localCoord(x), y, this.localCoord(z))];
-    return channel === 0 ? (v >> 4) : (v & 15);
+    if (!ch || !ch.light) return 0;
+    const i = this.idx(this.localCoord(x), y, this.localCoord(z));
+    if (channel === 0) return ch.light[i] >> 4;
+    const p = ch.blockRGB ? ch.blockRGB[i] : ((ch.light[i] & 15) * 0x111);
+    return (p >> ((channel - 1) * 4)) & 15;
   },
 
   setChLight(x, y, z, channel, lvl, touched) {
@@ -503,11 +493,15 @@ const World = {
     const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch || !ch.light) return;
     const i = this.idx(this.localCoord(x), y, this.localCoord(z));
-    const v = ch.light[i];
-    ch.light[i] = channel === 0 ? ((lvl << 4) | (v & 15)) : ((v & 0xF0) | lvl);
+    if (channel === 0) ch.light[i] = (lvl << 4) | (ch.light[i] & 15);
+    else {
+      if (!ch.blockRGB) ch.blockRGB = new Uint16Array(16 * 16 * this.H);
+      const shift = (channel - 1) * 4, mask = 15 << shift;
+      ch.blockRGB[i] = (ch.blockRGB[i] & ~mask) | (lvl << shift);
+      ch.light[i] = (ch.light[i] & 0xF0) | this.lightRGBMax(ch.blockRGB[i]);
+    }
     if (touched) {
       touched.add(this.key(ch.cx, ch.cz));
-      // border light changes affect the neighbor's mesh too (faces sample across)
       const lx = this.localCoord(x), lz = this.localCoord(z);
       if (lx === 0) touched.add(this.key(ch.cx - 1, ch.cz));
       if (lx === 15) touched.add(this.key(ch.cx + 1, ch.cz));
@@ -545,18 +539,9 @@ const World = {
         const ch = n.ch || chunkAt(n.x, n.z); // pushed nodes carry their chunk
         if (!ch || !ch.light) continue;
         const i = this.idx(this.localCoord(n.x), n.y, this.localCoord(n.z));
-        const v = ch.light[i];
-        const cur = channel === 0 ? (v >> 4) : (v & 15);
+        const cur = this.getChLight(n.x, n.y, n.z, channel);
         if (lvl <= cur) continue;
-        ch.light[i] = channel === 0 ? ((lvl << 4) | (v & 15)) : ((v & 0xF0) | lvl);
-        if (touched) {
-          touched.add(this.key(ch.cx, ch.cz));
-          const lx = this.localCoord(n.x), lz = this.localCoord(n.z);
-          if (lx === 0) touched.add(this.key(ch.cx - 1, ch.cz));
-          if (lx === 15) touched.add(this.key(ch.cx + 1, ch.cz));
-          if (lz === 0) touched.add(this.key(ch.cx, ch.cz - 1));
-          if (lz === 15) touched.add(this.key(ch.cx, ch.cz + 1));
-        }
+        this.setChLight(n.x, n.y, n.z, channel, lvl, touched);
         if (lvl <= 1) continue;
         for (const [dx, dy, dz] of this.LIGHT_DIRS) {
           const nx = n.x + dx, ny = n.y + dy, nz = n.z + dz;
@@ -567,8 +552,7 @@ const World = {
           const ni = this.idx(this.localCoord(nx), ny, this.localCoord(nz));
           if (this.opaqueToLight(nch.blocks[ni])) continue;
           const nl = lvl - 1; // direct sky columns are handled by full recompute, not flood-fill
-          const nv = nch.light[ni];
-          const ncur = channel === 0 ? (nv >> 4) : (nv & 15);
+          const ncur = this.getChLight(nx, ny, nz, channel);
           if (nl > ncur) buckets[nl].push({ x: nx, y: ny, z: nz, l: nl, ch: nch });
         }
       }
@@ -601,67 +585,93 @@ const World = {
     this.lightAdd(relight, channel, touched);
   },
 
+  // Rebuild only the Manhattan sphere a weakened emitter could have lit.
+  // Real emitters and unaffected outside light seed the cleared cells again.
+  relightBlockArea(sx, sy, sz, radius, touched) {
+    const r = Math.max(0, radius | 0), queues = [null, [], [], []], seed = (x, y, z, packed, through = true) => {
+      if (!packed || (through && !this.transparentToLight(x, y, z))) return;
+      for (let c = 1; c <= 3; c++) { const l = (packed >> ((c - 1) * 4)) & 15; if (l) queues[c].push({ x, y, z, l }); }
+    };
+    const each = fn => {
+      for (let dx = -r; dx <= r; dx++) for (let dz = -(r - Math.abs(dx)); dz <= r - Math.abs(dx); dz++) {
+        const yr = r - Math.abs(dx) - Math.abs(dz), x = sx + dx, z = sz + dz;
+        for (let y = Math.max(0, sy - yr); y <= Math.min(this.H - 1, sy + yr); y++) fn(x, y, z, dx, y - sy, dz);
+      }
+    };
+
+    each((x, y, z) => {
+      const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
+      if (!ch || !ch.light || !ch.blockRGB) return;
+      const i = this.idx(this.localCoord(x), y, this.localCoord(z));
+      if (!ch.blockRGB[i]) return;
+      ch.blockRGB[i] = 0;
+      ch.light[i] &= 0xF0;
+      touched.add(this.key(ch.cx, ch.cz));
+    });
+
+    each((x, y, z, dx, dy, dz) => {
+      seed(x, y, z, this.lightEmitRGB(this.getBlock(x, y, z)), false);
+      for (const [ox, oy, oz] of this.LIGHT_DIRS) {
+        if (Math.abs(dx + ox) + Math.abs(dy + oy) + Math.abs(dz + oz) <= r) continue;
+        const p = this.getBlockLightRGBRaw(x + ox, y + oy, z + oz);
+        let q = 0;
+        for (let c = 0; c < 3; c++) q |= Math.max(0, ((p >> (c * 4)) & 15) - 1) << (c * 4);
+        seed(x, y, z, q);
+      }
+    });
+    for (let c = 1; c <= 3; c++) this.lightAdd(queues[c], c, touched);
+  },
+
   lightOnBlockChanged(x, y, z, oldId, newId) {
     if (y < 0 || y >= this.H) return;
     const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch || !ch.light) return;
-    const oldEm = this.lightEmit(oldId), newEm = this.lightEmit(newId);
+    const oldEm = this.lightEmitRGB(oldId), newEm = this.lightEmitRGB(newId);
     const oldOp = this.opaqueToLight(oldId), newOp = this.opaqueToLight(newId);
     if (oldEm === newEm && oldOp === newOp) return;
 
     const touched = new Set();
-    // tear down whatever light lived here (handles removed sources & new walls)
-    this.lightRemove(x, y, z, 0, touched);
-    this.lightRemove(x, y, z, 1, touched);
+    if (oldOp !== newOp) this.lightRemove(x, y, z, 0, touched);
 
-    if (!newOp) {
-      // pull surrounding light back into this now-open cell
-      const q0 = [], q1 = [];
-      for (const [dx, dy, dz] of this.LIGHT_DIRS) {
-        const nx = x + dx, ny = y + dy, nz = z + dz;
-        const s = this.getChLight(nx, ny, nz, 0);
-        const b = this.getChLight(nx, ny, nz, 1);
-        const sCand = (dy === 1 && s === 15) ? 15 : s - 1;
-        if (sCand > 0) q0.push({ x, y, z, l: sCand });
-        if (b - 1 > 0) q1.push({ x, y, z, l: b - 1 });
+    const decreased = [0, 4, 8].some(shift => ((newEm >> shift) & 15) < ((oldEm >> shift) & 15));
+    if (decreased) this.relightBlockArea(x, y, z, this.lightRGBMax(oldEm) - 1, touched);
+    else {
+      if (oldOp !== newOp) for (let c = 1; c <= 3; c++) this.lightRemove(x, y, z, c, touched);
+      for (let c = 1; c <= 3; c++) {
+        const lvl = (newEm >> ((c - 1) * 4)) & 15;
+        if (lvl) this.lightAdd([{ x, y, z, l: lvl }], c, touched);
       }
-      this.lightAdd(q0, 0, touched);
-      this.lightAdd(q1, 1, touched);
-    }
-    if (newEm > 0) this.lightAdd([{ x, y, z, l: newEm }], 1, touched);
-
-    // Removed a light source or changed skylight blocking? Queue a full
-    // verification recompute of the area.  This keeps daylight spread correct
-    // after placing/removing ceiling blocks instead of leaving harsh black cells.
-    if ((oldEm > 0 && newEm !== oldEm) || oldOp !== newOp) {
-      const seen = new Set();
-      // Queue only the changed chunk and actual border neighbors. A 3x3 chunk
-      // verification on every block break was the main hitch; lightAdd/lightRemove
-      // already propagates the real local update across chunk borders.
-      const relightChunk = (ccx, ccz) => {
-        const rk = this.key(ccx, ccz);
-        if (!seen.has(rk)) { seen.add(rk); this.relightQueue.add(rk); }
-      };
-      const ccx = this.chunkCoord(x), ccz = this.chunkCoord(z);
-      relightChunk(ccx, ccz);
-      const lx = this.localCoord(x), lz = this.localCoord(z);
-      if (lx === 0) relightChunk(ccx - 1, ccz);
-      if (lx === 15) relightChunk(ccx + 1, ccz);
-      if (lz === 0) relightChunk(ccx, ccz - 1);
-      if (lz === 15) relightChunk(ccx, ccz + 1);
     }
 
-    for (const k of touched) {
-      const c2 = this.chunks.get(k);
-      if (c2 && c2.hasMesh) this.dirty.add(k);
+    if (oldOp !== newOp && !newOp) {
+      const skyQ = [], rgbQ = [null, [], [], []];
+      for (const [dx, dy, dz] of this.LIGHT_DIRS) {
+        const sky = this.getChLight(x + dx, y + dy, z + dz, 0), l = (dy === 1 && sky === 15) ? 15 : sky - 1;
+        if (l > 0) skyQ.push({ x, y, z, l });
+        if (!decreased) for (let c = 1; c <= 3; c++) { const v = this.getChLight(x + dx, y + dy, z + dz, c) - 1; if (v > 0) rgbQ[c].push({ x, y, z, l: v }); }
+      }
+      this.lightAdd(skyQ, 0, touched);
+      if (!decreased) for (let c = 1; c <= 3; c++) this.lightAdd(rgbQ[c], c, touched);
     }
+
+    // Opacity changes can affect skylight far beyond a block emitter's fixed
+    // range, so keep the existing time-sliced verification only for those.
+    if (oldOp !== newOp) {
+      const ccx = this.chunkCoord(x), ccz = this.chunkCoord(z), lx = this.localCoord(x), lz = this.localCoord(z);
+      this.relightQueue.add(this.key(ccx, ccz));
+      if (lx === 0) this.relightQueue.add(this.key(ccx - 1, ccz));
+      if (lx === 15) this.relightQueue.add(this.key(ccx + 1, ccz));
+      if (lz === 0) this.relightQueue.add(this.key(ccx, ccz - 1));
+      if (lz === 15) this.relightQueue.add(this.key(ccx, ccz + 1));
+    }
+    for (const k of touched) { const c2 = this.chunks.get(k); if (c2 && c2.hasMesh) this.dirty.add(k); }
   },
 
   // push a freshly-lit chunk's border light into already-lit neighbors
   borderPush(ch) {
     const X0 = ch.cx * 16, Z0 = ch.cz * 16;
     const touched = new Set();
-    for (const channel of [0, 1]) {
+    for (const channel of [0, 1, 2, 3]) {
       const q = [];
       const feed = (x, y, z, nx, nz) => {
         const l = this.getChLight(x, y, z, channel);
@@ -699,6 +709,7 @@ const World = {
     const baseY = y < this.H;
     const lx0 = this.localCoord(x), lz0 = this.localCoord(z);
     const old = baseY ? ch.blocks[this.idx(lx0, y, lz0)] : this.extraBlock(ch, x, y, z);
+    if (isWaterlogged(old) && id === B.AIR && !opts.noWaterRestore) id = B.WATER;
     if (old === id) return;
     if (baseY) ch.blocks[this.idx(lx0, y, lz0)] = id;
     else this.setExtraBlock(ch, x, y, z, id);
@@ -785,7 +796,8 @@ const World = {
       if (spr) { this.scene.remove(spr); this.signSprites.delete(k); }
     }
     if (oldId === B.LORE && newId !== B.LORE) this.loreMap.delete(k);
-    if ((oldId === B.FURNACE || oldId === B.FURNACE_LIT) && newId !== B.FURNACE && newId !== B.FURNACE_LIT) {
+    if ((oldId === B.FURNACE || oldId === B.FURNACE_LIT || oldId === B.OXYGENATION_BENCH) &&
+        newId !== B.FURNACE && newId !== B.FURNACE_LIT && newId !== B.OXYGENATION_BENCH) {
       const f = this.furnaces.get(k);
       if (f) {
         for (const s of [f.in, f.fuel, f.out]) {
@@ -885,14 +897,15 @@ const World = {
     }
     if (Reg[above] && Reg[above].needsSupport) {
       this.setBlock(x, y + 1, z, B.AIR);
-      const dropId = above === B.SIGN ? B.SIGN : isSapling(above) ? above : isFlower(above) ? above : B.TORCH;
+      const dropId = above === B.SIGN ? B.SIGN : isSapling(above) ? above : isFlower(above) ? above : isTorch(above) ? torchItemId(above) : above;
       Drops.spawn(x + 0.5, y + 1.3, z + 0.5, dropId, 1);
     }
     for (const [wid, dir] of Object.entries(WTORCH_DIR)) {
       const tx = x + dir[0], tz = z + dir[2];
       if (this.getBlock(tx, y, tz) === +wid) {
         this.setBlock(tx, y, tz, B.AIR);
-        Drops.spawn(tx + 0.5, y + 0.4, tz + 0.5, B.TORCH, 1);
+        const dropId = Reg[+wid] && Reg[+wid].drop ? Reg[+wid].drop.id : B.TORCH;
+        Drops.spawn(tx + 0.5, y + 0.4, tz + 0.5, dropId, 1);
       }
     }
     for (const [lid, dir] of Object.entries(LADDER_DIR)) {
@@ -1060,6 +1073,10 @@ const World = {
     return this._clamp01(warm * dry);
   },
 
+  oceanNoiseAt(x, z) { return NoiseGen.fbm2(this.seed + 8383, x * 0.00135, z * 0.00135, 4, 2, 0.5); },
+  oceanBlendAt(x, z) { return this._smoothstep(0.50, 0.68, this.oceanNoiseAt(x, z)); },
+  deepOceanBlendAt(x, z) { return this._smoothstep(0.70, 0.86, this.oceanNoiseAt(x, z)); },
+
   rawHeightAt(x, z) {
     const s = this.seed;
     const e = NoiseGen.fbm2(s, x * 0.0045, z * 0.0045, 4, 2, 0.5);
@@ -1069,18 +1086,19 @@ const World = {
     const mtn = NoiseGen.fbm2(s + 551, x * 0.006, z * 0.006, 3, 2, 0.5);
     if (mtn > 0.58) normal += (mtn - 0.58) * 95;
 
-    // Deserts stay above sea level, but no longer force a hard cliff at the edge.
+    // Deserts stay above sea level, while broad ocean masks pull terrain below sea level.
+    const ocean = this.oceanBlendAt(x, z), deep = this.deepOceanBlendAt(x, z);
     const desert = this.SEA - 1 + e * 14 + r * 2;
-    const h = this._lerp(normal, desert, this.desertBlendAt(x, z));
-    return Math.max(4, Math.min(this.H - 8, h));
+    const land = this._lerp(normal, desert, this.desertBlendAt(x, z) * (1 - ocean));
+    const floor = this.SEA - 4 - e * 3 - deep * 14 + r * 1.5;
+    return Math.max(4, Math.min(this.H - 8, this._lerp(land, floor, ocean))); 
   },
 
   heightAt(x, z) {
     const raw = this.rawHeightAt(x, z);
-    const d = this.desertBlendAt(x, z);
-    // Extra shoreline/border smoothing only where the terrain is transitioning.
-    // This keeps caves/mountains rugged, but removes the 8-15 block biome ledges.
-    const border = 1 - Math.abs(d * 2 - 1);
+    const d = this.desertBlendAt(x, z), o = this.oceanBlendAt(x, z);
+    // Extra shoreline/border smoothing only where terrain or ocean masks transition.
+    const border = Math.max(1 - Math.abs(d * 2 - 1), 1 - Math.abs(o * 2 - 1));
     let h = raw;
     if (border > 0.02) {
       const step = 3;
@@ -1097,8 +1115,8 @@ const World = {
   },
 
   biomeAt(x, z) {
-    // regions small enough to alternate within walking distance, desert band wide
-    // (0.0016 regions were so huge you could walk 500+ blocks and see one biome)
+    const ocean = this.oceanBlendAt(x, z);
+    if (ocean > 0.58) return this.deepOceanBlendAt(x, z) > 0.48 ? 'deep_ocean' : 'ocean';
     const n = this.biomeNoiseAt(x, z);
     if (n.t < 0.40) return 'snowy';
     if (n.t > 0.52 && n.m < 0.55) return 'desert';
@@ -1189,6 +1207,7 @@ const World = {
       extraBlocks: new Map(msg.extraBlocks || []),
       worldBorderColumns: msg.worldBorderColumns || [],
       light: new Uint8Array(msg.light),
+      blockRGB: msg.blockRGB ? new Uint16Array(msg.blockRGB) : null,
     });
     // merge gen-time registries with the same has-guards the sync path uses
     for (const [key, v] of msg.chests || []) if (!this.chests.has(key)) this.chests.set(key, v);
@@ -1220,7 +1239,7 @@ const World = {
       [this.key(ch.cx, ch.cz - 1), 0, 15, false],  // north: my lz 0 <- nb lz 15
       [this.key(ch.cx, ch.cz + 1), 15, 0, false],
     ];
-    for (const channel of [0, 1]) {
+    for (const channel of [0, 1, 2, 3]) {
       const q = [];
       for (const [nk, myEdge, nbEdge, xAxis] of sides) {
         const nb = this.chunks.get(nk);
@@ -1230,10 +1249,10 @@ const World = {
           const tlx = xAxis ? nbEdge : i, tlz = xAxis ? i : nbEdge;
           for (let y = 0; y < H; y++) {
             const ni = this.idx(tlx, y, tlz);
-            const nl = channel === 0 ? (nb.light[ni] >> 4) : (nb.light[ni] & 15);
+            const nl = channel === 0 ? (nb.light[ni] >> 4) : (((nb.blockRGB ? nb.blockRGB[ni] : ((nb.light[ni] & 15) * 0x111)) >> ((channel - 1) * 4)) & 15);
             if (nl <= 1) continue;
             const mi = this.idx(mlx, y, mlz);
-            const ml = channel === 0 ? (ch.light[mi] >> 4) : (ch.light[mi] & 15);
+            const ml = channel === 0 ? (ch.light[mi] >> 4) : (((ch.blockRGB ? ch.blockRGB[mi] : ((ch.light[mi] & 15) * 0x111)) >> ((channel - 1) * 4)) & 15);
             if (nl - 1 > ml && !this.opaqueToLight(ch.blocks[mi])) {
               q.push({ x: X0 + mlx, y, z: Z0 + mlz, l: nl - 1 });
             }
@@ -1263,17 +1282,20 @@ const World = {
         const wx = cx * 16 + lx, wz = cz * 16 + lz;
         const h = this.heightAt(wx, wz);
         const biome = this.biomeAt(wx, wz);
-        const beach = h <= SEA + 1;
+        const ocean = biome === 'ocean', deepOcean = biome === 'deep_ocean';
+        const beach = h <= SEA + 1 && !ocean && !deepOcean;
         const sandy = beach || biome === 'desert';
         for (let y = 0; y < H; y++) {
           let id = B.AIR;
           if (y === 0) id = B.BEDROCK;
           else if (y === 1 && NoiseGen.hash3(this.seed, wx, y, wz) < 0.5) id = B.BEDROCK;
           else if (y === 2 && NoiseGen.hash3(this.seed, wx, y, wz) < 0.2) id = B.BEDROCK;
-          else if (y < h - (sandy ? 4 : 2)) id = B.STONE;
-          else if (y < h) id = sandy ? B.SAND : B.DIRT;
+          else if (y < h - (sandy || ocean || deepOcean ? 4 : 2)) id = B.STONE;
+          else if (y < h) id = deepOcean ? B.DEEP_OCEAN_STONE : ocean ? B.OCEAN_SAND : sandy ? B.SAND : B.DIRT;
           else if (y === h) {
-            if (sandy) id = B.SAND;
+            if (deepOcean) id = B.DEEP_OCEAN_STONE;
+            else if (ocean) id = B.OCEAN_SAND;
+            else if (sandy) id = B.SAND;
             else if (h > 58) id = NoiseGen.hash2(this.seed + 3, wx, wz) < 0.6 ? B.SNOWY_GRASS : B.STONE;
             else if (biome === 'snowy') id = B.SNOWY_GRASS;
             else id = B.GRASS;
@@ -1368,7 +1390,7 @@ const World = {
     const H = this.H;
     const blocks = data.blocks;
     const extraBlocks = data.extraBlocks || new Map();
-    const ch = { cx, cz, blocks, extraBlocks: extraBlocks.size ? extraBlocks : null, worldBorderColumns: data.worldBorderColumns || [], light: data.light || null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, sectionMeshes: [], hasMesh: false };
+    const ch = { cx, cz, blocks, extraBlocks: extraBlocks.size ? extraBlocks : null, worldBorderColumns: data.worldBorderColumns || [], light: data.light || null, blockRGB: data.blockRGB || null, solidMesh: null, cutoutMesh: null, waterMesh: null, lavaMesh: null, photoMesh: null, sectionMeshes: [], hasMesh: false };
     this.chunks.set(k, ch);
 
     for (let y = 0; y < H; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
@@ -1541,6 +1563,8 @@ const World = {
     const y = Number.isFinite(h) ? h : this.heightAt(wx, wz);
     const biome = this.biomeAt(wx, wz);
     const beach = y <= this.SEA + 1;
+    if (biome === 'deep_ocean') return B.DEEP_OCEAN_STONE;
+    if (biome === 'ocean') return B.OCEAN_SAND;
     if (beach || biome === 'desert') return B.SAND;
     if (y > 58) return NoiseGen.hash2(this.seed + 3, wx, wz) < 0.6 ? B.SNOWY_GRASS : B.STONE;
     if (biome === 'snowy') return B.SNOWY_GRASS;
@@ -1630,6 +1654,30 @@ const World = {
         let nearWater = false;
         for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1]]) if (this.heightAt(wx + dx, wz + dz) < this.SEA) nearWater = true;
         if (nearWater) put(wx, h + 1, wz, B.CATTAIL, false);
+      }
+    }
+
+    // Ocean and deep-ocean floor life stays on the normal deterministic feature path.
+    {
+      const corals = [B.CORAL_RED, B.CORAL_BLUE, B.CORAL_YELLOW, B.CORAL_PURPLE, B.CORAL_GREEN];
+      const attempts = 2 + ((tr() * 5) | 0);
+      for (let i = 0; i < attempts; i++) {
+        const wx = cx * 16 + 1 + ((tr() * 14) | 0), wz = cz * 16 + 1 + ((tr() * 14) | 0);
+        const biome = this.biomeAt(wx, wz), h = this.heightAt(wx, wz), depth = this.SEA - h;
+        if ((biome !== 'ocean' && biome !== 'deep_ocean') || depth < 3) continue;
+        if (biome === 'deep_ocean') {
+          if (tr() < 0.34) put(wx, h, wz, B.KELP_BLOCK, true);
+          if (tr() < 0.08) put(wx, h + 1, wz, B.SEA_LANTERN, true);
+          continue;
+        }
+        if (tr() < 0.18) put(wx, h, wz, B.SHELL_BLOCK, true);
+        if (tr() < Math.min(0.88, 0.25 + depth * 0.05)) {
+          put(wx, h + 1, wz, tr() < 0.025 ? B.SEA_LANTERN : corals[(tr() * corals.length) | 0], true);
+          if (depth > 5 && tr() < 0.35) {
+            const d = [[1,0],[-1,0],[0,1],[0,-1]][(tr() * 4) | 0], nh = this.heightAt(wx + d[0], wz + d[1]);
+            if (this.biomeAt(wx + d[0], wz + d[1]) === 'ocean') put(wx + d[0], nh + 1, wz + d[1], corals[(tr() * corals.length) | 0], true);
+          }
+        }
       }
     }
 
@@ -2024,7 +2072,7 @@ const World = {
   },
 
   spawnerMobForState(sp) {
-    if (!sp) return 'skeleton';
+    if (!sp || sp.type === 'sprawler') return 'skeleton';
     if (sp.type && sp.type !== 'dungeon_spawner') return sp.type === 'spider' ? (Math.random() < 0.5 ? 'skeleton' : 'creeper') : sp.type;
     const rank = sp.rank || 'green';
     const profile = this.dungeonSpawnerProfile(rank);
@@ -2539,7 +2587,7 @@ const World = {
       }
       // Clear every chunk in the group before any recompute so old cave light
       // cannot be copied from one queued chunk to another.
-      for (const rc of group) rc.light = null;
+      for (const rc of group) { rc.light = null; rc.blockRGB = null; }
       for (const rc of group) this.computeChunkLight(rc);
       for (const rc of group) {
         this.borderPush(rc);
@@ -2802,10 +2850,26 @@ const World = {
       return c.light[(y << 8) + (az << 4) + ax];
     };
 
-    const lightAt = (x, y, z) => {
-      const raw = gl(x, y, z);
-      return [(raw & 15) / 15, (raw >> 4) / 15];
+    const glRGB = (wx, y, wz) => {
+      if (y >= H) return this.sparseBlockLightRGBAt(wx, y, wz);
+      if (y < 0) return 0;
+      const lx = wx - X0, lz = wz - Z0;
+      let c = ch, ax = lx, az = lz;
+      if (lx < 0 || lx > 15 || lz < 0 || lz > 15) {
+        if (lx === -1) { c = nbW; ax = 15; }
+        else if (lx === 16) { c = nbE; ax = 0; }
+        else if (lz === -1) { c = nbN; az = 15; }
+        else if (lz === 16) { c = nbS; az = 0; }
+        else c = null;
+      }
+      if (!c || !c.light) return 0;
+      const i = (y << 8) + (az << 4) + ax;
+      if (c.blockRGB) return c.blockRGB[i] || 0;
+      const l = c.light[i] & 15;
+      return l | (l << 4) | (l << 8);
     };
+
+    const lightAt = (x, y, z) => [glRGB(x, y, z) / 4095, (gl(x, y, z) >> 4) / 15];
 
     const pushQuad = (b, verts, uvr, uvs, shade, lb, ls, repX) => {
       const base = b.pos.length / 3;
@@ -3347,6 +3411,7 @@ const World = {
           const wx = X0 + lx, wz = Z0 + lz;
           const def = Reg[id];
 
+          if (def && def.waterlogged) this.meshFluid(bufs.water, pushQuad, wx, y, wz, B.WATER, false, lightAt, gb);
           if (isWater(id)) { this.meshFluid(bufs.water, pushQuad, wx, y, wz, id, false, lightAt, gb); continue; }
           if (isLava(id)) { this.meshFluid(bufs.lava, pushQuad, wx, y, wz, id, true, lightAt, gb); continue; }
 
@@ -3370,7 +3435,7 @@ const World = {
               continue;
             case 'wtorch': {
               const d = WTORCH_DIR[id];
-              crossQuads(bufs.cutout, wx, y, wz, 'torch',
+              crossQuads(bufs.cutout, wx, y, wz, Atlas.texName(id, 'side'),
                 [-d[0] * 0.38, 0, -d[2] * 0.38], 0.12,
                 [d[0] * 0.42, 0, d[2] * 0.42]);
               continue;
@@ -3558,6 +3623,7 @@ const World = {
       if (!def || !def.block) return;
       bufs = bufsForY(y);
 
+      if (def && def.waterlogged) this.meshFluid(bufs.water, pushQuad, wx, y, wz, B.WATER, false, lightAt, gb);
       if (isWater(id)) { this.meshFluid(bufs.water, pushQuad, wx, y, wz, id, false, lightAt, gb); return; }
       if (isLava(id)) { this.meshFluid(bufs.lava, pushQuad, wx, y, wz, id, true, lightAt, gb); return; }
       if (id === B.MR_FLOOP_DRINKING_WATER) { emitPhotoCube(bufs.photo, wx, y, wz); return; }
@@ -3572,7 +3638,7 @@ const World = {
           return;
         case 'wtorch': {
           const d = WTORCH_DIR[id];
-          crossQuads(bufs.cutout, wx, y, wz, 'torch',
+          crossQuads(bufs.cutout, wx, y, wz, Atlas.texName(id, 'side'),
             [-d[0] * 0.38, 0, -d[2] * 0.38], 0.12,
             [d[0] * 0.42, 0, d[2] * 0.42]);
           return;
@@ -3874,8 +3940,8 @@ const World = {
     if (!gb) gb = (x, yy, z) => this.getBlock(x, yy, z);
     const uvr = Atlas.uv(lava ? 'lava' : 'water');
     const UVQ = [[0, 0], [1, 0], [1, 1], [0, 1]];
-    const same = lava ? isLava : isWater;
-    const levelOf = lava ? lavaLevel : waterLevel;
+    const same = lava ? isLava : isWaterCell;
+    const levelOf = lava ? lavaLevel : waterCellLevel;
     const lvl = levelOf(id);
     const above = gb(wx, y + 1, wz);
     const topH = same(above) ? 1 : Math.max(0.12, lvl / 9);

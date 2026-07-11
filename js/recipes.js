@@ -39,6 +39,7 @@ const Recipes = (() => {
   add(B.EXTREME_CRAFT, 1, [[Fe, AP, Fe], [AP, B.CRAFT, AP], [Fe, AP, Fe]]);
   add(B.TORCH, 4, [[I.COAL], [S]]);
   add(B.TORCH, 4, [[I.CHARCOAL], [S]], { hide: true }); // works in the grid, but no duplicate book entry
+  for (const t of COLORED_TORCHS) add(t.floor, 1, [[B.TORCH, t.dye]]);
   add(B.FURNACE, 1, [[B.COBBLE, B.COBBLE, B.COBBLE], [B.COBBLE, _, B.COBBLE], [B.COBBLE, B.COBBLE, B.COBBLE]]);
   add(B.STONE_BRICKS, 4, [[B.STONE, B.STONE], [B.STONE, B.STONE]]);
   add(B.LADDER_PX, 3, [[S, _, S], [S, S, S], [S, _, S]]);
@@ -72,6 +73,54 @@ const Recipes = (() => {
     add(I[key + '_LEGS'], 1, [[m, m, m], [m, _, m], [m, _, m]]);
     add(I[key + '_BOOTS'], 1, [[m, _, m], [m, _, m]]);
   }
+
+  // --- diving equipment (Extreme Crafting Table only) ---
+  add(I.DIVING_HELMET, 1, [
+    [I.SEA_LANTERN_SHARD, Fe, B.GLASS, Fe, I.SEA_LANTERN_SHARD],
+    [Fe, B.GLASS, B.GLASS, B.GLASS, Fe],
+    [Fe, B.GLASS, _, B.GLASS, Fe],
+  ]);
+  add(I.DIVING_CHEST, 1, [
+    [Fe, _, I.SEA_LANTERN_SHARD, _, Fe],
+    [Fe, B.FLOOP_METAL, B.GLASS, B.FLOOP_METAL, Fe],
+    [Fe, B.FLOOP_METAL, Df, B.FLOOP_METAL, Fe],
+    [Fe, B.FLOOP_METAL, B.FLOOP_METAL, B.FLOOP_METAL, Fe],
+    [I.SEA_LANTERN_SHARD, Fe, Fe, Fe, I.SEA_LANTERN_SHARD],
+  ]);
+  add(I.DIVING_LEGS, 1, [
+    [Fe, Fe, I.SEA_LANTERN_SHARD, Fe, Fe],
+    [Fe, B.FLOOP_METAL, B.FLOOP_METAL, B.FLOOP_METAL, Fe],
+    [Fe, B.FLOOP_METAL, _, B.FLOOP_METAL, Fe],
+    [Fe, B.FLOOP_METAL, _, B.FLOOP_METAL, Fe],
+    [Fe, Fe, _, Fe, Fe],
+  ]);
+  add(I.DIVING_BOOTS, 1, [
+    [I.SEA_LANTERN_SHARD, Fe, _, Fe, I.SEA_LANTERN_SHARD],
+    [Fe, B.FLOOP_METAL, _, B.FLOOP_METAL, Fe],
+    [Fe, Fe, _, Fe, Fe],
+  ]);
+  add(I.OXYGEN_TANK_1M, 1, [
+    [Fe, Fe, I.SEA_LANTERN_SHARD, Fe, Fe],
+    [Fe, B.GLASS, B.GLASS, B.GLASS, Fe],
+    [Fe, B.GLASS, Df, B.GLASS, Fe],
+    [Fe, B.GLASS, B.GLASS, B.GLASS, Fe],
+    [Fe, Fe, Fe, Fe, Fe],
+  ]);
+  add(I.OXYGEN_TANK_5M, 1, [
+    [Df, B.FLOOP_METAL, Df, B.FLOOP_METAL, Df],
+    [B.FLOOP_METAL, I.SEA_LANTERN_SHARD, B.FLOOP_METAL, I.SEA_LANTERN_SHARD, B.FLOOP_METAL],
+    [Df, B.FLOOP_METAL, I.OXYGEN_TANK_1M, B.FLOOP_METAL, Df],
+    [B.FLOOP_METAL, I.SEA_LANTERN_SHARD, B.FLOOP_METAL, I.SEA_LANTERN_SHARD, B.FLOOP_METAL],
+    [Df, B.FLOOP_METAL, Df, B.FLOOP_METAL, Df],
+  ]);
+  add(B.OXYGENATION_BENCH, 1, [
+    [Fe, B.FLOOP_METAL, I.SEA_LANTERN_SHARD, B.FLOOP_METAL, Fe],
+    [B.FLOOP_METAL, B.GLASS, I.BUCKET, B.GLASS, B.FLOOP_METAL],
+    [I.SEA_LANTERN_SHARD, I.BUCKET, Df, I.BUCKET, I.SEA_LANTERN_SHARD],
+    [B.FLOOP_METAL, B.GLASS, I.BUCKET, B.GLASS, B.FLOOP_METAL],
+    [Fe, B.FLOOP_METAL, Fe, B.FLOOP_METAL, Fe],
+  ]);
+  add(B.SEA_TORCH, 4, [[I.SEA_LANTERN_SHARD], [S]]);
 
   // --- extreme farming ---
   add(B.PLANTATION_POT, 1, [
@@ -377,6 +426,7 @@ const Recipes = (() => {
     [I.RAW_IRON]: { out: I.IRON_INGOT, count: 1 },
     [I.RAW_GOLD]: { out: I.GOLD_INGOT, count: 1 },
     [I.RAW_MUTTON]: { out: I.COOKED_MUTTON, count: 1 },
+    [I.RAW_FISH]: { out: I.COOKED_FISH, count: 1 },
     [I.RAW_CHICKEN]: { out: I.COOKED_CHICKEN, count: 1 },
     [B.SAND]: { out: B.GLASS, count: 1 },
     [B.COBBLE]: { out: B.STONE, count: 1 },

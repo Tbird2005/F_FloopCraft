@@ -10,7 +10,7 @@ function fluidClash(x, y, z) {
   if (isLava(id)) {
     const src = id === B.LAVA;
     for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]]) {
-      if (isWater(World.getBlock(x + dx, y + dy, z + dz))) {
+      if (isWaterCell(World.getBlock(x + dx, y + dy, z + dz))) {
         World.setBlock(x, y, z, src ? B.OBSIDIAN : B.COBBLE);
         SFX.splash();
         Particles.burst(x + 0.5, y + 1, z + 0.5, [0.3, 0.3, 0.35], 10, 2);
@@ -47,37 +47,42 @@ const Water = {
   },
 
   washable(id) {
-    return isTorch(id) || isSapling(id) || isFlower(id) || id === B.FIRE || isSnowSheet(id);
+    return (isTorch(id) && !isSeaTorch(id)) || isSapling(id) || isFlower(id) || id === B.FIRE || isSnowSheet(id);
   },
   washDrop(id) {
     if (id === B.FIRE || isSnowSheet(id)) return 0;
-    return isTorch(id) ? B.TORCH : id;
+    return isTorch(id) ? torchItemId(id) : id;
+  },
+  waterlogSeaTorch(x, y, z, id) {
+    if (!isSeaTorch(id) || isWaterlogged(id)) return false;
+    World.setBlock(x, y, z, waterloggedSeaTorchId(id), { noWaterRestore: true });
+    return true;
   },
 
   updateCell(x, y, z) {
     const id = World.getBlock(x, y, z);
-    if (!isWater(id)) {
+    if (!isWaterCell(id)) {
       if (isLava(id)) fluidClash(x, y, z);
       return;
     }
-    const isSrc = id === B.WATER;
-    const lvl = waterLevel(id);
+    const isSrc = isWaterSource(id);
+    const lvl = waterCellLevel(id);
 
     if (!isSrc) {
       let expected = 0;
-      if (isWater(World.getBlock(x, y + 1, z))) expected = 8;
+      if (isWaterCell(World.getBlock(x, y + 1, z))) expected = 8;
       let srcCount = 0;
       for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const n = World.getBlock(x + dx, y, z + dz);
-        if (isWater(n)) {
-          if (n === B.WATER) srcCount++;
-          expected = Math.max(expected, waterLevel(n) - 1);
+        if (isWaterCell(n)) {
+          if (isWaterSource(n)) srcCount++;
+          expected = Math.max(expected, waterCellLevel(n) - 1);
         }
       }
       const belowId = World.getBlock(x, y - 1, z);
       const belowDef = Reg[belowId];
       const belowSolid = belowDef && belowDef.block && belowDef.solid;
-      if (srcCount >= 2 && (belowSolid || belowId === B.WATER)) {
+      if (srcCount >= 2 && (belowSolid || isWaterSource(belowId))) {
         World.setBlock(x, y, z, B.WATER);
         this.spread(x, y, z, 8, true);
         return;
@@ -107,6 +112,7 @@ const Water = {
       SFX.splash();
       return;
     }
+    if (this.waterlogSeaTorch(x, y - 1, z, below)) return;
     const canFallInto = below === B.AIR || this.washable(below) ||
       (isWater(below) && below !== B.WATER && below !== B.WATER_FALL);
     if (canFallInto) {
@@ -114,6 +120,7 @@ const Water = {
         for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
           const nx = x + dx, nz = z + dz;
           const n = World.getBlock(nx, y, nz);
+          if (this.waterlogSeaTorch(nx, y, nz, n)) continue;
           if (isLava(n)) {
             World.setBlock(nx, y, nz, n === B.LAVA ? B.OBSIDIAN : B.COBBLE);
             SFX.splash();
@@ -140,12 +147,13 @@ const Water = {
     }
     // only spread sideways when actually resting on something solid (or a source
     // pool surface) — falling water must fall STRAIGHT down, not staircase into a tsunami
-    const belowBlocksFlow = (belowDef && belowDef.block && belowDef.solid) || below === B.WATER;
+    const belowBlocksFlow = (belowDef && belowDef.block && belowDef.solid) || isWaterSource(below);
     if (!belowBlocksFlow || lvl <= 1) return;
 
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nx = x + dx, nz = z + dz;
       const n = World.getBlock(nx, y, nz);
+      if (this.waterlogSeaTorch(nx, y, nz, n)) continue;
       if (isLava(n)) {
         World.setBlock(nx, y, nz, n === B.LAVA ? B.OBSIDIAN : B.COBBLE);
         SFX.splash();

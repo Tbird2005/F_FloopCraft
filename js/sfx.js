@@ -113,7 +113,7 @@ const SFX = (() => {
   return {
     init, ready, setVolumes, getVolumes,
     dig()      { noise(0.09, 900, 0.22); },
-    breakBlk() { noise(0.16, 1400, 0.3, 300); },
+    breakBlk(pos) { noise(0.16, 1400, 0.3, 300, pos, 42); },
     place()    { noise(0.07, 700, 0.2); tone(180, 0.06, 'square', 0.06); },
     pop()      { tone(520, 0.09, 'square', 0.12, 420); },
     hurt(pos)  { tone(160, 0.18, 'sawtooth', 0.2, -70, pos, 24); },

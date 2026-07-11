@@ -374,7 +374,8 @@ const Physics = {
     const y = b.y + (yOff || 0.2);
     for (const [dx, dz] of [[0, 0], [b.w * 0.9, 0], [-b.w * 0.9, 0], [0, b.w * 0.9], [0, -b.w * 0.9]]) {
       const bx = Math.floor(b.x + dx), bz = Math.floor(b.z + dz);
-      if (isWater(World.getBlock(this._worldXFromLocalCell(bx), this._worldYFromLocalCell(Math.floor(y)), this._worldZFromLocalCell(bz)))) return true;
+      const id = World.getBlock(this._worldXFromLocalCell(bx), this._worldYFromLocalCell(Math.floor(y)), this._worldZFromLocalCell(bz));
+      if (isWater(id) || isWaterlogged(id)) return true;
     }
     return false;
   },

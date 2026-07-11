@@ -41,6 +41,7 @@ function WORLDGEN_WORKER_DRIVER() {
       type: 'chunk', cx: m.cx, cz: m.cz, seed: m.seed,
       blocks: data.blocks.buffer,
       light: ch.light.buffer,
+      blockRGB: ch.blockRGB.buffer,
       extraBlocks: data.extraBlocks && data.extraBlocks.size ? [...data.extraBlocks.entries()] : null,
       worldBorderColumns: data.worldBorderColumns,
       chests: [...World.chests.entries()].slice(preChests),
@@ -56,6 +57,6 @@ function WORLDGEN_WORKER_DRIVER() {
     if (World.featureCache.size > 600) World.featureCache.clear();
     if (World.dungeonCache.size > 200) World.dungeonCache.clear();
 
-    postMessage(out, [out.blocks, out.light]);
+    postMessage(out, [out.blocks, out.light, out.blockRGB]);
   };
 }

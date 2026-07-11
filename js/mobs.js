@@ -40,12 +40,31 @@ const HUMBUG_LINES = ['no.', 'bah.', 'christmas is CANCELLED.', 'patapim is prop
 const JELLY_COLORS = (typeof JELLY_COLORS_ALL !== 'undefined') ? JELLY_COLORS_ALL : ['pink', 'cyan', 'lime', 'grape', 'orange', 'yellow'];
 const JELLY_COLOR_HEX = { pink: 0xff7fd4, cyan: 0x6ee8ff, lime: 0x9cff6e, grape: 0xc77dff, orange: 0xff9d4a, yellow: 0xffe86e };
 const JELLY_MOB_TYPES = ['jelly', 'big_jelly'];
+const OCEAN_MOB_DEFS = {
+  minnow:    { hp: 2,  xp: 1, w: 0.13, h: 0.24, len: 0.55, speed: 2.8, main: '#9bc8d8', dark: '#47788d', school: true, drop: I.RAW_FISH },
+  salmon:    { hp: 6,  xp: 2, w: 0.22, h: 0.38, len: 1.05, speed: 2.7, main: '#db7f75', dark: '#7f3b40', school: true, drop: I.RAW_FISH },
+  tuna:      { hp: 10, xp: 3, w: 0.30, h: 0.48, len: 1.45, speed: 3.5, main: '#4e82a8', dark: '#234a6b', school: true, drop: I.RAW_FISH },
+  clownfish: { hp: 4,  xp: 1, w: 0.17, h: 0.30, len: 0.72, speed: 2.4, main: '#ff8b2f', dark: '#1d1d24', school: true, drop: I.RAW_FISH, stripe: true },
+  pufferfish:{ hp: 5,  xp: 2, w: 0.24, h: 0.42, len: 0.62, speed: 1.8, main: '#d6bd55', dark: '#6b5a24', drop: I.RAW_FISH, puffer: true },
+  anglerfish:{ hp: 8,  xp: 4, w: 0.28, h: 0.45, len: 1.00, speed: 2.1, main: '#37405c', dark: '#111522', drop: I.RAW_FISH, deep: true, angler: true },
+  shark:     { hp: 30, xp: 9, w: 0.58, h: 0.78, len: 2.55, speed: 4.2, main: '#6d8293', dark: '#344653', drop: I.SHARK_TOOTH, hostile: true },
+  jellyfish: { hp: 5,  xp: 2, w: 0.30, h: 0.70, len: 0.62, speed: 1.25, main: '#a98bf0', dark: '#5e3e9b', shape: 'jelly' },
+  stingray:  { hp: 9,  xp: 3, w: 0.55, h: 0.22, len: 1.25, speed: 2.8, main: '#8b796b', dark: '#4d4038', drop: I.RAW_FISH, shape: 'ray' },
+  octopus:   { hp: 12, xp: 4, w: 0.42, h: 0.72, len: 0.85, speed: 2.0, main: '#a64c70', dark: '#57233b', drop: I.INK_SAC, shape: 'octopus' },
+  dolphin:   { hp: 18, xp: 5, w: 0.38, h: 0.58, len: 1.85, speed: 4.6, main: '#7895a8', dark: '#36566a', drop: I.RAW_FISH },
+  seahorse:  { hp: 3,  xp: 1, w: 0.15, h: 0.55, len: 0.42, speed: 1.45, main: '#e7ad48', dark: '#8e5d20', shape: 'seahorse' },
+  barracuda: { hp: 18, xp: 6, w: 0.34, h: 0.46, len: 1.75, speed: 5.1, main: '#9cae63', dark: '#43502a', drop: I.RAW_FISH, hostile: true, damage: 4 },
+  sea_serpent:{ hp: 42, xp: 12, w: 0.48, h: 0.62, len: 3.45, speed: 4.5, main: '#2fc39f', dark: '#0d5449', drop: I.SHARK_TOOTH, hostile: true, deep: true, damage: 7 },
+  giant_squid:{ hp: 50, xp: 14, w: 0.82, h: 1.55, len: 1.25, speed: 3.3, main: '#7f354d', dark: '#220d19', drop: I.INK_SAC, hostile: true, deep: true, damage: 8, shape: 'octopus' },
+};
+const OCEAN_MOB_TYPES = Object.keys(OCEAN_MOB_DEFS);
 
 const MOB_XP = { creeper: 5, skeleton: 5, spider: 4, humbug: 8, sheep: 1, floop: 0, chicken: 1, camel: 2, tung: 12, jelly: 1, big_jelly: 3 };
-const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36, jelly: 8, big_jelly: 20 };
-const MOB_HEIGHTS = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4, jelly: 0.95, big_jelly: 1.8 };
-const MOB_WIDTHS = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4, jelly: 0.24, big_jelly: 0.34 };
-const HOSTILES = ['creeper', 'skeleton', 'humbug', 'tung'];
+const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36, sprawler: 40, jelly: 8, big_jelly: 20 };
+const MOB_HEIGHTS = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4, sprawler: 2.0, jelly: 0.95, big_jelly: 1.8 };
+const MOB_WIDTHS = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4, sprawler: 1.45, jelly: 0.24, big_jelly: 0.34 };
+for (const [type, d] of Object.entries(OCEAN_MOB_DEFS)) { MOB_XP[type] = d.xp; MOB_MAX_HP[type] = d.hp; MOB_HEIGHTS[type] = d.h; MOB_WIDTHS[type] = d.w; }
+const HOSTILES = ['creeper', 'skeleton', 'humbug', 'tung', 'sprawler'];
 const MOB_TARGET_MEMORY = 30; // seconds: mobs remember a target after LOS breaks, but only acquire targets through LOS
 const MOB_TARGET_FORGET_DIST = 34;
 
@@ -96,7 +115,7 @@ const Mobs = {
     if (tgt.peerId) { // remote player: host-side mob AI tracks their streamed state
       const p = (typeof Multiplayer !== 'undefined' && Multiplayer.peers) ? Multiplayer.peers.get(tgt.peerId) : null;
       const s = p && (p.target || p.state);
-      return s ? { x: +s.x, y: +s.y, z: +s.z, h: +s.h || 1.8 } : null;
+      return s ? { x: +s.x, y: +s.y, z: +s.z, h: +s.h || 1.8, swim: !!s.swim } : null;
     }
     if (tgt.isPlayer && typeof Player !== 'undefined' && Player.body) return Player.body;
     if (tgt.mob && tgt.mob.body) return tgt.mob.body;
@@ -112,7 +131,7 @@ const Mobs = {
       const s = p && (p.target || p.state);
       if (!s || s.dead || s.inv || !Number.isFinite(+s.x)) continue;
       if ((s.dim || 'overworld') !== myDim) continue;
-      out.push({ x: +s.x, y: +s.y, z: +s.z, h: +s.h || 1.8, mob: null, isPlayer: true, peerId: pid });
+      out.push({ x: +s.x, y: +s.y, z: +s.z, h: +s.h || 1.8, swim: !!s.swim, mob: null, isPlayer: true, peerId: pid });
     }
     return out;
   },
@@ -390,7 +409,95 @@ const Mobs = {
   buildModel(type, gunId, color) {
     const g = new THREE.Group();
     const parts = { legs: [], wool: [] };
-    if (type === 'creeper') {
+    if (OCEAN_MOB_DEFS[type]) {
+      const d = OCEAN_MOB_DEFS[type];
+      const paint = (c) => {
+        c.fillStyle = d.main; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = d.dark; c.fillRect(0, 12, 16, 4);
+        if (d.stripe) { c.fillStyle = '#f7f3e8'; c.fillRect(4, 0, 3, 16); c.fillRect(11, 0, 2, 16); }
+        this._skinSpeck(c, [d.main, d.dark, '#d7edf5'], d.puffer ? 34 : 14, type.length * 13);
+      };
+      if (d.shape === 'jelly') {
+        const bell = this.tbox(d.w * 2, d.h * 0.45, d.w * 2, 'ocean_' + type, paint, null, { transparent: true, opacity: 0.82 });
+        bell.position.y = d.h * 0.72; g.add(bell); parts.head = bell; parts.tentacles = [];
+        for (const [x, z] of [[-0.16,-0.12],[0.16,-0.12],[-0.16,0.12],[0.16,0.12]]) { const t = this.tbox(0.06, d.h * 0.55, 0.06, 'ocean_' + type, paint, null, { transparent: true, opacity: 0.72 }); t.position.set(x, d.h * 0.28, z); g.add(t); parts.tentacles.push(t); }
+      } else if (d.shape === 'ray') {
+        const body = this.tbox(d.w * 1.65, d.h * 0.65, d.len * 0.72, 'ocean_' + type, paint); body.position.y = d.h * 0.55; body.rotation.y = Math.PI / 4; g.add(body);
+        const tail = this.tbox(0.06, 0.07, d.len * 0.72, 'ocean_' + type, paint); tail.position.set(0, d.h * 0.48, -d.len * 0.62); g.add(tail); parts.tail = tail; parts.head = body;
+      } else if (d.shape === 'octopus') {
+        const head = this.tbox(d.w * 1.35, d.h * 0.58, d.w * 1.25, 'ocean_' + type, paint); head.position.y = d.h * 0.68; g.add(head); parts.head = head; parts.tentacles = [];
+        for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, t = this.tbox(0.07, d.h * 0.55, 0.07, 'ocean_' + type, paint); t.position.set(Math.cos(a) * d.w * 0.65, d.h * 0.28, Math.sin(a) * d.w * 0.65); t.rotation.z = Math.cos(a) * 0.25; g.add(t); parts.tentacles.push(t); }
+      } else if (d.shape === 'seahorse') {
+        const body = this.tbox(d.w * 1.25, d.h * 0.55, d.w, 'ocean_' + type, paint); body.position.y = d.h * 0.48;
+        const head = this.tbox(d.w * 1.1, d.h * 0.24, d.w * 1.4, 'ocean_' + type, paint); head.position.set(0, d.h * 0.83, d.w * 0.35);
+        const snout = this.tbox(d.w * 0.45, d.h * 0.11, d.w * 1.4, 'ocean_' + type, paint); snout.position.set(0, d.h * 0.83, d.w * 1.0);
+        const tail = this.tbox(0.07, d.h * 0.38, 0.07, 'ocean_' + type, paint); tail.position.set(0, d.h * 0.17, -d.w * 0.25); tail.rotation.x = 0.45; g.add(body, head, snout, tail); parts.head = head; parts.tail = tail;
+      } else {
+        const body = this.tbox(d.w * 1.8, d.h * 0.72, d.len * 0.72, 'ocean_' + type, paint); body.position.y = d.h * 0.53; g.add(body); parts.head = body;
+        const tail = this.tbox(Math.max(0.05, d.w * 0.22), d.h * 0.72, d.len * 0.25, 'ocean_' + type, paint); tail.position.set(0, d.h * 0.53, -d.len * 0.49); tail.rotation.y = Math.PI / 4; g.add(tail); parts.tail = tail;
+        const fin = this.tbox(Math.max(0.05, d.w * 0.18), d.h * 0.8, d.len * 0.18, 'ocean_' + type, paint); fin.position.set(0, d.h * 0.93, -d.len * 0.05); fin.rotation.z = 0.35; g.add(fin); parts.fin = fin;
+        if (d.angler) { const stem = this.box(0.035, d.h * 0.7, 0.035, 0x293044); stem.position.set(0, d.h * 1.15, d.len * 0.2); stem.rotation.x = -0.55; const lure = this.box(0.12, 0.12, 0.12, 0xc8ffff); lure.position.set(0, d.h * 1.35, d.len * 0.48); g.add(stem, lure); parts.lure = lure; }
+      }
+    } else if (type === 'sprawler') {
+      // Uncanny found-footage cryptid silhouette: tar-black hide, stilt legs,
+      // a hanging faceless hood, and no exposed flesh/bones.
+      const hide = (c) => {
+        c.fillStyle = '#101416'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#252b2d'; c.fillRect(0, 3, 16, 1); c.fillRect(0, 11, 16, 1);
+        c.fillStyle = '#07090a'; c.fillRect(2, 0, 2, 16); c.fillRect(12, 0, 1, 16);
+        this._skinSpeck(c, ['#303638', '#0a0d0e', '#1b2022'], 38, 67);
+      };
+      const limb = (c) => {
+        c.fillStyle = '#080b0c'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#1b2022'; c.fillRect(6, 0, 4, 16);
+        c.fillStyle = '#32383a'; c.fillRect(0, 4, 16, 1); c.fillRect(0, 12, 16, 1);
+        this._skinSpeck(c, ['#252b2d', '#050607'], 24, 71);
+      };
+      const mask = (c) => {
+        c.fillStyle = '#aeb0a6'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#7d817c'; c.fillRect(2, 2, 1, 12); c.fillRect(12, 1, 1, 13);
+        c.fillStyle = '#d2d2c7'; c.fillRect(4, 1, 6, 2);
+        this._skinSpeck(c, ['#858981', '#c5c6bb', '#646864'], 22, 79);
+      };
+
+      const shell = this.tbox(2.72, 0.46, 1.72, 'sprawler_hide', hide); shell.position.set(0, 1.55, -0.08);
+      const ridge = this.tbox(0.34, 0.28, 2.12, 'sprawler_limb', limb); ridge.position.set(0, 1.77, -0.12);
+      const under = this.tbox(1.82, 0.22, 1.28, 'sprawler_limb', limb); under.position.set(0, 1.27, -0.02);
+      g.add(shell, ridge, under);
+
+      // Tattered hanging strips make the body read as an impossible dark mass,
+      // not a fleshy animal.
+      for (const [x, z, h] of [[-0.92,-0.52,0.34],[-0.45,0.48,0.46],[0.12,-0.58,0.30],[0.66,0.42,0.42],[1.02,-0.10,0.28]]) {
+        const strip = this.tbox(0.12, h, 0.10, 'sprawler_limb', limb);
+        strip.position.set(x, 1.18 - h * 0.5, z); strip.rotation.z = x * 0.05; g.add(strip);
+      }
+
+      const head = new THREE.Group(); head.position.set(0, 1.16, 1.02);
+      const neck = this.tbox(0.26, 0.72, 0.26, 'sprawler_limb', limb); neck.position.set(0, 0.20, -0.20); neck.rotation.x = 0.52;
+      const hood = this.tbox(0.66, 0.76, 0.52, 'sprawler_hide', hide); hood.position.set(0, -0.10, 0.14); hood.rotation.x = -0.10;
+      const face = this.tbox(0.38, 0.50, 0.07, 'sprawler_mask', mask); face.position.set(0, -0.09, 0.43);
+      const slit = this.box(0.055, 0.34, 0.035, 0x020303); slit.position.set(0, -0.10, 0.485);
+      head.add(neck, hood, face, slit); g.add(head); parts.head = head;
+
+      // Four long, backwards-jointed stilt legs. The rig roots stay inside the
+      // 3x3 footprint and the feet remain near ground level.
+      for (const side of [-1, 1]) for (const front of [-1, 1]) {
+        const rig = new THREE.Group(); rig.position.set(side * 0.98, 1.46, front * 0.60);
+        const upper = this.tbox(0.20, 0.72, 0.20, 'sprawler_limb', limb); upper.position.set(side * 0.06, -0.30, front * 0.02); upper.rotation.z = side * -0.22; upper.rotation.x = front * 0.12;
+        const joint = this.box(0.25, 0.22, 0.25, 0x151a1c); joint.position.set(side * 0.19, -0.67, front * 0.11);
+        const lower = this.tbox(0.15, 0.74, 0.15, 'sprawler_limb', limb); lower.position.set(side * 0.28, -0.98, front * 0.20); lower.rotation.z = side * 0.18; lower.rotation.x = front * -0.10;
+        const foot = this.tbox(0.38, 0.11, 0.58, 'sprawler_limb', limb); foot.position.set(side * 0.29, -1.34, front * 0.33); foot.rotation.y = side * front * 0.10;
+        rig.add(upper, joint, lower, foot); g.add(rig); parts.legs.push(rig);
+      }
+
+      // Thin aerial feelers give it a distant, distorted silhouette while
+      // keeping the whole creature at roughly two blocks tall.
+      for (const [x, z, rz] of [[-0.58,-0.46,-0.18],[0.52,-0.22,0.16],[0.05,0.42,-0.08]]) {
+        const feeler = this.tbox(0.07, 0.42, 0.07, 'sprawler_limb', limb);
+        feeler.position.set(x, 1.78, z); feeler.rotation.z = rz; feeler.rotation.x = z * 0.12; g.add(feeler);
+      }
+    } else if (type === 'creeper') {
+
       // weird explosive frog: mottled skin, pale speckled belly, banded legs
       const frogSkin = (c) => {
         c.fillStyle = '#4db843'; c.fillRect(0, 0, 16, 16);
@@ -767,7 +874,7 @@ const Mobs = {
     const mob = {
       type, group, parts, gunId: gunId || null, color: color || null,
       body: { x, y, z, vx: 0, vy: 0, vz: 0, w: MOB_WIDTHS[type] || 0.35, h: MOB_HEIGHTS[type] || 1.8, onGround: false, hitH: false },
-      hp: hps[type],
+      hp: hps[type] || 10,
       yaw: Math.random() * Math.PI * 2, targetYaw: 0,
       state: 'wander', stateT: 1 + Math.random() * 3,
       wanderDir: null, walkAnim: 0,
@@ -779,6 +886,7 @@ const Mobs = {
       kbT: 0, angryAt: null, angryPlayerT: 0,
       flash: 0, speechT: 6 + Math.random() * 16, bubble: null, bubbleT: 0,
       floopHurtVoiceCd: 0, recentFloopHurtLines: [],
+      swimT: 0, swimDir: null, attackT: 0,
       lastSrc: null, dead: false,
     };
     group.userData.farBody = mob.body;
@@ -896,7 +1004,7 @@ const Mobs = {
       mob.drownT = 0;
     }
 
-    const stuckInSolid = Physics.boxHit(
+    const stuckInSolid = mob.type !== 'sprawler' && Physics.boxHit(
       b.x - (b.w || 0.3) * 0.85, b.y + 0.12, b.z - (b.w || 0.3) * 0.85,
       b.x + (b.w || 0.3) * 0.85, b.y + Math.max(0.45, (b.h || 1) - 0.08), b.z + (b.w || 0.3) * 0.85
     );
@@ -963,7 +1071,12 @@ const Mobs = {
     const b = mob.body;
     Particles.burst(b.x, b.y + 1, b.z, [0.8, 0.2, 0.2], 16, 3);
     if (mob.lastSrc === 'player') Player.addXp(MOB_XP[mob.type] || 0);
-    if (mob.type === 'creeper') {
+    if (OCEAN_MOB_DEFS[mob.type]) {
+      const d = OCEAN_MOB_DEFS[mob.type];
+      if (d.drop) Drops.spawn(b.x, b.y + 0.35, b.z, d.drop, mob.type === 'shark' ? 1 + ((Math.random() * 3) | 0) : mob.type === 'tuna' ? 2 : 1);
+      if (mob.type === 'anglerfish' && Math.random() < 0.18) Drops.spawn(b.x, b.y + 0.35, b.z, I.PEARL, 1);
+      if (mob.type === 'octopus' && Math.random() < 0.35) Drops.spawn(b.x, b.y + 0.35, b.z, I.INK_SAC, 1);
+    } else if (mob.type === 'creeper') {
       Drops.spawn(b.x, b.y + 0.5, b.z, I.GUNPOWDER, 1 + ((Math.random() * 2) | 0));
     } else if (mob.type === 'skeleton') {
       Drops.spawn(b.x, b.y + 0.5, b.z, I.BONE, 1 + ((Math.random() * 2) | 0));
@@ -1180,7 +1293,7 @@ const Mobs = {
   makePlayerTarget() {
     if (typeof Player === 'undefined' || Player.dead || Player.gamemode === 'creative' || !Player.body) return null;
     const p = this.farBodyPos(Player.body);
-    return { x: p.x, y: p.y, z: p.z, h: Player.body.h, mob: null, isPlayer: true };
+    return { x: p.x, y: p.y, z: p.z, h: Player.body.h, swim: !!Player.swimming, mob: null, isPlayer: true };
   },
 
   targetKey(tgt) {
@@ -1289,6 +1402,204 @@ const Mobs = {
     const key = this.targetKey(tgt);
     if (key && m.targetMemoryKey === key) return this.rememberedTarget(m, maxDist);
     return null;
+  },
+
+
+  sprawlerTargetIsUnbreakablySealed(tgt) {
+    if (!tgt || !tgt.isPlayer) return false;
+    const p = this.targetWorldPos(tgt), h = Math.max(1, p.h || tgt.h || 1.8), w = 0.32;
+    const x0 = Math.floor(p.x - w), x1 = Math.floor(p.x + w);
+    const y0 = Math.floor(p.y + 0.05), y1 = Math.floor(p.y + h - 0.05);
+    const z0 = Math.floor(p.z - w), z1 = Math.floor(p.z + w);
+    const hardWall = (x, y, z) => { const d = Reg[World.getBlock(x, y, z)]; return !!d && d.hard === Infinity; };
+    for (let x = x0 - 1; x <= x1 + 1; x++) for (let y = y0 - 1; y <= y1 + 1; y++) for (let z = z0 - 1; z <= z1 + 1; z++) {
+      if (x > x0 - 1 && x < x1 + 1 && y > y0 - 1 && y < y1 + 1 && z > z0 - 1 && z < z1 + 1) continue;
+      if (!hardWall(x, y, z)) return false;
+    }
+    return true;
+  },
+
+  sprawlerTarget(m) {
+    // Retaliation wins immediately. This keeps a Jelly Person from beating on the
+    // Sprawler while it tunnel-visions a player.
+    if (m.angryAt) {
+      if (m.angryAt.dead || !m.angryAt.body) m.angryAt = null;
+      else {
+        const tgt = this.makeTargetForMob(m.angryAt);
+        const d = this.deltaToTarget(m.body, tgt);
+        if (Math.abs(d.x) <= 30 && Math.abs(d.y) <= 30 && Math.abs(d.z) <= 30) {
+          this.rememberTarget(m, tgt);
+          return tgt;
+        }
+        m.angryAt = null;
+      }
+    }
+
+    let best = null, bestD2 = Infinity;
+    const myY = this.farBodyPos(m.body).y;
+    const consider = (tgt, canScent) => {
+      if (!tgt) return;
+      if (this.sprawlerTargetIsUnbreakablySealed(tgt)) {
+        if (m.targetMemoryKey === this.targetKey(tgt)) this.forgetTargetMemory(m);
+        return;
+      }
+      const d = this.deltaToTarget(m.body, tgt);
+      if (Math.abs(d.x) > 30 || Math.abs(d.y) > 30 || Math.abs(d.z) > 30) return;
+      const visible = this.canSeeTarget(m, tgt);
+      if (!visible && !canScent) return;
+      // Height only limits through-block scent tracking. Visible targets are chased
+      // normally at any height, including Jelly People and players on ledges.
+      if (canScent && !visible && tgt.y > myY + 0.05) return;
+      const d2 = d.x * d.x + d.y * d.y + d.z * d.z;
+      if (d2 < bestD2) { bestD2 = d2; best = tgt; }
+    };
+
+    for (const tgt of [this.makePlayerTarget(), ...this.makePeerTargets()]) consider(tgt, true);
+    for (const o of this.list) {
+      if (!o || o.dead || o === m || !JELLY_MOB_TYPES.includes(o.type)) continue;
+      consider(this.makeTargetForMob(o), false);
+    }
+    if (best) this.rememberTarget(m, best);
+    return best;
+  },
+
+  sprawlerBreakToward(m, tgt, dt) {
+    if (!tgt || !m || !m.body) return;
+    m.breakT = (m.breakT || 0) - dt;
+    if (m.breakT > 0) return;
+    m.breakT = 0.22;
+    const b = m.body, d = this.deltaToTarget(b, tgt), down = d.y < -0.65;
+    const sx = Math.abs(d.x) > 0.35 ? Math.sign(d.x) : 0, sz = Math.abs(d.z) > 0.35 ? Math.sign(d.z) : 0;
+    const pad = 0.04, nx = b.x + sx, nz = b.z + sz;
+    const minX = Math.min(Math.floor(b.x - b.w - pad), Math.floor(nx - b.w - pad));
+    const maxX = Math.max(Math.floor(b.x + b.w + pad), Math.floor(nx + b.w + pad));
+    const minZ = Math.min(Math.floor(b.z - b.w - pad), Math.floor(nz - b.w - pad));
+    const maxZ = Math.max(Math.floor(b.z + b.w + pad), Math.floor(nz + b.w + pad));
+    const by = Math.floor(b.y), cells = new Set();
+    const addLayer = (y, x0, x1, z0, z1) => { for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) cells.add(x + ',' + y + ',' + z); };
+
+    // Clear the full block footprint below it so a direct descent cannot hang on
+    // one untouched corner. Misalignment may require four blocks on an axis.
+    if (down) {
+      const fx0 = Math.floor(b.x - b.w - pad), fx1 = Math.floor(b.x + b.w + pad);
+      const fz0 = Math.floor(b.z - b.w - pad), fz1 = Math.floor(b.z + b.w + pad);
+      addLayer(by - 1, fx0, fx1, fz0, fz1);
+      addLayer(by - 2, fx0, fx1, fz0, fz1);
+    }
+    // A diagonal move sweeps the current and next 3x3 footprints. Clearing that
+    // union prevents the wide body from catching on the inside corner.
+    if (sx || sz) for (let y = down ? by - 1 : by; y <= by + Math.ceil(b.h) - 1; y++) addLayer(y, minX, maxX, minZ, maxZ);
+
+    let burst = 0, sumX = 0, sumY = 0, sumZ = 0;
+    for (const key of cells) {
+      const [x, y, z] = key.split(',').map(Number), id = World.getBlock(x, y, z), def = Reg[id];
+      if (id === B.AIR || isFluid(id) || !def || def.hard === Infinity) continue;
+      World.setBlock(x, y, z, B.AIR, { noUpdate: true, skipLight: true });
+      sumX += x + 0.5; sumY += y + 0.5; sumZ += z + 0.5;
+      if (burst++ < 8 && typeof Particles !== 'undefined') Particles.blockBurst(x, y, z, id);
+    }
+    if (burst) {
+      if (down) { b.onGround = false; b.vy = Math.min(b.vy, -3.5); }
+      if (typeof SFX !== 'undefined' && SFX.breakBlk) SFX.breakBlk({ x: sumX / burst, y: sumY / burst, z: sumZ / burst });
+    }
+  },
+
+  sprawlerClearFailedStep(m, dir) {
+    if (!m || !m.body || !dir) return false;
+    const len = Math.hypot(dir[0], dir[1]);
+    if (len < 0.01) return false;
+    const b = m.body, ux = dir[0] / len, uz = dir[1] / len;
+    const dcx = Math.round(ux), dcz = Math.round(uz), dirKey = dcx + ',' + dcz;
+    if (m.stepClearDir !== dirKey) { m.stepClearDir = dirKey; m.stepClearPhase = 0; }
+    const by = Math.floor(b.y), topY = Math.floor(b.y + b.h + 0.01);
+    const cx = Math.floor(b.x), cz = Math.floor(b.z);
+    const fx = Math.floor(b.x + ux * (b.w + 0.65)), fz = Math.floor(b.z + uz * (b.w + 0.65));
+    const solid = (x, y, z) => { const id = World.getBlock(x, y, z); return id !== B.AIR && !isFluid(id); };
+    let lowBlocked = false, headBlocked = false;
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) lowBlocked = lowBlocked || solid(fx + dx, by, fz + dz);
+    for (let dx = -2; dx <= 1; dx++) for (let dz = -2; dz <= 1; dz++) headBlocked = headBlocked || solid(cx + dx, topY, cz + dz) || solid(fx + dx, topY, fz + dz);
+    if (!lowBlocked || (!headBlocked && !m.stepClearPhase)) { m.stepClearPhase = 0; return false; }
+
+    const cells = [];
+    if (!m.stepClearPhase && headBlocked) {
+      for (let dx = -2; dx <= 1; dx++) for (let dz = -2; dz <= 1; dz++) cells.push([cx + dx, topY, cz + dz]);
+      m.stepClearPhase = 1;
+    } else {
+      for (let y = by; y <= by + Math.ceil(b.h); y++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) cells.push([fx + dx, y, fz + dz]);
+      m.stepClearPhase = 2;
+    }
+
+    let broken = 0, sx = 0, sy = 0, sz = 0;
+    for (const [x, y, z] of cells) {
+      const id = World.getBlock(x, y, z), def = Reg[id];
+      if (id === B.AIR || isFluid(id) || !def || def.hard === Infinity) continue;
+      if (typeof isDoor === 'function' && isDoor(id) && World.destroyMultiblockAt(x, y, z, { particles: true, kind: 'door' })) {
+        broken++; sx += x + 0.5; sy += y + 0.5; sz += z + 0.5;
+      } else {
+        World.setBlock(x, y, z, B.AIR);
+        if (typeof Particles !== 'undefined') Particles.blockBurst(x, y, z, id);
+        broken++; sx += x + 0.5; sy += y + 0.5; sz += z + 0.5;
+      }
+    }
+    if (broken && typeof SFX !== 'undefined' && SFX.breakBlk) SFX.breakBlk({ x: sx / broken, y: sy / broken, z: sz / broken });
+    // If the ceiling was already unbreakable or empty, skip straight to the
+    // forward-carving fallback on the next stuck check instead of jump-looping.
+    if (!broken && m.stepClearPhase === 1) { m.stepClearPhase = 2; return true; }
+    if (!broken && m.stepClearPhase === 2) { m.stepClearPhase = 0; return false; }
+    return broken > 0;
+  },
+
+  sprawlerBreaksOnContact(id) {
+    const def = Reg[id], name = (def && def.name) || '';
+    return id === B.CACTUS || /Leaves$/.test(name) || /Glass/.test(name) || (typeof isDoor === 'function' && isDoor(id));
+  },
+
+  sprawlerBreakFragileAhead(m, dir, dt) {
+    if (!m || !m.body || !dir) return;
+    m.fragileBreakT = (m.fragileBreakT || 0) - dt;
+    if (m.fragileBreakT > 0) return;
+    const len = Math.hypot(dir[0], dir[1]);
+    if (len < 0.01) return;
+    m.fragileBreakT = 0.12;
+
+    const b = m.body, ux = dir[0] / len, uz = dir[1] / len, step = 0.85, pad = 0.03;
+    const nx = b.x + ux * step, nz = b.z + uz * step;
+    const minX = Math.min(Math.floor(b.x - b.w - pad), Math.floor(nx - b.w - pad));
+    const maxX = Math.max(Math.floor(b.x + b.w + pad), Math.floor(nx + b.w + pad));
+    const minZ = Math.min(Math.floor(b.z - b.w - pad), Math.floor(nz - b.w - pad));
+    const maxZ = Math.max(Math.floor(b.z + b.w + pad), Math.floor(nz + b.w + pad));
+    const minY = Math.floor(b.y), maxY = Math.floor(b.y + b.h - 0.02);
+    let broken = 0, sx = 0, sy = 0, sz = 0;
+
+    for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) for (let z = minZ; z <= maxZ; z++) {
+      const id = World.getBlock(x, y, z);
+      if (!this.sprawlerBreaksOnContact(id)) continue;
+      if (typeof isDoor === 'function' && isDoor(id) && World.destroyMultiblockAt(x, y, z, { particles: true, kind: 'door' })) {
+        broken++; sx += x + 0.5; sy += y + 0.5; sz += z + 0.5;
+        continue;
+      }
+      World.setBlock(x, y, z, B.AIR);
+      if (typeof Particles !== 'undefined') Particles.blockBurst(x, y, z, id);
+      broken++; sx += x + 0.5; sy += y + 0.5; sz += z + 0.5;
+    }
+    if (broken && typeof SFX !== 'undefined' && SFX.breakBlk) SFX.breakBlk({ x: sx / broken, y: sy / broken, z: sz / broken });
+  },
+
+  sprawlerClearBrushAround(m, dt) {
+    if (!m || !m.body) return;
+    m.brushBreakT = (m.brushBreakT || 0) - dt;
+    if (m.brushBreakT > 0) return;
+    m.brushBreakT = 0.075;
+    const b = m.body, cx = Math.floor(b.x), cz = Math.floor(b.z), y0 = Math.floor(b.y), y1 = Math.floor(b.y + b.h);
+    let broken = 0, sx = 0, sy = 0, sz = 0;
+    for (let dx = -2; dx <= 1; dx++) for (let dz = -2; dz <= 1; dz++) for (let y = y0; y <= y1; y++) {
+      const x = cx + dx, z = cz + dz, id = World.getBlock(x, y, z), name = (Reg[id] && Reg[id].name) || '';
+      if (id !== B.CACTUS && !/Leaves$/.test(name)) continue;
+      World.setBlock(x, y, z, B.AIR);
+      if (typeof Particles !== 'undefined') Particles.blockBurst(x, y, z, id);
+      broken++; sx += x + 0.5; sy += y + 0.5; sz += z + 0.5;
+    }
+    if (broken && typeof SFX !== 'undefined' && SFX.breakBlk) SFX.breakBlk({ x: sx / broken, y: sy / broken, z: sz / broken });
   },
 
   // current target for a hostile mob: a feud rival, else the nearest natural victim.
@@ -1468,6 +1779,7 @@ const Mobs = {
 
   // ---------- basic grounded mob pathfinding ----------
   pathKey(x, y, z) { return x + ',' + y + ',' + z; },
+  pathMaxRise(mob) { return mob && mob.type === 'sprawler' ? 3 : 1; },
 
   pathBodyDims(mob) {
     const b = mob && mob.body ? mob.body : {};
@@ -1523,8 +1835,8 @@ const Mobs = {
   pathStandY(mob, cx, baseY, cz, fromY) {
     const startY = Number.isFinite(baseY) ? baseY : Math.floor(mob.body.y);
     const tries = fromY === undefined
-      ? [startY, startY + 1, startY - 1, startY - 2, startY + 2]
-      : [fromY, fromY + 1, fromY - 1, fromY - 2];
+      ? [startY, startY + 1, startY - 1, startY - 2, startY + 2, ...(this.pathMaxRise(mob) > 2 ? [startY + 3] : [])]
+      : [fromY, fromY + 1, ...(this.pathMaxRise(mob) > 1 ? [fromY + 2, fromY + 3] : []), fromY - 1, fromY - 2];
     const seen = new Set();
     for (const y of tries) {
       if (seen.has(y)) continue;
@@ -1588,7 +1900,7 @@ const Mobs = {
         // For melee-style mobs, do not accept a goal that is merely "near-ish"
         // but still outside usable reach. That cell would only make the mob run
         // to the edge of a low obstacle, turn around, and repeat.
-        if (hdist > reach || vdist > 2.6) continue;
+        if (hdist > reach || vdist > (mob.type === 'sprawler' ? 3.6 : 2.6)) continue;
 
         const headBonus = this.pathGoalClearanceScore(mob, x, y, z);
         const score = hdist * hdist + Math.abs(y - gy) * 0.35 - headBonus * 0.22;
@@ -1610,7 +1922,7 @@ const Mobs = {
     const dims = this.pathBodyDims(mob);
     const w = dims.w, h = dims.h;
     let lastY = Math.floor(Number.isFinite(fromY) ? fromY : b.y);
-    const riseLimit = maxRise === undefined ? 1 : maxRise;
+    const riseLimit = maxRise === undefined ? this.pathMaxRise(mob) : maxRise;
     const dropLimit = maxDrop === undefined ? 1 : maxDrop;
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
@@ -1682,11 +1994,11 @@ const Mobs = {
           return db - da;
         });
       for (const d of dirs) {
-        const nx = cur.x + d[0], nz = cur.z + d[1];
+        const nx = cur.x + d[0], nz = cur.z + d[1], maxRise = this.pathMaxRise(mob);
         if (Math.max(Math.abs(nx - sx), Math.abs(nz - sz)) > maxSteps + 4) continue;
         const ny = this.pathStandY(mob, nx, cur.y, nz, cur.y);
         if (ny === null) continue;
-        if (ny > cur.y + 1 || ny < cur.y - 1) continue;
+        if (ny > cur.y + maxRise || ny < cur.y - 1) continue;
 
         // Diagonal moves are allowed, but not through the corner of two blocking cells.
         const diag = d[0] !== 0 && d[1] !== 0;
@@ -1694,7 +2006,7 @@ const Mobs = {
           const yA = this.pathStandY(mob, cur.x + d[0], cur.y, cur.z, cur.y);
           const yB = this.pathStandY(mob, cur.x, cur.y, cur.z + d[1], cur.y);
           if (yA === null || yB === null) continue;
-          if (yA > cur.y + 1 || yB > cur.y + 1) continue;
+          if (yA > cur.y + maxRise || yB > cur.y + maxRise) continue;
           if (yA < cur.y - 1 || yB < cur.y - 1) continue;
         }
 
@@ -1749,12 +2061,14 @@ const Mobs = {
     if (!mob || !tgt) return null;
     const b = mob.body;
     const goalKey = Math.floor(tgt.x) + ',' + Math.floor(tgt.y || b.y) + ',' + Math.floor(tgt.z);
+    if (mob.pathRouteGoalKey !== goalKey) { mob.pathRouteGoalKey = goalKey; mob.pathRouteValid = null; }
 
     mob.pathT = (mob.pathT || 0) - dt;
     mob.pathFailT = Math.max(0, (mob.pathFailT || 0) - dt);
     mob.pathUnreachableT = Math.max(0, (mob.pathUnreachableT || 0) - dt);
     mob.pathRetryT = Math.max(0, (mob.pathRetryT || 0) - dt);
     mob.pathWantsJump = false;
+    mob.pathJumpRise = 1;
 
     // Drop waypoints already reached.
     while (mob.path && mob.path.length) {
@@ -1770,7 +2084,7 @@ const Mobs = {
     // a safe search/wander move. Retry periodically so mobs notice newly opened
     // doors, broken walls, or terrain changes without locking forever.
     const retryBlocked = mob.pathUnreachableT > 0 && mob.pathRetryT > 0 && mob.pathGoalKey === goalKey && (!mob.path || !mob.path.length);
-    if (retryBlocked) return this.unreachablePathMove(mob, tgt, dt);
+    if (retryBlocked) { mob.pathRouteValid = false; return this.unreachablePathMove(mob, tgt, dt); }
 
     if (needPath && mob.pathFailT <= 0 && this.pathBudget > 0) {
       this.pathBudget--;
@@ -1779,6 +2093,7 @@ const Mobs = {
       mob.pathGoalKey = goalKey;
       if (path && path.length) {
         mob.path = path;
+        mob.pathRouteValid = true;
         mob.pathUnreachableT = 0;
         mob.pathRetryT = 0;
         mob.pathSearchT = 0;
@@ -1787,12 +2102,14 @@ const Mobs = {
         // Already in the goal cell. Do not mark it unreachable; let the direct
         // segment code below steer the mob smoothly within the cell.
         mob.path = [];
+        mob.pathRouteValid = true;
         mob.pathUnreachableT = 0;
         mob.pathRetryT = 0;
         mob.pathSearchT = 0;
         mob.pathSearchDir = null;
       } else {
         this.markPathUnreachable(mob);
+        mob.pathRouteValid = false;
         return this.unreachablePathMove(mob, tgt, dt);
       }
     }
@@ -1805,15 +2122,17 @@ const Mobs = {
     // A straight diagonal chase is allowed only when the pathing safety checks say
     // every sampled cell has room and ground. This is not a blind LOS rush, so mobs
     // should not run off pit edges just because they can see the player.
-    if (this.pathSegmentClear(mob, b.x, b.y, b.z, tgt.x, tgt.z, 1, 1)) {
-      mob.pathWantsJump = Math.floor(tgt.y || b.y) > Math.floor(b.y + 0.05);
+    if (this.pathSegmentClear(mob, b.x, b.y, b.z, tgt.x, tgt.z, this.pathMaxRise(mob), 1)) {
+      mob.pathRouteValid = true;
+      mob.pathJumpRise = Math.max(1, Math.min(this.pathMaxRise(mob), Math.floor(tgt.y || b.y) - Math.floor(b.y)));
+      mob.pathWantsJump = mob.pathJumpRise > 0 && Math.floor(tgt.y || b.y) > Math.floor(b.y + 0.05);
       mob.detourT = 0;
       mob.detourDir = null;
       return direct;
     }
 
     if (!mob.path || !mob.path.length) {
-      if (mob.pathUnreachableT > 0) return this.unreachablePathMove(mob, tgt, dt);
+      if (mob.pathUnreachableT > 0) { mob.pathRouteValid = false; return this.unreachablePathMove(mob, tgt, dt); }
       return null;
     }
 
@@ -1824,11 +2143,12 @@ const Mobs = {
     const look = Math.min(mob.path.length - 1, 4);
     for (let i = 1; i <= look; i++) {
       const cand = mob.path[i];
-      if (!this.pathSegmentClear(mob, b.x, b.y, b.z, cand.x, cand.z, 1)) break;
+      if (!this.pathSegmentClear(mob, b.x, b.y, b.z, cand.x, cand.z, this.pathMaxRise(mob))) break;
       wp = cand; wi = i;
     }
     if (wi > 0) mob.path.splice(0, wi);
 
+    mob.pathJumpRise = wp.cellY === undefined ? 1 : Math.max(1, Math.min(this.pathMaxRise(mob), wp.cellY - Math.floor(b.y + 0.05)));
     mob.pathWantsJump = wp.cellY !== undefined && wp.cellY > Math.floor(b.y + 0.05);
     const wpDelta = this.deltaToPoint(b, wp.x, wp.y, wp.z);
     const dx = wpDelta.x, dz = wpDelta.z;
@@ -1837,11 +2157,13 @@ const Mobs = {
 
     // Follow the path direction without LOS blending. Blending toward the player
     // can pull mobs off the safe route and into holes/walls.
+    if (mob.pathGoalKey === goalKey) mob.pathRouteValid = true;
     return pathDir;
   },
 
   markPathUnreachable(mob, seconds) {
     if (!mob) return;
+    mob.pathRouteValid = false;
     mob.path = null;
     mob.pathT = 0;
     mob.pathFailT = 0.45 + Math.random() * 0.25;
@@ -2037,10 +2359,10 @@ const Mobs = {
 
 
   mobJumpVelocity(mob) {
-    // Match the player's jump strength closely enough that normal mobs can
-    // clear a full 1-block ledge. The old 6.6 value peaked below one block
-    // with this game's gravity, so most mobs could only bonk the wall.
+    // Match the player's jump for ordinary mobs; the Sprawler scales only when
+    // pathing or collision proves it must clear a 2- or 3-block ledge.
     if (!mob) return 8.6;
+    if (mob.type === 'sprawler') return Math.sqrt(2 * Physics.GRAV * (Math.max(1, Math.min(3, mob.pathJumpRise || 1)) + 0.35));
     if (mob.type === 'chicken') return 8.2;
     if (mob.type === 'creeper') return 8.6;
     if (mob.type === 'camel' || mob.type === 'humbug' || mob.type === 'floop' || mob.type === 'tung') return 8.8;
@@ -2062,6 +2384,11 @@ const Mobs = {
     const ml = Math.sqrt(wantMove[0] ** 2 + wantMove[1] ** 2) || 1;
     const dx = wantMove[0] / ml, dz = wantMove[1] / ml;
     const ax = b.x + dx * (b.w + 0.28), az = b.z + dz * (b.w + 0.28);
+    if (mob.type === 'sprawler') {
+      const cx = Math.floor(ax), cz = Math.floor(az), by = Math.floor(b.y + 0.05);
+      for (let rise = 1; rise <= 3; rise++) if (this.pathCanStand(mob, cx, by + rise, cz)) { mob.pathJumpRise = rise; return true; }
+      return false;
+    }
     const w = Math.min(0.32, Math.max(0.16, (b.w || 0.35) * 0.7));
     const lowHit = Physics.boxHit(ax - w, b.y + 0.05, az - w, ax + w, b.y + 1.05, az + w);
     const headClear = !Physics.boxHit(ax - w, b.y + 1.05, az - w, ax + w, b.y + b.h + 0.55, az + w);
@@ -2164,6 +2491,120 @@ const Mobs = {
     }
   },
 
+  waterSpot(p, minR, maxR) {
+    for (let tries = 0; tries < 10; tries++) {
+      const a = Math.random() * Math.PI * 2, r = minR + Math.random() * (maxR - minR);
+      const x = Math.floor(p.x + Math.cos(a) * r), z = Math.floor(p.z + Math.sin(a) * r);
+      if (!World.hasChunk(x, z)) continue;
+      const floor = World.heightAt(x, z), depth = World.SEA - floor;
+      if (depth < 3) continue;
+      const y = floor + 1.2 + Math.random() * Math.max(0.2, depth - 2.2);
+      if (isWaterCell(World.getBlock(x, Math.floor(y + 0.2), z))) return { x: x + 0.5, y, z: z + 0.5, depth, biome: World.biomeAt(x, z) };
+    }
+    return null;
+  },
+
+  oceanType(depth, biome) {
+    const r = Math.random(), ocean = biome === 'ocean' || biome === 'deep_ocean';
+    if (ocean && Game.isNight) {
+      if (depth > 14 && r < 0.08) return 'giant_squid';
+      if (depth > 11 && r < 0.17) return 'sea_serpent';
+      if (depth > 7 && r < 0.31) return 'shark';
+      if (depth > 4 && r < 0.42) return 'barracuda';
+    }
+    if (ocean && depth > 11 && r < 0.09) return 'anglerfish';
+    if (ocean && depth > 8 && r < 0.14) return 'shark';
+    if (r < 0.25) return 'minnow';
+    if (r < 0.38) return 'salmon';
+    if (r < 0.48) return 'tuna';
+    if (r < 0.58) return 'clownfish';
+    if (r < 0.66) return 'pufferfish';
+    if (r < 0.74) return 'jellyfish';
+    if (r < 0.82) return 'stingray';
+    if (r < 0.90) return 'octopus';
+    if (r < 0.96) return 'dolphin';
+    return 'seahorse';
+  },
+
+  aquaticTargetPoint(tgt) {
+    const p = this.targetWorldPos(tgt), h = p.h || 1.8;
+    const x = Math.floor(p.x), z = Math.floor(p.z);
+    // Chase swimmers and players hovering at the surface by aiming at the nearest
+    // water cell beneath their body. Stop only after their feet are supported by land.
+    for (const yy of [Math.floor(p.y + h * 0.45), Math.floor(p.y + 0.05), Math.floor(p.y - 0.15), Math.floor(p.y - 1.05)]) {
+      const id = World.getBlock(x, yy, z);
+      if (isWaterCell(id)) return { x: p.x, y: yy + Math.min(0.72, waterCellLevel(id) / 9 - 0.08), z: p.z };
+    }
+    return null;
+  },
+
+  updateAquaticMob(m, dt) {
+    const d = OCEAN_MOB_DEFS[m.type], b = m.body;
+    const centerY = b.y + b.h * 0.5;
+    const wet = isWaterCell(World.getBlock(Math.floor(b.x), Math.floor(centerY), Math.floor(b.z)));
+    if (!wet) {
+      m.air = (Number.isFinite(+m.air) ? +m.air : 5) - dt;
+      if (m.air <= 0) { m.flopHurtT = (m.flopHurtT || 0) - dt; if (m.flopHurtT <= 0) { m.flopHurtT = 1; this.hurt(m, 1, 0, 0, 'air'); if (m.dead) return; } }
+      b.vy = Math.max(-20, b.vy - Physics.GRAV * dt); b.vx *= 0.96; b.vz *= 0.96;
+      Physics.move(b, dt, { stepUp: false });
+    } else {
+      m.air = 5; m.flopHurtT = 0; m.attackT = Math.max(0, (m.attackT || 0) - dt);
+      let dir = null, speed = d.speed;
+      if (d.hostile) {
+        let prey = null, best = 16;
+        for (const t of [this.makePlayerTarget(), ...this.makePeerTargets()]) {
+          if (!t) continue;
+          const tp = this.aquaticTargetPoint(t);
+          if (!tp) continue;
+          const dx = tp.x - b.x, dy = tp.y - centerY, dz = tp.z - b.z, dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist < best) { best = dist; prey = { t, dx, dy, dz, dist }; }
+        }
+        if (prey) {
+          dir = [prey.dx / (prey.dist || 1), prey.dy / (prey.dist || 1), prey.dz / (prey.dist || 1)]; speed *= prey.dist < 5 ? 1.18 : 1;
+          if (prey.dist < Math.max(1.35, d.w * 2.2) && m.attackT <= 0) { m.attackT = 1.0; this.dmgTarget(prey.t, d.damage || 5, dir[0] * 5, dir[2] * 5, m); }
+        }
+      }
+      m.swimT -= dt;
+      if (!dir && (m.swimT <= 0 || !m.swimDir)) {
+        const a = Math.random() * Math.PI * 2;
+        m.swimDir = [Math.sin(a), (Math.random() - 0.5) * (d.shape === 'ray' ? 0.18 : 0.7), Math.cos(a)];
+        m.swimT = 1.2 + Math.random() * 3.2;
+      }
+      dir = dir || m.swimDir;
+      if (d.school) {
+        let sx = 0, sy = 0, sz = 0, n = 0;
+        for (const o of this.list) if (o !== m && !o.dead && o.type === m.type) { const q = this.farDelta(b, o.body), dd = q.x * q.x + q.y * q.y + q.z * q.z; if (dd < 25) { sx += o.body.vx; sy += o.body.vy; sz += o.body.vz; n++; } }
+        if (n) dir = [dir[0] * 0.75 + sx / n / Math.max(1, d.speed) * 0.25, dir[1] * 0.75 + sy / n / Math.max(1, d.speed) * 0.25, dir[2] * 0.75 + sz / n / Math.max(1, d.speed) * 0.25];
+      }
+      const aheadX = b.x + dir[0] * 1.2, aheadY = centerY + dir[1] * 1.0, aheadZ = b.z + dir[2] * 1.2;
+      if (!isWaterCell(World.getBlock(Math.floor(aheadX), Math.floor(aheadY), Math.floor(aheadZ)))) {
+        const up = isWaterCell(World.getBlock(Math.floor(b.x), Math.floor(centerY + 1), Math.floor(b.z)));
+        const down = isWaterCell(World.getBlock(Math.floor(b.x), Math.floor(centerY - 1), Math.floor(b.z)));
+        dir = [-dir[0], up ? 0.65 : down ? -0.65 : -dir[1], -dir[2]]; m.swimDir = dir; m.swimT = 0.65;
+      }
+      const k = Math.min(1, dt * 4.5);
+      b.vx += (dir[0] * speed - b.vx) * k; b.vy += (dir[1] * speed * 0.65 - b.vy) * k; b.vz += (dir[2] * speed - b.vz) * k;
+      Physics.move(b, dt, { stepUp: false });
+    }
+    if (b.y < -12) { this.kill(m); return; }
+    m.yaw += wrapAngle(Math.atan2(b.vx, b.vz) - m.yaw) * Math.min(1, 6 * dt);
+    m.group.position.set(b.x, b.y, b.z); m.group.rotation.y = m.yaw; m.group.rotation.x = Math.max(-0.45, Math.min(0.45, -b.vy * 0.12));
+    m.walkAnim += dt * (3 + d.speed);
+    if (m.parts.tail) m.parts.tail.rotation.y = (m.type === 'seahorse' ? 0 : Math.PI / 4) + Math.sin(m.walkAnim * 1.8) * 0.5;
+    if (m.parts.tentacles) m.parts.tentacles.forEach((t, i) => { t.rotation.x = Math.sin(m.walkAnim + i) * 0.18; t.rotation.z = Math.cos(m.walkAnim * 0.8 + i) * 0.12; });
+    if (d.puffer) { const pt = this.makePlayerTarget(); const near = pt ? this.targetHorizDist(b, pt) : 999; const s = near < 3 ? 1.45 : 1; m.group.scale.lerp(new THREE.Vector3(s, s, s), Math.min(1, dt * 5)); }
+    if (m.type === 'jellyfish') { const s = 1 + Math.sin(m.walkAnim) * 0.08; m.group.scale.set(1 / s, s, 1 / s); }
+    m.tintT = (m.tintT || 0) - dt;
+    if (m.tintT <= 0) {
+      m.tintT = 0.25;
+      const raw = World.getLightRaw(Math.floor(b.x), Math.floor(centerY), Math.floor(b.z));
+      const l = Math.max(d.angler ? 0.35 : 0.08, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
+      m.group.traverse(o => { if (!o.isMesh) return; for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) if (mt.color) { if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone(); mt.color.copy(mt.userData.mobBaseCol).multiplyScalar(l); } });
+    }
+    this.setEmissive(m, m.flash > 0 ? 1.35 : 0, 0xff2020);
+    if (m.flash > 0) { m.group.traverse(o => { if (!o.isMesh) return; for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) if (mt.color) mt.color.setHex(0xff2020); }); m.flash = Math.max(0, m.flash - dt); if (!m.flash) m.tintT = 0; }
+  },
+
   update(dt) {
     this._lastDt = dt || 0;
     this.updateArrows(dt);
@@ -2184,6 +2625,16 @@ const Mobs = {
       this.repairMobHealth(m);
       if (m.hp <= 0) { this.kill(m); continue; }
       const b = m.body;
+      if (m.type === 'sprawler') {
+        const sunlit = !Game.isNight && World.skyExposed(Math.floor(b.x), Math.floor(b.y + b.h), Math.floor(b.z));
+        m.burnT = sunlit ? (m.burnT || 0) + dt : 0;
+        if (m.burnT >= 0.8) {
+          m.burnT = 0;
+          this.hurt(m, 4, 0, 0, 'sunlight');
+          if (typeof Particles !== 'undefined') Particles.burst(b.x, b.y + 1.2, b.z, [0.45, 0.45, 0.42], 10, 2.2);
+          if (m.dead || m.hp <= 0) continue;
+        }
+      }
       if (m.angryPlayerT > 0) m.angryPlayerT = Math.max(0, m.angryPlayerT - dt);
       if (m.targetMemoryT > 0) m.targetMemoryT = Math.max(0, m.targetMemoryT - dt);
       if (!(m.targetMemoryT > 0)) { m.targetMemoryKey = ''; m.targetLastSeen = null; }
@@ -2201,8 +2652,10 @@ const Mobs = {
         m.dead = true; continue;
       }
       if (m.floopHurtVoiceCd > 0) m.floopHurtVoiceCd = Math.max(0, m.floopHurtVoiceCd - dt);
-      if (distPlayer > 52 || !World.hasChunk(Math.floor(b.x), Math.floor(b.z))) continue;
+      if ((distPlayer > 52 && !nearAnyMultiplayerPlayer) || !World.hasChunk(Math.floor(b.x), Math.floor(b.z))) continue;
+      if (OCEAN_MOB_DEFS[m.type]) { this.updateAquaticMob(m, dt); continue; }
       if (this.updateMobBreathingAndSuffocation(m, dt)) { if (!m.dead && m.hp <= 0) this.kill(m); continue; }
+      if (m.type === 'sprawler') this.sprawlerClearBrushAround(m, dt);
 
       m.stateT -= dt;
       if (m.stateT <= 0) {
@@ -2210,7 +2663,7 @@ const Mobs = {
         m.wanderDir = (m.idlePauseT > 0) ? null : (Math.random() < 0.6 ? this.chooseWanderDir(m) : null);
       }
 
-      let tgt = HOSTILES.includes(m.type) ? this.targetOf(m) : (JELLY_MOB_TYPES.includes(m.type) ? this.jellyTargetOf(m) : null);
+      let tgt = m.type === 'sprawler' ? this.sprawlerTarget(m) : (HOSTILES.includes(m.type) ? this.targetOf(m) : (JELLY_MOB_TYPES.includes(m.type) ? this.jellyTargetOf(m) : null));
       const targetDelta = () => this.deltaToTarget(b, tgt);
       let distT = tgt ? this.targetHorizDist(b, tgt) : 999;
       // If this is only a last-known spot, do not let attack code treat it like a
@@ -2236,7 +2689,27 @@ const Mobs = {
       let speed = 1.3;
       let frogHop = false;
 
-      if (m.type === 'creeper') {
+      if (m.type === 'sprawler') {
+        if (tgt) {
+          const td = targetDelta(), dl = Math.sqrt(td.x * td.x + td.z * td.z) || 1;
+          const visible = hasTargetLOS();
+          if (visible) { m.pathWantsJump = false; m.pathJumpRise = 1; }
+          const pathMove = visible ? null : this.pathMove(m, tgt, dt, 34, false);
+          const canWalk = visible || m.pathRouteValid === true;
+          const canDig = !visible && m.pathRouteValid === false && tgt.y <= this.farBodyPos(b).y + 0.05;
+          // LOS pursuit behaves like ordinary hostile movement at every height;
+          // digging is reserved for a hidden target with a confirmed blocked route.
+          wantMove = visible ? [td.x / dl, td.z / dl] : (canWalk ? pathMove : (canDig ? [td.x / dl, td.z / dl] : m.wanderDir));
+          speed = canWalk || canDig ? 5.8 : 1.3;
+          faceTarget = canWalk || canDig;
+          if (canDig) this.sprawlerBreakToward(m, tgt, dt);
+          m.meleeT -= dt;
+          if ((canWalk || canDig) && !tgt.memoryOnly && distT < 2.5 && Math.abs(td.y) < 2.4 && m.meleeT <= 0) {
+            m.meleeT = 0.85; m.attackSwingT = 0.28;
+            this.dmgTarget(tgt, 12, td.x / dl * 7, td.z / dl * 7, m);
+          }
+        } else wantMove = m.wanderDir;
+      } else if (m.type === 'creeper') {
         // explosive frog: hops in intervals, screeches, then boom.
         // Once it has screeched, it is COMMITTED — running breaks LOS, not its resolve.
         frogHop = true;
@@ -2503,7 +2976,7 @@ const Mobs = {
           if (distPlayer > 7) m.state = 'wander';
         } else {
           wantMove = m.wanderDir;
-          if (distPlayer < 8 && Math.random() < 0.006) { m.state = distPlayer > 3 ? 'approach' : 'chat'; m.stateT = 3; }
+          if (distPlayer < 8 && Math.random() < 0.002) { m.state = distPlayer > 3 ? 'approach' : 'chat'; m.stateT = 3; }
         }
         m.speechT -= dt;
         if (m.speechT <= 0 && distPlayer < 26) {
@@ -2534,6 +3007,9 @@ const Mobs = {
         m.detourT -= dt;
         if (m.detourDir) wantMove = m.detourDir;
       }
+      // Even during ordinary LOS/path chasing, the Sprawler plows through fragile
+      // obstacles instead of politely navigating around cactus, foliage, doors, or glass.
+      if (m.type === 'sprawler' && tgt && wantMove) this.sprawlerBreakFragileAhead(m, wantMove, dt);
       m.stuckT += dt;
       if (m.stuckT >= 0.6) {
         const moved = Math.sqrt((b.x - m.lastSX) ** 2 + (b.z - m.lastSZ) ** 2);
@@ -2541,7 +3017,11 @@ const Mobs = {
           m.stuckPathHits = (m.stuckPathHits || 0) + 1;
           m.pathT = 0;
           m.pathFailT = 0;
-          if (!tgt) {
+          const sprawlerMadeRoom = m.type === 'sprawler' && tgt && this.sprawlerClearFailedStep(m, wantMove);
+          if (sprawlerMadeRoom) {
+            m.detourT = 0; m.detourDir = null; m.stuckPathHits = 0;
+            if (m.stepClearPhase === 1 && b.onGround) this.mobJump(m);
+          } else if (!tgt) {
             // Idle mobs should not detour-jitter at a wall forever.  Clear the
             // bad wander/stroll choice and let the next brain tick pick a safe one.
             m.jellyIdleGoal = null;
@@ -2555,21 +3035,22 @@ const Mobs = {
             m.detourDir = null;
             wantMove = null;
           }
-          if (this.mobShouldJump(m, wantMove) && tgt) this.mobJump(m);
-          if (m.stuckPathHits >= 3 && tgt) {
+          if (!sprawlerMadeRoom && this.mobShouldJump(m, wantMove) && tgt) this.mobJump(m);
+          if (!sprawlerMadeRoom && m.stuckPathHits >= 3 && tgt) {
             // Repeatedly pushing into the same impossible low/wide clearance is
             // usually a bad goal, not a detour problem. Give up/search briefly
             // instead of ping-ponging outside the player's shelter forever.
             this.markPathUnreachable(m, 2.4 + Math.random() * 1.8);
             wantMove = this.unreachablePathMove(m, tgt, dt);
             m.stuckPathHits = 0;
-          } else if (tgt && wantMove) {
+          } else if (!sprawlerMadeRoom && tgt && wantMove) {
             const sign = Math.random() < 0.5 ? 1 : -1;
             m.detourDir = [-wantMove[1] * sign, wantMove[0] * sign];
             m.detourT = 0.35 + Math.random() * 0.25;
           }
         } else if (moved >= 0.16) {
           m.stuckPathHits = 0;
+          if (m.type === 'sprawler') { m.stepClearPhase = 0; m.stepClearDir = ''; }
         }
         m.stuckT = 0; m.lastSX = b.x; m.lastSZ = b.z;
       }
@@ -2640,8 +3121,13 @@ const Mobs = {
       const swing = wantMove || (frogHop && !b.onGround) ? Math.sin(m.walkAnim) * 0.5 : 0;
       m.parts.legs.forEach((leg, li) => {
         if (m.type === 'spider') leg.rotation.y = swing * (li % 2 ? 0.4 : -0.4);
+        else if (m.type === 'sprawler') leg.rotation.x = (li < 2 ? 0.18 : -0.18) + swing * (li % 2 ? 0.75 : -0.75);
         else if (m.type !== 'creeper') leg.rotation.x = swing * (li % 2 ? 1 : -1);
       });
+      if (m.type === 'sprawler' && m.parts.head) {
+        m.attackSwingT = Math.max(0, (m.attackSwingT || 0) - dt);
+        m.parts.head.rotation.x = m.attackSwingT > 0 ? Math.sin(m.attackSwingT / 0.28 * Math.PI) * 0.7 : 0;
+      }
       if (JELLY_MOB_TYPES.includes(m.type) && m.parts.arms && m.parts.arms.length) {
         if (m.attackSwingT > 0) m.attackSwingT = Math.max(0, m.attackSwingT - dt);
         const punchWindow = m.type === 'big_jelly' ? 0.30 : 0.22;
@@ -2723,7 +3209,17 @@ const Mobs = {
     const hostiles = this.list.filter(m => HOSTILES.includes(m.type)).length;
     const floops = this.list.filter(m => m.type === 'floop').length;
     const passive = this.list.filter(m => ['sheep', 'chicken', 'camel', 'jelly', 'big_jelly'].includes(m.type)).length;
+    const aquatic = this.list.filter(m => OCEAN_MOB_DEFS[m.type]).length;
     const tungs = this.list.filter(m => m.type === 'tung').length;
+    const sprawlers = this.list.filter(m => m.type === 'sprawler').length;
+
+
+    if (Game.isNight && sprawlers < 1 && Math.random() < 0.002) {
+      const pos = this.surfaceSpot(p, 28, 46);
+      if (pos && World.spawnAllowedAt(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)) && this.spawnFits('sprawler', pos.x, pos.y, pos.z)) {
+        this.spawn('sprawler', pos.x, pos.y, pos.z);
+      }
+    }
 
     if (Game.isNight && hostiles < 10 && Math.random() < 0.55) {
       const pos = this.surfaceSpot(p, 20, 38);
@@ -2780,6 +3276,16 @@ const Mobs = {
           if (this.spawnFits(type, s.x + 0.5, s.y + 0.02, s.z + 0.5)) {
             this.spawn(type, s.x + 0.5, s.y + 0.02, s.z + 0.5, type === 'humbug' ? this.humbugGun() : null);
           }
+        }
+      }
+    }
+    if (aquatic < 18 && Math.random() < (Game.isNight ? 0.52 : 0.30)) {
+      const pos = this.waterSpot(p, 12, 42);
+      if (pos) {
+        const type = this.oceanType(pos.depth, pos.biome), count = OCEAN_MOB_DEFS[type].school ? 1 + ((Math.random() * 3) | 0) : 1;
+        for (let i = 0; i < count && aquatic + i < 18; i++) {
+          const x = pos.x + (Math.random() - 0.5) * 2, y = pos.y + (Math.random() - 0.5), z = pos.z + (Math.random() - 0.5) * 2;
+          if (isWaterCell(World.getBlock(Math.floor(x), Math.floor(y + 0.2), Math.floor(z))) && this.spawnFits(type, x, y, z)) this.spawn(type, x, y, z);
         }
       }
     }

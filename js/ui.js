@@ -117,7 +117,7 @@ const UI = {
       const cur = stack && stack.dur !== undefined ? stack.dur : def.maxDur;
       const fmtDur = (v, decimals = 1) => Number.isFinite(Number(v)) ? Number(v).toFixed(decimals) : String(v);
       const fmtMax = Number.isInteger(Number(def.maxDur)) ? String(def.maxDur) : fmtDur(def.maxDur);
-      extra += '\nDurability: ' + fmtDur(cur) + '/' + fmtMax;
+      extra += def.oxygenTank ? '\nOxygen: ' + fmtDur(cur) + 's/' + fmtMax + 's' : '\nDurability: ' + fmtDur(cur) + '/' + fmtMax;
     }
     if (def.tip) extra += '\n' + def.tip;
     return def.name + extra;
@@ -236,6 +236,8 @@ const UI = {
   },
 
   updateStats() {
+    const visor = this.el('divingHelmetOverlay');
+    if (visor) visor.classList.toggle('active', !!(Player.armor && Player.armor[0] && Player.armor[0].id === I.DIVING_HELMET));
     const cv = this.el('statsCanvas');
     if (!cv) return;
     const c = cv.getContext('2d');
@@ -295,6 +297,11 @@ const UI = {
     }
     if (Player.air < 10) {
       for (let i = 0; i < Player.air; i++) bubble(232 + i * 17, 8);
+    }
+    const tank = Player.armor[4], tankDef = tank && Reg[tank.id];
+    if (tankDef && tankDef.oxygenTank && Player.hasFullDivingSuit()) {
+      c.font = 'bold 10px monospace'; c.textAlign = 'center'; c.fillStyle = '#7df5ec';
+      c.fillText('O2 ' + Math.ceil(Math.max(0, tank.dur === undefined ? tankDef.maxDur : tank.dur)) + 's', 205, 18);
     }
   },
 
@@ -685,10 +692,8 @@ const UI = {
   slotAccepts(stack, opts) {
     if (!stack) return true;
     opts = opts || {};
-    if (opts.armorSlot !== undefined) {
-      const def = Reg[stack.id];
-      return !!(def && def.armor && def.armor.slot === opts.armorSlot);
-    }
+    if (opts.accept && !opts.accept(stack)) return false;
+    if (opts.armorSlot !== undefined) return equipmentSlotAccepts(stack.id, opts.armorSlot);
     return true;
   },
 
@@ -809,16 +814,16 @@ const UI = {
         set(left > 0 ? this.cloneStack(s, left) : null);
       } else if (opts.invIndex !== undefined) {
         const def = Reg[s.id];
-        // with a furnace open, shift-click routes smeltables/fuel into it
-        if (this.screen === 'furnace' && this.activeFurnace) {
+        // open processing blocks receive only the item types their existing slots accept
+        if ((this.screen === 'furnace' || this.screen === 'oxygenBench') && this.activeFurnace) {
           const f = this.activeFurnace;
-          const isSmelt = !!Recipes.smelting[s.id];
-          const isFuel = !!Recipes.fuel[s.id];
-          const target = isSmelt ? 'in' : isFuel ? 'fuel' : null;
+          const target = this.screen === 'oxygenBench'
+            ? (def.oxygenTank ? 'in' : s.id === I.DARK_FLOOPIUM ? 'fuel' : null)
+            : (Recipes.smelting[s.id] ? 'in' : Recipes.fuel[s.id] ? 'fuel' : null);
           if (target) {
             const t = f[target];
             if (!t) { f[target] = s; set(null); return; }
-            if (t.id === s.id && t.count < def.stack) {
+            if (this.sameStack(t, s) && t.count < def.stack) {
               const take = Math.min(def.stack - t.count, s.count);
               t.count += take; s.count -= take;
               set(s.count > 0 ? s : null);
@@ -843,9 +848,11 @@ const UI = {
           set(left > 0 ? this.cloneStack(s, left) : null);
           return;
         }
-        // try armor auto-equip first
-        if (def.armor && !Player.armor[def.armor.slot]) {
-          Player.armor[def.armor.slot] = this.cloneStack(s, 1);
+        // try equipment auto-equip first
+        const equipSlot = def.armor ? def.armor.slot : def.oxygenTank ? 4 : -1;
+        if (equipSlot >= 0 && !Player.armor[equipSlot]) {
+          Player.armor[equipSlot] = this.cloneStack(s, 1);
+          if (def.oxygenTank && Player.armor[equipSlot].dur === undefined) Player.armor[equipSlot].dur = def.maxDur;
           s.count--;
           set(s.count > 0 ? s : null);
           this.updateStats();
@@ -1028,7 +1035,7 @@ const UI = {
     if (this.chatOpen) this.closeChat();
     this.screen = name;
     if (name === 'lore') this.loreHit = data || null;
-    if (name === 'furnace') this.furnaceKey = data ? World.pkey(data.bx, data.by, data.bz) : null;
+    if (name === 'furnace' || name === 'oxygenBench') this.furnaceKey = data ? World.pkey(data.bx, data.by, data.bz) : null;
     if (name === 'sign') this.signHit = data || null;
     this.refreshFns = [];
     this.updateCraftResult = null;
@@ -1045,6 +1052,7 @@ const UI = {
     else if (name === 'lore') this.buildLore(ov);
     else if (name === 'death') this.buildDeath(ov);
     else if (name === 'furnace') this.buildFurnace(ov);
+    else if (name === 'oxygenBench') this.buildOxygenBench(ov);
     else if (name === 'creative') this.buildCreative(ov);
     else if (name === 'stocks') this.buildStocks(ov);
     else if (name === 'sign') this.buildSign(ov);
@@ -1094,8 +1102,8 @@ const UI = {
     const armorCol = document.createElement('div');
     armorCol.className = 'grid';
     armorCol.style.gridTemplateColumns = '40px';
-    const phs = ['helm', 'chest', 'legs', 'boots'];
-    for (let i = 0; i < 4; i++) {
+    const phs = ['helm', 'chest', 'legs', 'boots', 'oxygen'];
+    for (let i = 0; i < 5; i++) {
       const idx = i;
       armorCol.appendChild(this.makeSlot(
         () => Player.armor[idx], v => { Player.armor[idx] = v; },
@@ -1290,6 +1298,86 @@ const UI = {
     this.screenTimers.push(setInterval(() => { this.refreshAll(); drawGauges(); }, 220));
   },
 
+  // ---------------- oxygenation bench ----------------
+  buildOxygenBench(ov) {
+    const key = this.furnaceKey;
+    if (!World.furnaces.has(key)) World.furnaces.set(key, { in: null, fuel: null, out: null, burn: 0, burnMax: 0, cook: 0 });
+    const f = World.furnaces.get(key);
+    this.activeFurnace = f;
+
+    const p = document.createElement('div');
+    p.className = 'panel';
+    p.innerHTML = '<h2>Oxygenation Bench</h2>';
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:14px;margin:12px 0';
+    const tankWrap = document.createElement('div');
+    tankWrap.style.textAlign = 'center';
+    tankWrap.appendChild(this.makeSlot(() => f.in, v => { f.in = v; }, { shiftTo: 'inv', accept: s => isOxygenTank(s.id) }));
+    const tankLabel = document.createElement('div');
+    tankLabel.style.cssText = 'font-size:11px;margin-top:4px';
+    tankLabel.textContent = 'Oxygen Tank';
+    tankWrap.appendChild(tankLabel);
+
+    const fuelWrap = document.createElement('div');
+    fuelWrap.style.textAlign = 'center';
+    fuelWrap.appendChild(this.makeSlot(() => f.fuel, v => { f.fuel = v; }, { shiftTo: 'inv', accept: s => s.id === I.DARK_FLOOPIUM }));
+    const fuelLabel = document.createElement('div');
+    fuelLabel.style.cssText = 'font-size:11px;margin-top:4px';
+    fuelLabel.textContent = 'Dark Floopium';
+    fuelWrap.appendChild(fuelLabel);
+
+    const controls = document.createElement('div');
+    controls.style.cssText = 'min-width:180px;text-align:center';
+    const status = document.createElement('div');
+    status.style.cssText = 'font-size:12px;min-height:34px;margin-bottom:6px';
+    const btn = document.createElement('button');
+    btn.className = 'uibtn';
+    btn.textContent = 'Recharge Tank';
+    btn.addEventListener('click', () => {
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.connected && Multiplayer.role === 'client') {
+        Multiplayer.send({ type: 'oxygen_recharge_request', key });
+      } else {
+        const result = refillOxygenTankState(f);
+        this.chat(result.message || (result.ok ? 'Oxygen tank recharged.' : 'Unable to recharge tank.'), result.ok ? '#7df5ec' : '#ffb347');
+        if (result.ok) SFX.craft();
+        if (typeof World !== 'undefined' && World.dirty) {
+          const q = String(key).split(',').map(Number);
+          if (q.length >= 3) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(q[0], q[2]) : World.key(Math.floor(q[0] / 16), Math.floor(q[2] / 16)));
+        }
+      }
+      this.refreshAll();
+      drawStatus();
+    });
+    controls.appendChild(status);
+    controls.appendChild(btn);
+    row.appendChild(tankWrap);
+    row.appendChild(controls);
+    row.appendChild(fuelWrap);
+    p.appendChild(row);
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#555;margin-bottom:6px;text-align:center';
+    hint.textContent = '1-minute tanks cost 1 Dark Floopium to refill. 5-minute tanks cost 5.';
+    p.appendChild(hint);
+    this.invGrid(p);
+    ov.appendChild(p);
+
+    const drawStatus = () => {
+      const tank = f.in, def = tank && Reg[tank.id];
+      if (!def || !def.oxygenTank) {
+        status.textContent = 'Insert an oxygen tank.';
+        btn.disabled = true;
+        return;
+      }
+      const max = def.maxDur || 0, cur = Math.max(0, tank.dur === undefined ? max : +tank.dur || 0), cost = Math.max(1, def.rechargeCost || 1);
+      status.textContent = `${Math.ceil(cur)} / ${max} seconds · refill cost ${cost}`;
+      btn.disabled = cur >= max || !f.fuel || f.fuel.id !== I.DARK_FLOOPIUM || f.fuel.count < cost;
+    };
+    drawStatus();
+    this.screenTimers.push(setInterval(drawStatus, 250));
+  },
+
   // ---------------- creative inventory ----------------
   buildCreative(ov) {
     const p = document.createElement('div');
@@ -1375,14 +1463,14 @@ const UI = {
       B.XMAS_ORE, B.FLOOPIUM_ORE, B.PATAPIM_ORE, B.GUNPOWDER_ORE,
     ]);
     putMany('Utility', [
-      B.CRAFT, B.EXTREME_CRAFT, B.FURNACE, B.CHEST, B.JELLY_CHEST, B.LOOT_CRATE, ...DUNGEON_CHEST_IDS, ...DUNGEON_CRATE_IDS, B.CASINO, B.STOCKS,
-      B.TORCH, B.MEGA_TORCH, B.LADDER_PX, B.ROPE_LADDER, B.SIGN, B.BED, B.SUNBED, B.PLANTATION_POT, B.SPAWNER, ...DUNGEON_SPAWNER_IDS, B.BROKEN_SPAWNER,
+      B.CRAFT, B.EXTREME_CRAFT, B.FURNACE, B.OXYGENATION_BENCH, B.CHEST, B.JELLY_CHEST, B.LOOT_CRATE, ...DUNGEON_CHEST_IDS, ...DUNGEON_CRATE_IDS, B.CASINO, B.STOCKS,
+      B.TORCH, ...COLORED_TORCHS.map(t => t.floor), B.SEA_TORCH, B.MEGA_TORCH, B.LADDER_PX, B.ROPE_LADDER, B.SIGN, B.BED, B.SUNBED, B.PLANTATION_POT, B.SPAWNER, ...DUNGEON_SPAWNER_IDS, B.BROKEN_SPAWNER,
       I.DOOR, I.BIRCH_DOOR, I.SPRUCE_DOOR, I.OASIS_DOOR,
       I.FLINT_STEEL, I.BUCKET, I.WATER_BUCKET, I.LAVA_BUCKET,
     ]);
     putMany('Materials', [
       I.STICK, I.COAL, I.CHARCOAL, I.RAW_IRON, I.IRON_INGOT, I.RAW_GOLD, I.GOLD_INGOT,
-      I.DIAMOND, I.EMERALD, I.FLOOPIUM, I.DARK_FLOOPIUM, I.PATAPIM_SHARD,
+      I.DIAMOND, I.EMERALD, I.FLOOPIUM, I.DARK_FLOOPIUM, I.PATAPIM_SHARD, I.SEA_LANTERN_SHARD,
       I.DUNGEON_KEY_GREEN, I.DUNGEON_KEY_BLUE, I.DUNGEON_KEY_GOLD, I.DUNGEON_KEY_DIAMOND, I.DUNGEON_CORE_SHARD,
       I.BONE, I.GUNPOWDER, I.FEATHER, I.FLINT, I.CHARGE_CORE,
       I.DYE_RED, I.DYE_YELLOW, I.DYE_BLUE, I.DYE_PURPLE, I.DYE_GREEN,
@@ -1403,6 +1491,8 @@ const UI = {
       I.PATAPIM_HELMET, I.PATAPIM_CHEST, I.PATAPIM_LEGS, I.PATAPIM_BOOTS,
       I.PATAPIM_DIAMOND_JELLY_HELMET, I.PATAPIM_DIAMOND_JELLY_CHEST,
       I.PATAPIM_DIAMOND_JELLY_LEGS, I.PATAPIM_DIAMOND_JELLY_BOOTS,
+      I.DIVING_HELMET, I.DIVING_CHEST, I.DIVING_LEGS, I.DIVING_BOOTS,
+      I.OXYGEN_TANK_1M, I.OXYGEN_TANK_5M,
     ]);
     putMany('Food/Farm', [
       I.APPLE, I.COOKIE, I.BERRY, I.FLOOPFRUIT, I.FLOOPFRUIT_SEEDS, I.BONEMEAL,
@@ -1412,6 +1502,10 @@ const UI = {
     putMany('Mobs', [
       I.EGG_FROG, I.EGG_SKELETON, I.EGG_SHEEP, I.EGG_HUMBUG,
       I.EGG_FLOOP, I.EGG_CHICKEN, I.EGG_CAMEL, I.EGG_TUNG, I.EGG_JELLY, I.EGG_BIG_JELLY,
+      I.EGG_MINNOW, I.EGG_SALMON, I.EGG_TUNA, I.EGG_CLOWNFISH, I.EGG_PUFFERFISH,
+      I.EGG_ANGLERFISH, I.EGG_SHARK, I.EGG_JELLYFISH, I.EGG_STINGRAY, I.EGG_OCTOPUS,
+      I.EGG_DOLPHIN, I.EGG_SEAHORSE, I.EGG_BARRACUDA, I.EGG_SEA_SERPENT, I.EGG_GIANT_SQUID,
+      I.EGG_SPRAWLER,
       I.JELLY_PERSON_PINK, I.JELLY_PERSON_CYAN, I.JELLY_PERSON_LIME, I.JELLY_PERSON_GRAPE, I.JELLY_PERSON_ORANGE, I.JELLY_PERSON_YELLOW,
     ]);
 
@@ -1438,6 +1532,8 @@ const UI = {
       const id = +idStr;
       if (!added.has(id) && creativeVisible(id)) put(autoCat(id), id);
     }
+    // Spawn eggs are registry-driven so every valid egg always appears in Creative > Mobs.
+    cats.Mobs = Object.keys(Reg).map(Number).filter(id => creativeVisible(id) && (Reg[id].spawnEgg || Reg[id].placeJelly)).sort((a, b) => a - b);
 
     const tabs = document.createElement('div');
     tabs.className = 'creativeTabs';

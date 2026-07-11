@@ -80,11 +80,20 @@ const B = {
   DUNGEON_BRICK_BLUE: 474, DUNGEON_BRICK_BLUE_INACTIVE: 475,
   DUNGEON_BRICK_GOLD: 476, DUNGEON_BRICK_GOLD_INACTIVE: 477,
   DUNGEON_BRICK_DIAMOND: 478, DUNGEON_BRICK_DIAMOND_INACTIVE: 479,
+  CORAL_RED: 480, CORAL_BLUE: 481, CORAL_YELLOW: 482, CORAL_PURPLE: 483, CORAL_GREEN: 484,
+  SHELL_BLOCK: 485, SEA_LANTERN: 486, OCEAN_SAND: 487, DEEP_OCEAN_STONE: 488, KELP_BLOCK: 489,
+  OXYGENATION_BENCH: 490, SEA_TORCH: 491,
+  SEA_WTORCH_PX: 492, SEA_WTORCH_NX: 493, SEA_WTORCH_PZ: 494, SEA_WTORCH_NZ: 495,
+  // hidden submerged variants; kept above the dynamic slab ranges and below item IDs
+  SEA_TORCH_WATER: 4980, SEA_WTORCH_WATER_PX: 4981, SEA_WTORCH_WATER_NX: 4982,
+  SEA_WTORCH_WATER_PZ: 4983, SEA_WTORCH_WATER_NZ: 4984,
   // dynamic mixed double slabs: exact bottom/top slab IDs are encoded from here upward
   DSLAB_MIX_C0: 500,
   // dynamic vertical slab variants + two-piece slab combos
   VSLAB_C0: 700,
   SLAB_COMBO_C0: 1000,
+  // dyed normal torches: 7 floor variants, then 4 wall variants per color
+  COLORED_TORCH_C0: 4800, COLORED_WTORCH_C0: 4807,
 };
 const WOOL_STAIR_COLORS = ['red', 'green', 'blue', 'yellow', 'purple', 'black'];
 
@@ -133,6 +142,14 @@ const I = {
   PLANE_ENGINE: 444, PLANE_TAIL: 445, PLANE: 446,
   DUNGEON_KEY_GREEN: 454, DUNGEON_KEY_BLUE: 455, DUNGEON_KEY_GOLD: 456, DUNGEON_KEY_DIAMOND: 457,
   DUNGEON_CORE_SHARD: 458,
+  // 5000+ is reserved for items so these never collide with dynamic slab-combo block IDs.
+  RAW_FISH: 5000, COOKED_FISH: 5001, SHARK_TOOTH: 5002, INK_SAC: 5003, PEARL: 5004,
+  EGG_MINNOW: 5010, EGG_SALMON: 5011, EGG_TUNA: 5012, EGG_CLOWNFISH: 5013, EGG_PUFFERFISH: 5014,
+  EGG_ANGLERFISH: 5015, EGG_SHARK: 5016, EGG_JELLYFISH: 5017, EGG_STINGRAY: 5018, EGG_OCTOPUS: 5019,
+  EGG_DOLPHIN: 5020, EGG_SEAHORSE: 5021, EGG_BARRACUDA: 5022, EGG_SEA_SERPENT: 5023, EGG_GIANT_SQUID: 5024,
+  EGG_SPRAWLER: 5025,
+  DIVING_HELMET: 5030, DIVING_CHEST: 5031, DIVING_LEGS: 5032, DIVING_BOOTS: 5033,
+  OXYGEN_TANK_1M: 5034, OXYGEN_TANK_5M: 5035, SEA_LANTERN_SHARD: 5036,
 };
 I.IRON_CHUNK = I.IRON_INGOT;
 I.GOLD_CHUNK = I.GOLD_INGOT;
@@ -783,8 +800,30 @@ function isLava(id) { return id >= B.LAVA && id <= B.LAVA_F1; }
 function lavaLevel(id) { return (id === B.LAVA || id === B.LAVA_FALL) ? 8 : (id === B.LAVA_F3 ? 3 : id === B.LAVA_F2 ? 2 : 1); }
 function lavaFlowIdFor(level) { return level >= 3 ? B.LAVA_F3 : level === 2 ? B.LAVA_F2 : B.LAVA_F1; }
 function isFluid(id) { return isWater(id) || isLava(id); }
-function isWallTorch(id) { return id >= B.WTORCH_PX && id <= B.WTORCH_NZ; }
-function isTorch(id) { return id === B.TORCH || isWallTorch(id); }
+function isWaterlogged(id) { return !!(Reg[id] && Reg[id].waterlogged); }
+function isWaterCell(id) { return isWater(id) || isWaterlogged(id); }
+function waterCellLevel(id) { return isWaterlogged(id) ? 8 : waterLevel(id); }
+function isWaterSource(id) { return id === B.WATER || isWaterlogged(id); }
+function isWallTorch(id) { return (id >= B.WTORCH_PX && id <= B.WTORCH_NZ) || !!(Reg[id] && Reg[id].torchWall); }
+function isWallSeaTorch(id) {
+  return (id >= B.SEA_WTORCH_PX && id <= B.SEA_WTORCH_NZ) ||
+    (id >= B.SEA_WTORCH_WATER_PX && id <= B.SEA_WTORCH_WATER_NZ);
+}
+function isSeaTorch(id) { return id === B.SEA_TORCH || id === B.SEA_TORCH_WATER || isWallSeaTorch(id); }
+function waterloggedSeaTorchId(id) {
+  return ({
+    [B.SEA_TORCH]: B.SEA_TORCH_WATER,
+    [B.SEA_WTORCH_PX]: B.SEA_WTORCH_WATER_PX, [B.SEA_WTORCH_NX]: B.SEA_WTORCH_WATER_NX,
+    [B.SEA_WTORCH_PZ]: B.SEA_WTORCH_WATER_PZ, [B.SEA_WTORCH_NZ]: B.SEA_WTORCH_WATER_NZ,
+  })[id] || id;
+}
+function isTorch(id) { return id === B.TORCH || !!(Reg[id] && Reg[id].torchFloor) || isWallTorch(id) || isSeaTorch(id); }
+function torchItemId(id) { return isSeaTorch(id) ? B.SEA_TORCH : (Reg[id] && Reg[id].floorTorch) || id; }
+function wallTorchIdFor(id, nx, nz) {
+  const walls = Reg[id] && Reg[id].wallIds;
+  if (!walls) return nx === 1 ? B.WTORCH_PX : nx === -1 ? B.WTORCH_NX : nz === 1 ? B.WTORCH_PZ : B.WTORCH_NZ;
+  return walls[nx === 1 ? 0 : nx === -1 ? 1 : nz === 1 ? 2 : 3];
+}
 function isSapling(id) { return (id >= B.SAPLING_OAK && id <= B.SAPLING_SPRUCE) || id === B.SAPLING_OASIS; }
 function isOasisSapling(id) { return id === B.SAPLING_OASIS; }
 function canPlantSaplingOn(saplingId, groundId) {
@@ -822,6 +861,10 @@ function isStairs(id) {
 const WTORCH_DIR = {
   [B.WTORCH_PX]: [1, 0, 0], [B.WTORCH_NX]: [-1, 0, 0],
   [B.WTORCH_PZ]: [0, 0, 1], [B.WTORCH_NZ]: [0, 0, -1],
+  [B.SEA_WTORCH_PX]: [1, 0, 0], [B.SEA_WTORCH_NX]: [-1, 0, 0],
+  [B.SEA_WTORCH_PZ]: [0, 0, 1], [B.SEA_WTORCH_NZ]: [0, 0, -1],
+  [B.SEA_WTORCH_WATER_PX]: [1, 0, 0], [B.SEA_WTORCH_WATER_NX]: [-1, 0, 0],
+  [B.SEA_WTORCH_WATER_PZ]: [0, 0, 1], [B.SEA_WTORCH_WATER_NZ]: [0, 0, -1],
 };
 const LADDER_DIR = {
   [B.LADDER_PX]: [1, 0, 0], [B.LADDER_NX]: [-1, 0, 0],
@@ -1052,11 +1095,28 @@ const WOOL_COLOR_BLOCKS = { white: B.WOOL, red: B.WOOL_RED, green: B.WOOL_GREEN,
 const DYE_COLOR = { [I.DYE_RED]: 'red', [I.DYE_YELLOW]: 'yellow', [I.DYE_BLUE]: 'blue', [I.DYE_PURPLE]: 'purple', [I.DYE_GREEN]: 'green', [I.BONE]: 'white', [I.CHARCOAL]: 'black' };
 const COLOR_HEX = { white: 0xe8e8e8, red: 0xc0392b, green: 0x27ae60, blue: 0x2980d9, yellow: 0xf1c40f, purple: 0x8e44ad, black: 0x2c2c34 };
 
+const COLORED_TORCHS = [
+  ['white', 'White', I.BONE, 0xffffff, '#f7fbff', '#d8e5ef', '#ffffff'],
+  ['red', 'Red', I.DYE_RED, 0xff3b30, '#ff4b3e', '#c51f18', '#ffd2cc'],
+  ['yellow', 'Yellow', I.DYE_YELLOW, 0xffe14a, '#ffe45b', '#d3a914', '#fff7b0'],
+  ['blue', 'Blue', I.DYE_BLUE, 0x3f7fff, '#4f8dff', '#2351b8', '#c8dcff'],
+  ['purple', 'Purple', I.DYE_PURPLE, 0xb45cff, '#bc66ff', '#7130b5', '#ead0ff'],
+  ['green', 'Green', I.DYE_GREEN, 0x42e66a, '#52ed77', '#209640', '#caffd5'],
+  // True black emits no RGB light, so the black dye uses the darkest visible violet-gray light.
+  ['black', 'Black', I.CHARCOAL, 0x30283f, '#403651', '#17131f', '#8b7aa3'],
+].map((v, i) => ({ key: v[0], name: v[1], dye: v[2], lightColor: v[3], flame: v[4], dark: v[5], core: v[6], floor: B.COLORED_TORCH_C0 + i, walls: [0, 1, 2, 3].map(d => B.COLORED_WTORCH_C0 + i * 4 + d) }));
+for (const t of COLORED_TORCHS) { WTORCH_DIR[t.walls[0]] = [1, 0, 0]; WTORCH_DIR[t.walls[1]] = [-1, 0, 0]; WTORCH_DIR[t.walls[2]] = [0, 0, 1]; WTORCH_DIR[t.walls[3]] = [0, 0, -1]; }
+
 const EGG_TYPE = {
   [I.EGG_FROG]: 'creeper', [I.EGG_SKELETON]: 'skeleton',
   [I.EGG_SHEEP]: 'sheep', [I.EGG_HUMBUG]: 'humbug', [I.EGG_FLOOP]: 'floop',
   [I.EGG_CHICKEN]: 'chicken', [I.EGG_CAMEL]: 'camel', [I.EGG_TUNG]: 'tung',
   [I.EGG_JELLY]: 'jelly', [I.EGG_BIG_JELLY]: 'big_jelly',
+  [I.EGG_MINNOW]: 'minnow', [I.EGG_SALMON]: 'salmon', [I.EGG_TUNA]: 'tuna', [I.EGG_CLOWNFISH]: 'clownfish',
+  [I.EGG_PUFFERFISH]: 'pufferfish', [I.EGG_ANGLERFISH]: 'anglerfish', [I.EGG_SHARK]: 'shark', [I.EGG_JELLYFISH]: 'jellyfish',
+  [I.EGG_STINGRAY]: 'stingray', [I.EGG_OCTOPUS]: 'octopus', [I.EGG_DOLPHIN]: 'dolphin', [I.EGG_SEAHORSE]: 'seahorse',
+  [I.EGG_BARRACUDA]: 'barracuda', [I.EGG_SEA_SERPENT]: 'sea_serpent', [I.EGG_GIANT_SQUID]: 'giant_squid',
+  [I.EGG_SPRAWLER]: 'sprawler',
 };
 
 // ---------------------------------------------------------------
@@ -1074,6 +1134,30 @@ function defBlock(id, name, o) {
 }
 function defItem(id, name, o) {
   Reg[id] = Object.assign({ name, block: false, stack: 64 }, o);
+}
+function isOxygenTank(id) { return !!(Reg[id] && Reg[id].oxygenTank); }
+function equipmentSlotAccepts(id, slot) {
+  const def = Reg[id];
+  return slot === 4 ? !!(def && def.oxygenTank) : !!(def && def.armor && def.armor.slot === slot);
+}
+function refillOxygenTankState(state) {
+  const tank = state && state.in;
+  const def = tank && Reg[tank.id];
+  if (!def || !def.oxygenTank) return { ok: false, message: 'Place an oxygen tank in the tank slot.' };
+  const max = def.maxDur || 0;
+  const cur = tank.dur === undefined ? max : +tank.dur;
+  if (cur >= max) return { ok: false, message: 'That oxygen tank is already full.' };
+  const cost = Math.max(1, def.rechargeCost || 1);
+  if (!state.fuel || state.fuel.id !== I.DARK_FLOOPIUM || state.fuel.count < cost) return { ok: false, message: 'This refill needs ' + cost + ' Dark Floopium.' };
+  state.fuel.count -= cost;
+  if (state.fuel.count <= 0) state.fuel = null;
+  tank.dur = max;
+  if (tank.data && tank.data.emptyWarned) {
+    tank.data = Object.assign({}, tank.data);
+    delete tank.data.emptyWarned;
+    if (!Object.keys(tank.data).length) delete tank.data;
+  }
+  return { ok: true, cost };
 }
 
 defBlock(B.GRASS, 'Grass Block', { hard: 0.7, tool: 'shovel', drop: { id: B.DIRT }, tex: { top: 'grass_top', side: 'grass_side', bottom: 'dirt' } });
@@ -1103,16 +1187,58 @@ defBlock(B.FLOOP_METAL, 'Floop Metal', { hard: 10, tool: 'pickaxe', reqTier: 2, 
 defBlock(B.FLOOP_LAMP, 'Floop Lamp', { hard: 1, light: true, lightLevel: 15, tex: { all: 'floop_lamp' } });
 defBlock(B.PRESENT, 'Present Block', { hard: 1, flammable: true, tex: { top: 'present_top', side: 'present_side', bottom: 'present_side' } });
 defBlock(B.GLASS, 'Glass', { hard: 0.5, opaque: false, cutout: true, weak: true, drop: null, tex: { all: 'glass' } });
+for (const [id, name, tex] of [
+  [B.CORAL_RED, 'Red Coral Block', 'coral_red'], [B.CORAL_BLUE, 'Blue Coral Block', 'coral_blue'],
+  [B.CORAL_YELLOW, 'Yellow Coral Block', 'coral_yellow'], [B.CORAL_PURPLE, 'Purple Coral Block', 'coral_purple'],
+  [B.CORAL_GREEN, 'Green Coral Block', 'coral_green'],
+]) defBlock(id, name, { hard: 0.8, tool: 'pickaxe', reqTier: 0, tex: { all: tex } });
+defBlock(B.SHELL_BLOCK, 'Shell Block', { hard: 0.7, tool: 'shovel', tex: { all: 'shell_block' } });
+defBlock(B.SEA_LANTERN, 'Sea Lantern', { hard: 1.2, tool: 'pickaxe', reqTier: 0, light: true, lightLevel: 12, drop: { id: I.SEA_LANTERN_SHARD, min: 2, max: 4 }, tex: { all: 'sea_lantern' } });
+defBlock(B.OCEAN_SAND, 'Ocean Sand', { hard: 0.6, tool: 'shovel', gravity: true, tex: { all: 'ocean_sand' } });
+defBlock(B.DEEP_OCEAN_STONE, 'Deep Ocean Stone', { hard: 6.2, tool: 'pickaxe', reqTier: 1, tex: { all: 'deep_ocean_stone' } });
+defBlock(B.KELP_BLOCK, 'Kelp Block', { hard: 0.45, tool: 'axe', tex: { all: 'kelp_block' } });
+defBlock(B.OXYGENATION_BENCH, 'Oxygenation Bench', {
+  hard: 4, tool: 'pickaxe', reqTier: 1, interact: 'oxygenBench',
+  tex: { top: 'oxygen_bench_top', side: 'oxygen_bench_side', bottom: 'floop_metal' },
+  tip: 'Refills oxygen tanks using Dark Floopium.'
+});
+defBlock(B.SEA_TORCH, 'Sea Torch', {
+  hard: 0.05, solid: false, opaque: false, cutout: true, needsSupport: true,
+  light: true, lightLevel: 14, lightColor: 0x7fffd4, shape: 'cross', tex: { all: 'sea_torch' },
+  tip: 'Stays lit underwater and preserves the water in its block.'
+});
+defBlock(B.SEA_TORCH_WATER, 'Sea Torch', {
+  hard: 0.05, solid: false, opaque: false, cutout: true, needsSupport: true,
+  light: true, lightLevel: 14, lightColor: 0x7fffd4, shape: 'cross', waterlogged: true, hidden: true,
+  drop: { id: B.SEA_TORCH }, tex: { all: 'sea_torch' }
+});
+for (const wid of [B.SEA_WTORCH_PX, B.SEA_WTORCH_NX, B.SEA_WTORCH_PZ, B.SEA_WTORCH_NZ]) {
+  defBlock(wid, 'Sea Torch', {
+    hard: 0.05, solid: false, opaque: false, cutout: true, light: true, lightLevel: 14, lightColor: 0x7fffd4,
+    shape: 'wtorch', hidden: true, drop: { id: B.SEA_TORCH }, tex: { all: 'sea_torch' }
+  });
+}
+for (const wid of [B.SEA_WTORCH_WATER_PX, B.SEA_WTORCH_WATER_NX, B.SEA_WTORCH_WATER_PZ, B.SEA_WTORCH_WATER_NZ]) {
+  defBlock(wid, 'Sea Torch', {
+    hard: 0.05, solid: false, opaque: false, cutout: true, light: true, lightLevel: 14, lightColor: 0x7fffd4,
+    shape: 'wtorch', waterlogged: true, hidden: true, drop: { id: B.SEA_TORCH }, tex: { all: 'sea_torch' }
+  });
+}
+
 defBlock(B.WORLD_BORDER, 'World Border Block', {
   hard: Infinity, drop: null, opaque: true, cutout: false, weak: false, tex: { all: 'world_border' },
   tip: 'Marks the absolute edge of the generated world.'
 });
 defBlock(B.LORE, 'Floop Lore Stone', { hard: 8, tool: 'pickaxe', reqTier: 0, interact: 'lore', lightLevel: 5, tex: { all: 'lore_stone' } });
-defBlock(B.TORCH, 'Torch', { hard: 0.05, solid: false, opaque: false, cutout: true, needsSupport: true, light: true, lightLevel: 14, shape: 'cross', tex: { all: 'torch' } });
+defBlock(B.TORCH, 'Torch', { hard: 0.05, solid: false, opaque: false, cutout: true, needsSupport: true, light: true, lightLevel: 14, shape: 'cross', torchFloor: true, wallIds: [B.WTORCH_PX, B.WTORCH_NX, B.WTORCH_PZ, B.WTORCH_NZ], tex: { all: 'torch' } });
 defBlock(B.BONE_BLOCK, 'Bone Block', { hard: 1.5, tool: 'pickaxe', tex: { all: 'bone_block' } });
 defBlock(B.SNOW, 'Snow Block', { hard: 0.4, tool: 'shovel', tex: { all: 'snow' } });
 for (const wid of [B.WTORCH_PX, B.WTORCH_NX, B.WTORCH_PZ, B.WTORCH_NZ]) {
-  defBlock(wid, 'Torch', { hard: 0.05, solid: false, opaque: false, cutout: true, light: true, lightLevel: 14, shape: 'wtorch', drop: { id: B.TORCH }, tex: { all: 'torch' } });
+  defBlock(wid, 'Torch', { hard: 0.05, solid: false, opaque: false, cutout: true, light: true, lightLevel: 14, shape: 'wtorch', torchWall: true, floorTorch: B.TORCH, drop: { id: B.TORCH }, tex: { all: 'torch' } });
+}
+for (const t of COLORED_TORCHS) {
+  defBlock(t.floor, t.name + ' Torch', { hard: 0.05, solid: false, opaque: false, cutout: true, needsSupport: true, light: true, lightLevel: 14, lightColor: t.lightColor, shape: 'cross', torchFloor: true, coloredTorch: true, wallIds: t.walls, tex: { all: 'torch_' + t.key }, tip: 'A normal torch dyed ' + t.key + '; emits matching RGB light.' });
+  for (const wid of t.walls) defBlock(wid, t.name + ' Torch', { hard: 0.05, solid: false, opaque: false, cutout: true, light: true, lightLevel: 14, lightColor: t.lightColor, shape: 'wtorch', torchWall: true, coloredTorch: true, floorTorch: t.floor, hidden: true, drop: { id: t.floor }, tex: { all: 'torch_' + t.key } });
 }
 defBlock(B.FURNACE, 'Furnace', { hard: 6, tool: 'pickaxe', reqTier: 0, interact: 'furnace', tex: { top: 'furnace_side', side: 'furnace_front', bottom: 'stone' } });
 defBlock(B.FURNACE_LIT, 'Furnace', { hard: 6, tool: 'pickaxe', reqTier: 0, interact: 'furnace', light: true, lightLevel: 13, drop: { id: B.FURNACE }, tex: { top: 'furnace_side', side: 'furnace_front_lit', bottom: 'stone' } });
@@ -1295,12 +1421,12 @@ defBlock(B.JELLY_BLOCK_LIME, 'Lime Jelly Block', { hard: 0.45, opaque: false, cu
 defBlock(B.JELLY_BLOCK_GRAPE, 'Grape Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_grape' } });
 defBlock(B.JELLY_BLOCK_ORANGE, 'Orange Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_orange' } });
 defBlock(B.JELLY_BLOCK_YELLOW, 'Yellow Jelly Block', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, tex: { all: 'jelly_block_yellow' } });
-defBlock(B.JELLY_LAMP, 'Pink Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_pink' } });
-defBlock(B.JELLY_LAMP_CYAN, 'Cyan Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_cyan' } });
-defBlock(B.JELLY_LAMP_LIME, 'Lime Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_lime' } });
-defBlock(B.JELLY_LAMP_GRAPE, 'Grape Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_grape' } });
-defBlock(B.JELLY_LAMP_ORANGE, 'Orange Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_orange' } });
-defBlock(B.JELLY_LAMP_YELLOW, 'Yellow Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, tex: { all: 'jelly_lamp_yellow' } });
+defBlock(B.JELLY_LAMP, 'Pink Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, lightColor: 0xff5bd8, tex: { all: 'jelly_lamp_pink' } });
+defBlock(B.JELLY_LAMP_CYAN, 'Cyan Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, lightColor: 0x4defff, tex: { all: 'jelly_lamp_cyan' } });
+defBlock(B.JELLY_LAMP_LIME, 'Lime Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, lightColor: 0x8cff4d, tex: { all: 'jelly_lamp_lime' } });
+defBlock(B.JELLY_LAMP_GRAPE, 'Grape Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, lightColor: 0xa45bff, tex: { all: 'jelly_lamp_grape' } });
+defBlock(B.JELLY_LAMP_ORANGE, 'Orange Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, lightColor: 0xff9a3d, tex: { all: 'jelly_lamp_orange' } });
+defBlock(B.JELLY_LAMP_YELLOW, 'Yellow Jelly Lamp', { hard: 0.45, opaque: false, cutout: true, weak: true, force3dIcon: true, light: true, lightLevel: 12, lightColor: 0xffef57, tex: { all: 'jelly_lamp_yellow' } });
 defBlock(B.JELLY_HOUSE, 'Jelly House', { stack: 1, hard: 1.2, opaque: false, cutout: true, weak: true, force3dIcon: true, interact: 'jellyHouse', light: true, lightLevel: 7, tex: { top: 'jelly_house_top', side: 'jelly_house_side', bottom: 'jelly_house_bottom' }, tip: 'Tiny jelly barracks. Stores a limited group of Jelly People.' });
 defBlock(B.MEGA_TORCH, 'Mega Star Sun Torch', {
   hard: 3, light: true, lightLevel: 15, shape: 'mega', opaque: false, cutout: true,
@@ -1383,6 +1509,14 @@ defItem(I.RAW_MUTTON, 'Raw Mutton', { food: 2 });
 defItem(I.COOKED_MUTTON, 'Cooked Mutton', { food: 8 }); // the new best food
 defItem(I.RAW_CHICKEN, 'Raw Chicken', { food: 1 });
 defItem(I.COOKED_CHICKEN, 'Cooked Chicken', { food: 5 }); // respectably worse than floop berries
+defItem(I.RAW_FISH, 'Raw Fish', { food: 2 });
+defItem(I.COOKED_FISH, 'Cooked Fish', { food: 7 });
+defItem(I.SHARK_TOOTH, 'Shark Tooth');
+defItem(I.INK_SAC, 'Ink Sac');
+defItem(I.PEARL, 'Pearl');
+defItem(I.SEA_LANTERN_SHARD, 'Sea Lantern Shard', { tip: 'Glowing crystal used to craft Sea Torches and diving equipment.' });
+defItem(I.OXYGEN_TANK_1M, '1 Minute Oxygen Tank', { stack: 1, maxDur: 60, oxygenTank: true, rechargeCost: 1, tip: 'Provides 1 minute of air while a full Diving Suit is worn.' });
+defItem(I.OXYGEN_TANK_5M, '5 Minute Oxygen Tank', { stack: 1, maxDur: 300, oxygenTank: true, rechargeCost: 5, tip: 'Provides 5 minutes of air while a full Diving Suit is worn.' });
 defItem(I.SMOOTHIE, 'Star-Snow-Coal-Shake-Smoothie', { food: 14, stack: 4, tip: 'Tastes like winter and poor decisions.' });
 defItem(I.RAW_IRON, 'Raw Iron');
 defItem(I.RAW_GOLD, 'Raw Gold');
@@ -1412,6 +1546,7 @@ const ARMOR_DEFS = [
   ['EMERALD', 'Emerald', [3, 8, 6, 3]],
   ['PATAPIM', 'Patapim', [4, 9, 7, 4]],
   ['PATAPIM_DIAMOND_JELLY', 'Patapim Diamond-Infused Jelly', [4, 10, 8, 4]],
+  ['DIVING', 'Diving', [2, 5, 4, 2]],
 ];
 const ARMOR_SLOTS = ['HELMET', 'CHEST', 'LEGS', 'BOOTS'];
 const ARMOR_NAMES = ['Helmet', 'Chestplate', 'Leggings', 'Boots'];
@@ -1420,6 +1555,8 @@ for (const [key, nm, pts] of ARMOR_DEFS) {
     defItem(I[key + '_' + ARMOR_SLOTS[s]], nm + ' ' + ARMOR_NAMES[s], { stack: 1, armor: { slot: s, points: pts[s] } });
   }
 }
+const DIVING_ARMOR_IDS = [I.DIVING_HELMET, I.DIVING_CHEST, I.DIVING_LEGS, I.DIVING_BOOTS];
+for (const id of DIVING_ARMOR_IDS) if (Reg[id]) Reg[id].tip = 'Part of the full Diving Suit required to use oxygen tanks.';
 const PATAPIM_DIAMOND_JELLY_ARMOR_IDS = [
   I.PATAPIM_DIAMOND_JELLY_HELMET,
   I.PATAPIM_DIAMOND_JELLY_CHEST,
@@ -1465,7 +1602,7 @@ defItem(I.DYE_BLUE, 'Blue Dye');
 defItem(I.DYE_PURPLE, 'Purple Dye');
 defItem(I.DYE_GREEN, 'Green Dye');
 for (const [eid, type] of Object.entries(EGG_TYPE)) {
-  defItem(+eid, type[0].toUpperCase() + type.slice(1) + ' Spawn Egg', { stack: 16, spawnEgg: type });
+  defItem(+eid, type.split('_').map(s => s[0].toUpperCase() + s.slice(1)).join(' ') + ' Spawn Egg', { stack: 16, spawnEgg: type });
 }
 Reg[I.EGG_FROG].name = 'Frog Spawn Egg'; // they were never creepers. not really.
 Reg[I.EGG_JELLY].name = 'Jelly Person Spawn Egg';
@@ -1580,6 +1717,21 @@ const Atlas = {
     reg('leaves', (c, x, y) => leavesTile(c, x, y, ['#3e7a2a', '#4c8f35', '#356b23', '#57a03e']));
     reg('sand', (c, x, y) => { fill(c, x, y, '#dbd095'); speck(c, x, y, ['#cfc389', '#e6dca4', '#c6b97c'], 90); });
     reg('water', (c, x, y) => { fill(c, x, y, '#3b64d8'); speck(c, x, y, ['#3459c4', '#4a74e6', '#2e50b4'], 60); });
+    const coralTile = (c, x, y, base, dark, light) => {
+      fill(c, x, y, base); speck(c, x, y, [dark, light, base], 72);
+      c.fillStyle = dark; for (let i = 1; i < 16; i += 5) { c.fillRect(x + i, y, 1, 16); c.fillRect(x, y + ((i * 3) % 16), 16, 1); }
+      c.fillStyle = light; for (let i = 0; i < 8; i++) c.fillRect(x + ((i * 7 + 3) % 15), y + ((i * 5 + 2) % 15), 2, 2);
+    };
+    reg('coral_red', (c, x, y) => coralTile(c, x, y, '#d84b5f', '#8e2639', '#ff8495'));
+    reg('coral_blue', (c, x, y) => coralTile(c, x, y, '#397fd8', '#1c4e91', '#78b7ff'));
+    reg('coral_yellow', (c, x, y) => coralTile(c, x, y, '#e2bd3e', '#8f6f17', '#ffe47a'));
+    reg('coral_purple', (c, x, y) => coralTile(c, x, y, '#9652cf', '#5b267f', '#d09aff'));
+    reg('coral_green', (c, x, y) => coralTile(c, x, y, '#3fae78', '#1f7048', '#78e5ad'));
+    reg('shell_block', (c, x, y) => { fill(c, x, y, '#e7d7bb'); speck(c, x, y, ['#c8b28e', '#fff1d5', '#bfa783'], 76); c.strokeStyle = '#a98e68'; for (let i = 1; i < 16; i += 4) { c.beginPath(); c.arc(x + 8, y + 15, i, Math.PI, Math.PI * 2); c.stroke(); } });
+    reg('sea_lantern', (c, x, y) => { fill(c, x, y, '#8fe8dc'); c.fillStyle = '#d9fff8'; c.fillRect(x + 3, y + 3, 10, 10); c.fillStyle = '#4aa89f'; c.fillRect(x, y, 16, 2); c.fillRect(x, y + 14, 16, 2); c.fillRect(x, y, 2, 16); c.fillRect(x + 14, y, 2, 16); speck(c, x, y, ['#ffffff', '#63c9bf'], 24); });
+    reg('ocean_sand', (c, x, y) => { fill(c, x, y, '#78989c'); speck(c, x, y, ['#58787c', '#9ab6b5', '#43666b'], 96); });
+    reg('deep_ocean_stone', (c, x, y) => { fill(c, x, y, '#25394b'); speck(c, x, y, ['#162735', '#38536a', '#1c3040'], 110); });
+    reg('kelp_block', (c, x, y) => { fill(c, x, y, '#285f3d'); c.fillStyle = '#3e8a55'; for (let i = -8; i < 24; i += 5) c.fillRect(x + i, y, 2, 16); speck(c, x, y, ['#19492f', '#55a86b'], 54); });
     reg('lava', (c, x, y) => {
       fill(c, x, y, '#d96514');
       speck(c, x, y, ['#f5901e', '#b8450c', '#ffb52e', '#e87818'], 80);
@@ -1694,6 +1846,21 @@ const Atlas = {
       for (let i = 0; i <= 5; i++) c.fillRect(x + 3 + i * 2, y + 4, 1, 9);
       for (let i = 0; i <= 3; i++) c.fillRect(x + 3, y + 4 + i * 2, 11, 1);
       c.fillStyle = '#2f8d48'; c.fillRect(x + 5, y + 6, 2, 2); c.fillRect(x + 9, y + 9, 2, 2);
+    });
+    reg('oxygen_bench_top', (c, x, y) => {
+      fill(c, x, y, '#4f6670'); speck(c, x, y, ['#3b4d55', '#718a94'], 28);
+      c.fillStyle = '#162a35'; c.fillRect(x + 2, y + 2, 12, 12);
+      c.fillStyle = '#7df5ec'; c.fillRect(x + 4, y + 4, 8, 2); c.fillRect(x + 7, y + 3, 2, 8);
+      c.fillStyle = '#d8d8d8'; c.fillRect(x + 3, y + 11, 10, 2);
+      c.fillStyle = '#3a1f4d'; c.fillRect(x + 11, y + 3, 2, 3);
+    });
+    reg('oxygen_bench_side', (c, x, y) => {
+      fill(c, x, y, '#4f6670'); speck(c, x, y, ['#3b4d55', '#718a94'], 28);
+      c.fillStyle = '#1e313a'; c.fillRect(x + 2, y + 3, 12, 9);
+      c.fillStyle = '#7df5ec'; c.fillRect(x + 3, y + 5, 6, 2);
+      c.fillStyle = '#9a9a9a'; c.fillRect(x + 3, y + 9, 10, 2);
+      c.fillStyle = '#3a1f4d'; c.fillRect(x + 11, y + 4, 2, 4);
+      c.fillStyle = '#d8d8d8'; c.fillRect(x, y + 13, 16, 3);
     });
     reg('casino_top', (c, x, y) => {
       fill(c, x, y, '#d4af37');
@@ -1858,6 +2025,23 @@ const Atlas = {
       c.fillStyle = '#ffdd55'; c.fillRect(x + 6, y + 3, 4, 3);
       c.fillStyle = '#ff9d2e'; c.fillRect(x + 7, y + 2, 2, 2);
       px(c, x, y, 7, 1, '#fff2ae');
+    });
+    for (const t of COLORED_TORCHS) reg('torch_' + t.key, (c, x, y) => {
+      c.clearRect(x, y, T, T);
+      c.fillStyle = '#7a5c36'; c.fillRect(x + 7, y + 6, 2, 10);
+      c.fillStyle = '#5a4226'; c.fillRect(x + 8, y + 6, 1, 10);
+      c.fillStyle = t.flame; c.fillRect(x + 6, y + 3, 4, 3);
+      c.fillStyle = t.dark; c.fillRect(x + 7, y + 2, 2, 2);
+      px(c, x, y, 7, 1, t.core);
+    });
+    reg('sea_torch', (c, x, y) => {
+      c.clearRect(x, y, T, T);
+      c.fillStyle = '#315e68'; c.fillRect(x + 7, y + 6, 2, 10);
+      c.fillStyle = '#173c45'; c.fillRect(x + 8, y + 6, 1, 10);
+      c.fillStyle = '#7df5ec'; c.fillRect(x + 5, y + 3, 6, 4);
+      c.fillStyle = '#d8ffff'; c.fillRect(x + 7, y + 2, 2, 3);
+      c.fillStyle = '#2fa8a0'; c.fillRect(x + 6, y + 6, 4, 1);
+      px(c, x, y, 7, 1, '#ffffff');
     });
     reg('mega_torch', (c, x, y) => {
       c.clearRect(x, y, T, T);
@@ -2614,6 +2798,7 @@ const Icons = {
       EMERALD: { main: '#2ecc71', dark: '#168f48' },
       PATAPIM: { main: '#b06cff', dark: '#7a3fd0' },
       PATAPIM_DIAMOND_JELLY: { main: '#6ee8ff', dark: '#7a3fd0' },
+      DIVING: { main: '#355d6b', dark: '#173642' },
     };
     for (const [key] of ARMOR_DEFS) {
       for (const s of ARMOR_SLOTS) if (I[key + '_' + s] === id) mat = ARMOR_COLORS[key];
@@ -2658,6 +2843,18 @@ const Icons = {
       [I.COOKED_MUTTON]: { m: '#9a5a2e', M: '#5e3013' },
       [I.RAW_CHICKEN]: { m: '#f2c9a4', M: '#d8a87e' },
       [I.COOKED_CHICKEN]: { m: '#c9803a', M: '#96591e' },
+      [I.RAW_FISH]: { m: '#6eb4cf', M: '#2e6f8a', w: '#d8f5ff' },
+      [I.COOKED_FISH]: { m: '#c58a48', M: '#7d4d22', w: '#f6d7a8' },
+      [I.SHARK_TOOTH]: { m: '#f2efe3', M: '#aaa69b' },
+      [I.INK_SAC]: { m: '#322548', M: '#120d1d' },
+      [I.PEARL]: { m: '#e7f6ff', M: '#87b8d3', w: '#ffffff' },
+      [I.SEA_LANTERN_SHARD]: { m: '#7df5ec', M: '#2fa8a0', w: '#eaffff' },
+      [I.OXYGEN_TANK_1M]: { m: '#d8d8d8', M: '#355d6b', c: '#7df5ec', C: '#2fa8a0' },
+      [I.OXYGEN_TANK_5M]: { m: '#d8d8d8', M: '#173642', c: '#7df5ec', C: '#2fa8a0', y: '#ffd75e' },
+      [I.DIVING_HELMET]: { m: '#e3e8ea', M: '#41545e', i: '#aebbc1', I: '#6e7f87', c: '#7df5ec', C: '#2fa8a0', o: '#ff9d2e' },
+      [I.DIVING_CHEST]: { m: '#e3e8ea', M: '#41545e', i: '#aebbc1', I: '#6e7f87', c: '#7df5ec', C: '#2fa8a0', o: '#ff9d2e' },
+      [I.DIVING_LEGS]: { m: '#e3e8ea', M: '#41545e', i: '#aebbc1', I: '#6e7f87', c: '#7df5ec', C: '#2fa8a0', o: '#ff9d2e' },
+      [I.DIVING_BOOTS]: { m: '#e3e8ea', M: '#41545e', i: '#aebbc1', I: '#6e7f87', c: '#7df5ec', C: '#2fa8a0', o: '#ff9d2e' },
       [I.SPRUCE_DOOR]: { t: '#6e5430', T: '#4a3821', H: '#3a2a18', b: '#7d6238' },
       [I.OASIS_DOOR]: { t: '#b68545', T: '#7b552d', H: '#5d3c1f', b: '#d0a063' },
       [I.EGG_FROG]: { m: '#4db843', M: '#2d8f26' },
@@ -2671,6 +2868,22 @@ const Icons = {
       [I.EGG_TUNG]: { m: '#6b502e', M: '#3a2a17' },
       [I.EGG_JELLY]: { m: '#ff7fd4', M: '#6ee8ff' },
       [I.EGG_BIG_JELLY]: { m: '#c77dff', M: '#ff7fd4' },
+      [I.EGG_MINNOW]: { m: '#9bc8d8', M: '#47788d' },
+      [I.EGG_SALMON]: { m: '#db7f75', M: '#7f3b40' },
+      [I.EGG_TUNA]: { m: '#4e82a8', M: '#234a6b' },
+      [I.EGG_CLOWNFISH]: { m: '#ff8b2f', M: '#1d1d24' },
+      [I.EGG_PUFFERFISH]: { m: '#d6bd55', M: '#6b5a24' },
+      [I.EGG_ANGLERFISH]: { m: '#37405c', M: '#a8ffff' },
+      [I.EGG_SHARK]: { m: '#6d8293', M: '#344653' },
+      [I.EGG_JELLYFISH]: { m: '#a98bf0', M: '#5e3e9b' },
+      [I.EGG_STINGRAY]: { m: '#8b796b', M: '#4d4038' },
+      [I.EGG_OCTOPUS]: { m: '#a64c70', M: '#57233b' },
+      [I.EGG_DOLPHIN]: { m: '#7895a8', M: '#36566a' },
+      [I.EGG_SEAHORSE]: { m: '#e7ad48', M: '#8e5d20' },
+      [I.EGG_BARRACUDA]: { m: '#9cae63', M: '#43502a' },
+      [I.EGG_SEA_SERPENT]: { m: '#2fc39f', M: '#0d5449' },
+      [I.EGG_GIANT_SQUID]: { m: '#7f354d', M: '#220d19' },
+      [I.EGG_SPRAWLER]: { m: '#171b1d', M: '#aeb0a6' },
       [I.JELLY_GLOB_PINK]: { m: '#ff7fd4', M: '#b83b99' },
       [I.JELLY_GLOB_CYAN]: { m: '#6ee8ff', M: '#268ba8' },
       [I.JELLY_GLOB_LIME]: { m: '#9cff6e', M: '#459a31' },
@@ -2859,6 +3072,58 @@ const Icons = {
       '...pMmm...cMmm..',
       '...mMMm...mMMm..',
       '...MMMM...MMMM..']);
+    if (id === I.DIVING_HELMET) return pad([
+      '................',
+      '.....IIIIII.....',
+      '...IimmmmmmiI...',
+      '..IimccccccmiI..',
+      '..ImcCCCCCCcmI..',
+      '.IImcC....CcmII.',
+      '.IMmcC....CcmMI.',
+      '.IMmccccccccmMI.',
+      '.IIMMMMMMMMMMII.',
+      '..IMMoMMMMoMMI..',
+      '...IIIMMMMIII...',
+      '.....IIIIII.....']);
+    if (id === I.DIVING_CHEST) return pad([
+      '................',
+      '..II........II..',
+      '.IimmI....IimmI.',
+      '.ImmmIIIIIImmmI.',
+      '.ImMcmmmmmmcMmI.',
+      '.IMMcMMooMMcMMI.',
+      '..ImcMMMMMMcmI..',
+      '..ImMMmccmMMmI..',
+      '..ImMMmCCmMMmI..',
+      '..ImMMMMMMMMmI..',
+      '..IIMMMMMMMMII..',
+      '...IIIIIIIIII...']);
+    if (id === I.DIVING_LEGS) return pad([
+      '................',
+      '...IIIIIIIIII...',
+      '...ImmmmmmmmI...',
+      '...ImccMMccmI...',
+      '...ImMM..MMmI...',
+      '...ImMM..MMmI...',
+      '...ImIM..MImI...',
+      '...ImIM..MImI...',
+      '...ImcM..McmI...',
+      '...IMMM..MMMI...',
+      '...IMMM..MMMI...',
+      '...IIII..IIII...']);
+    if (id === I.DIVING_BOOTS) return pad([
+      '................',
+      '................',
+      '................',
+      '...II......II...',
+      '...ImI....ImI...',
+      '...ImI....ImI...',
+      '...ImI....ImI...',
+      '...IMI....IMI...',
+      '..IMMc....cMMI..',
+      '..IMMMI..IMMMI..',
+      '..IMMMM..MMMMI..',
+      '..IIIIIIIIIIII..']);
     const as = armorSlot(id);
     if (as === 0) return pad([
       '................',
@@ -2916,6 +3181,35 @@ const Icons = {
       '...mmmm...mmmm..',
       '...mMMm...mMMm..',
       '...MMMM...MMMM..']);
+
+    if (id === I.OXYGEN_TANK_1M || id === I.OXYGEN_TANK_5M) return pad([
+      '................',
+      '......MMMM......',
+      '.....MmmmmM.....',
+      '.....MccccM.....',
+      '.....MmmmmM.....',
+      '.....MmmmmM.....',
+      '.....MmmmmM.....',
+      '.....MmmmmM.....',
+      '.....MmmmmM.....',
+      '.....MmmmmM.....',
+      '.....MccccM.....',
+      '.....MmmmmM.....',
+      '......MMMM......',
+      '.......MM.......']);
+    if (id === I.SEA_LANTERN_SHARD) return pad([
+      '................',
+      '.......w........',
+      '......wmw.......',
+      '.....wmmmw......',
+      '....wmmMmw......',
+      '...wmmMMmmw.....',
+      '....wmmmmw......',
+      '.....wmmw.......',
+      '......ww........',
+      '......m.........',
+      '.....mMm........',
+      '......M.........']);
 
     // spawn eggs
     if (Reg[id] && Reg[id].spawnEgg) return pad([
@@ -3213,6 +3507,16 @@ const Icons = {
         '.....mMmmMm.....',
         '.....mm..mm.....',
         '.....ww..ww.....']),
+      [I.RAW_FISH]: pad([
+        '................','................','..........m.....','..M....mmmm....','..mMmmmmmmmm...','..mmmmmmwmmmm..','..mMmmmmmmmm...','..M....mmmm....','..........m.....']),
+      [I.COOKED_FISH]: pad([
+        '................','................','..........m.....','..M....mmmm....','..mMmmmMmmmm...','..mmmmmmwmmmm..','..mMmmmmMmmm...','..M....mmmm....','..........m.....']),
+      [I.SHARK_TOOTH]: pad([
+        '................','.....mmmmmm.....','.....mmmmmm.....','......mmmm......','......mmmm......','.......mm.......','.......mm.......','.......MM.......']),
+      [I.INK_SAC]: pad([
+        '................','......mmmm......','....mmmmmmmm....','...mmmmmmmmmm...','...mMmmmmmmMm...','....mmmmmmmm....','.....mmmmmm.....','....mm.mm.mm....','...mm..mm..mm...']),
+      [I.PEARL]: pad([
+        '................','......mmmm......','....mmwwwwmm....','...mmwwwwwwmm...','...mwwwwwwwwm...','...mwwwwwwwwm...','....mmwwwwmm....','......mmmm......']),
       // frosty shake cup: straw, coal flecks, star on the glass
       [I.SMOOTHIE]: pad([
         '.........oo.....',
@@ -3784,13 +4088,13 @@ const BLOCKS_WORLDGEN_SRC = (() => {
     DUNGEON_CHEST_BY_RANK, DUNGEON_CRATE_BY_RANK, DUNGEON_SPAWNER_BY_RANK,
     DUNGEON_BRICK_BY_RANK, DUNGEON_BRICK_INACTIVE_BY_RANK, DUNGEON_BRICK_TO_INACTIVE,
     DUNGEON_CHEST_IDS, DUNGEON_CRATE_IDS, DUNGEON_SPAWNER_IDS,
-    WOOL_STAIR_COLORS, JELLY_COLORS_ALL, JELLY_BLOCK_BY_COLOR, JELLY_LAMP_BY_COLOR,
+    WOOL_STAIR_COLORS, JELLY_COLORS_ALL, JELLY_BLOCK_BY_COLOR, JELLY_LAMP_BY_COLOR, COLORED_TORCHS,
     WTORCH_DIR, LADDER_DIR, STAIR_DIRS,
   };
   const sets = { ACTIVE_DUNGEON_BRICK_IDS, INACTIVE_DUNGEON_BRICK_IDS, DOOR_TOP_IDS, DOOR_X_IDS };
   const fns = [
-    isWater, waterLevel, flowIdFor, isLava, lavaLevel, lavaFlowIdFor, isFluid,
-    isWallTorch, isTorch, isSapling, isOasisSapling, canPlantSaplingOn,
+    isWater, waterLevel, flowIdFor, isLava, lavaLevel, lavaFlowIdFor, isFluid, isWaterlogged,
+    isWallTorch, isWallSeaTorch, isSeaTorch, isTorch, torchItemId, isSapling, isOasisSapling, canPlantSaplingOn,
     isFlower, isCrop, cropStage, isPlanterCell, canPlantFloopfruitOn,
     isLadder, isSnowSheet, snowSheetLevel,
     isDoor, isDoorOpen, isDoorTop, isDoorX, isBed,

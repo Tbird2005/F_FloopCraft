@@ -8,6 +8,22 @@ canvas { image-rendering: pixelated; }
 
 /* ---------- HUD ---------- */
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+#divingHelmetOverlay {
+  position: absolute; inset: 0; z-index: 3; opacity: 0; overflow: hidden; pointer-events: none; transition: opacity 0.12s;
+  background: radial-gradient(ellipse at center, rgba(43,135,148,0.025) 0 58%, rgba(8,27,33,0.08) 70%, rgba(0,0,0,0.26) 84%, rgba(0,0,0,0.72) 100%);
+  box-shadow: inset 0 0 8vmin 2vmin rgba(0,0,0,0.76);
+}
+#divingHelmetOverlay.active { opacity: 1; }
+#divingHelmetOverlay::before {
+  content: ''; position: absolute; inset: 1.6vmin 2vmin;
+  border: clamp(8px,1.45vmin,21px) solid rgba(2,8,11,0.97);
+  border-radius: 46% / 38%;
+  box-shadow:
+    0 0 0 100vmax rgba(0,0,0,0.78),
+    inset 0 0 0 clamp(2px,0.28vmin,5px) rgba(83,163,171,0.08),
+    0 0 0 clamp(2px,0.32vmin,5px) rgba(0,0,0,0.95);
+}
+#divingHelmetOverlay::after { content: none; }
 #crosshair { position: absolute; z-index: 8; left: 50%; top: 50%; width: 18px; height: 18px; transform: translate(-50%,-50%); }
 #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,0.8); mix-blend-mode: difference; }
 #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
