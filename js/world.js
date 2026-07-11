@@ -1117,27 +1117,51 @@ const World = {
   },
 
   // ---------- worldgen worker pool ----------
-  // Chunk gen + first lighting run in Web Workers (the same world.js code via
-  // importScripts). Falls back to the synchronous path on file:// where the
-  // browser refuses to start workers. Every request carries seed + conquered
-  // dungeons, so the workers never need stateful syncing.
+  // Chunk gen + first lighting run in Web Workers on EVERY origin, including
+  // file:// — the workers are Blob workers assembled from source the page has
+  // already loaded (file:// pages may construct Blob workers but cannot
+  // importScripts, and Chrome refuses file:// script-URL workers outright).
+  // Every request carries seed + conquered dungeons, so the workers never
+  // need stateful syncing. The synchronous path exists ONLY as a loudly
+  // announced emergency fallback if worker construction itself fails.
   _genWorkers: null,
   _genPending: new Set(),
   _genRR: 0,
+  _warnSingleThread(why) {
+    console.error('[worldgen] Web Workers unavailable (' + why + ') — running SINGLE-THREADED sync generation.');
+    const note = () => { if (typeof UI !== 'undefined' && UI.chat) UI.chat('Warning: worldgen workers failed (' + why + ') — using slower single-thread generation.', '#ff8080'); };
+    if (typeof UI !== 'undefined' && UI.chat) note(); else setTimeout(note, 3000);
+  },
   initGenWorkers() {
     this._genPending.clear();
     if (this._genWorkers) return; // pool survives world switches (requests carry the seed)
-    if (typeof Worker === 'undefined' || location.protocol === 'file:') return;
+    if (typeof Worker === 'undefined') return this._warnSingleThread('no Worker API');
     try {
-      const q = (document.querySelector('script[src*="world.js"]') || {}).src || '';
-      const v = q.includes('?') ? q.slice(q.indexOf('?')) : '';
+      const src = [
+        '"use strict";',
+        'const Multiplayer = { role: "solo" };', // initChest checks this to skip client-side loot storage
+        NoiseGenFactory.toString(),
+        'const NoiseGen = NoiseGenFactory();',
+        BLOCKS_WORLDGEN_SRC,
+        WORLD_LORE_SRC,
+        'const World = ' + WORLD_SRC + ';',
+        '(' + WORLDGEN_WORKER_DRIVER.toString() + ')();',
+      ].join('\n');
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
       this._genWorkers = [0, 1].map(() => {
-        const w = new Worker('js/worldgen-worker.js' + v);
+        const w = new Worker(url);
         w.onmessage = (e) => this._adoptWorkerChunk(e.data);
-        w.onerror = () => { this._genWorkers = null; this._genPending.clear(); }; // fall back to sync gen
+        w.onerror = (e) => {
+          if (this._genWorkers) this._warnSingleThread((e && e.message) || 'worker error');
+          this._genWorkers = null;
+          this._genPending.clear();
+        };
         return w;
       });
-    } catch (e) { this._genWorkers = null; }
+    } catch (e) {
+      this._genWorkers = null;
+      this._warnSingleThread(e && e.message ? e.message : 'construction failed');
+    }
   },
 
   _requestWorkerChunk(cx, cz) {
@@ -4571,3 +4595,35 @@ const World = {
     }
   },
 };
+
+
+// ============================================================
+// Worldgen worker source. Serialized at LOAD TIME — before any multiplayer
+// patch wraps World methods with closures that Function.toString cannot
+// carry across threads. Object-literal methods serialize cleanly: they only
+// use `this.*` and the globals the Blob worker defines first (NoiseGen +
+// the blocks.js BLOCKS_WORLDGEN_SRC bundle + LORE below).
+// ============================================================
+const WORLD_SRC = (() => {
+  // live browser objects (scene/materials/workers/typed caches) never cross;
+  // the worker rebuilds what it needs lazily
+  const skip = new Set(['scene', 'matSolid', 'matCutout', 'matWater', 'matLava', 'matPhoto',
+    '_genWorkers', '_genWorkersSaved', '_opaqueLUT', 'dayFUniform']);
+  const parts = [];
+  for (const k of Object.keys(World)) {
+    const v = World[k];
+    if (typeof v === 'function') { parts.push(v.toString()); continue; }
+    let s;
+    if (skip.has(k) || v === null || v === undefined) s = 'null';
+    else if (v instanceof Map) s = 'new Map()';
+    else if (v instanceof Set) s = 'new Set()';
+    else if (ArrayBuffer.isView(v)) s = 'null';
+    else { try { s = JSON.stringify(v); } catch (e) { s = 'null'; } }
+    parts.push(k + ': ' + s);
+  }
+  // dayFUniform is skipped above (may become a live THREE uniform); the worker
+  // only ever reads .value
+  parts.push('dayFUniform: { value: 1 }');
+  return '{\n' + parts.join(',\n') + '\n}';
+})();
+const WORLD_LORE_SRC = 'const LORE = ' + JSON.stringify(LORE) + ';';

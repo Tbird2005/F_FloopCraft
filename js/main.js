@@ -454,7 +454,7 @@ const Game = {
     }
     UI.updateHotbar(); UI.updateStats(); UI.updateXp(); UI.updateModeLabel();
     if (!this.started) this.started = true;
-    UI.chat('Welcome to F_Floop Craft v 1.0.60!', '#ffd700');
+    UI.chat('Welcome to F_Floop Craft v 1.0.62!', '#ffd700');
     if (typeof Multiplayer !== 'undefined') {
       if (Multiplayer.role === 'host') Multiplayer.finishHostWorld();
       Multiplayer.updatePauseCode();
@@ -470,7 +470,7 @@ const Game = {
       if (e.code === 'F3') {
         e.preventDefault();
         e.stopPropagation();
-        this.toggleChunkBorders();
+        this.toggleDebugPanel();
         return;
       }
       if (e.code !== 'Escape') return;
@@ -525,6 +525,122 @@ const Game = {
     if (!this.debugChunkBorders && this.chunkBorderMesh) this.chunkBorderMesh.visible = false;
     if (this.debugChunkBorders) this.updateChunkBorders(true);
     if (typeof UI !== 'undefined') UI.chat('Chunk borders ' + (this.debugChunkBorders ? 'shown' : 'hidden') + ' (16x16x16 layers).', '#7df5ec');
+  },
+
+  // ---------------- F3 debug panel ----------------
+  _debugToggles() {
+    const remeshLoaded = () => {
+      if (typeof World === 'undefined' || !World.ready || !Player.body) return;
+      for (const [k, ch] of World.chunks) if (ch.hasMesh) World.dirty.add(k);
+      World.remeshDirtyNow(Player.body.x, Player.body.z, 512, (World.R || 6) + 1);
+    };
+    const chunkMats = () => (typeof World === 'undefined') ? [] :
+      [World.matSolid, World.matCutout, World.matWater, World.matLava, World.matPhoto].filter(Boolean);
+    return [
+      {
+        label: 'Chunk borders', tip: '16x16x16 chunk grid overlay',
+        get: () => this.debugChunkBorders,
+        set: () => this.toggleChunkBorders(),
+      },
+      {
+        label: 'Wireframe', tip: 'render triangles instead of surfaces (greedy meshing debug)',
+        get: () => !!(typeof World !== 'undefined' && World.matSolid && World.matSolid.wireframe),
+        set: () => { const on = !(World.matSolid && World.matSolid.wireframe); for (const m of chunkMats()) m.wireframe = on; },
+      },
+      {
+        label: 'Greedy meshing', tip: 'merge same-texture cube faces into wide quads (remeshes the loaded area)',
+        get: () => typeof World === 'undefined' || World.greedyMesh !== false,
+        set: () => { World.greedyMesh = World.greedyMesh === false; remeshLoaded(); },
+      },
+      {
+        label: 'Fog', tip: 'distance fog on/off',
+        get: () => !!(this.scene && this.scene.fog),
+        set: () => {
+          if (this.scene.fog) { this._savedFog = this.scene.fog; this.scene.fog = null; }
+          else this.scene.fog = this._savedFog || new THREE.Fog(0x87ceeb, 60, 110);
+        },
+      },
+      {
+        label: 'Gen workers', tip: 'worldgen Web Workers (off = synchronous single-thread gen)',
+        get: () => !!(typeof World !== 'undefined' && World._genWorkers),
+        set: () => {
+          if (World._genWorkers) { World._genWorkersSaved = World._genWorkers; World._genWorkers = null; World._genPending.clear(); }
+          else if (World._genWorkersSaved) World._genWorkers = World._genWorkersSaved;
+        },
+      },
+      {
+        label: 'Remesh area', tip: 'rebuild every loaded chunk mesh right now', action: true,
+        set: () => remeshLoaded(),
+      },
+    ];
+  },
+
+  toggleDebugPanel() {
+    let el = document.getElementById('debugPanel');
+    if (el && el.style.display !== 'none') {
+      el.style.display = 'none';
+      if (this._debugStatsTimer) { clearInterval(this._debugStatsTimer); this._debugStatsTimer = null; }
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'debugPanel';
+      el.style.cssText = 'position:fixed;top:84px;left:18px;background:rgba(10,12,20,0.88);color:#fff;font:12px Consolas,monospace;padding:12px 14px;border-radius:6px;z-index:650;min-width:250px;line-height:1.6';
+      const title = document.createElement('div');
+      title.innerHTML = '<b>Debug (F3)</b>';
+      title.style.marginBottom = '6px';
+      el.appendChild(title);
+      this._debugButtons = [];
+      for (const t of this._debugToggles()) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;margin:3px 0';
+        const lab = document.createElement('span');
+        lab.textContent = t.label;
+        lab.title = t.tip || '';
+        const btn = document.createElement('button');
+        btn.className = 'uibtn';
+        btn.style.cssText = 'min-width:52px;padding:2px 8px;font:11px Consolas,monospace';
+        btn.onclick = (ev) => { ev.stopPropagation(); t.set(); this._refreshDebugButtons(); };
+        row.appendChild(lab); row.appendChild(btn);
+        el.appendChild(row);
+        this._debugButtons.push({ t, btn });
+      }
+      const stats = document.createElement('div');
+      stats.id = 'debugStats';
+      stats.style.cssText = 'margin-top:8px;border-top:1px solid rgba(255,255,255,0.2);padding-top:6px;color:#9fd6ec;white-space:pre';
+      el.appendChild(stats);
+      document.body.appendChild(el);
+    }
+    el.style.display = 'block';
+    this._refreshDebugButtons();
+    const updateStats = () => {
+      const s = document.getElementById('debugStats');
+      if (!s || !this.renderer) return;
+      const r = this.renderer.info.render, m = this.renderer.info.memory;
+      const w = (typeof World !== 'undefined' && World.chunks) ? World : null;
+      s.textContent =
+        'fps ' + (this.fps || 0) +
+        '   tris ' + (r.triangles || 0).toLocaleString() +
+        '   calls ' + (r.calls || 0) +
+        '\nchunks ' + (w ? w.chunks.size : 0) +
+        '   genQ ' + (w && w._genPending ? w._genPending.size : 0) +
+        '   dirty ' + (w ? w.dirty.size : 0) +
+        '   geoms ' + (m.geometries || 0);
+    };
+    updateStats();
+    this._debugStatsTimer = setInterval(updateStats, 500);
+    // free the mouse so the buttons are clickable; clicking the world re-locks
+    this.suppressPauseUntil = performance.now() + 600;
+    if (document.pointerLockElement) document.exitPointerLock();
+  },
+
+  _refreshDebugButtons() {
+    for (const { t, btn } of this._debugButtons || []) {
+      if (t.action) { btn.textContent = 'RUN'; continue; }
+      const on = !!t.get();
+      btn.textContent = on ? 'ON' : 'OFF';
+      btn.style.color = on ? '#7CFC00' : '#ff8080';
+    }
   },
 
   ensureChunkBorderMesh() {

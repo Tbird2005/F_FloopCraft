@@ -3764,3 +3764,49 @@ const Icons = {
     return chunk();
   },
 };
+
+
+// ============================================================
+// Worldgen worker exports. file:// pages cannot importScripts, so the Blob
+// worker is assembled from source the page already has. This bundle carries
+// every blocks.js global the generation + lighting path touches: data as
+// JSON, Sets as arrays, helper functions via Function.toString (top-level
+// function declarations serialize cleanly — they only reference these same
+// globals, which the bundle defines first).
+// If you add a NEW global dependency to genChunkBlocks/featuresFor/dungeonFor/
+// computeChunkLight, add it here too — a miss shows up as a worker
+// ReferenceError and a loud single-thread fallback warning.
+// ============================================================
+const BLOCKS_WORLDGEN_SRC = (() => {
+  const data = {
+    B, I, Reg,
+    DUNGEON_RANKS,
+    DUNGEON_CHEST_BY_RANK, DUNGEON_CRATE_BY_RANK, DUNGEON_SPAWNER_BY_RANK,
+    DUNGEON_BRICK_BY_RANK, DUNGEON_BRICK_INACTIVE_BY_RANK, DUNGEON_BRICK_TO_INACTIVE,
+    DUNGEON_CHEST_IDS, DUNGEON_CRATE_IDS, DUNGEON_SPAWNER_IDS,
+    WOOL_STAIR_COLORS, JELLY_COLORS_ALL, JELLY_BLOCK_BY_COLOR, JELLY_LAMP_BY_COLOR,
+    WTORCH_DIR, LADDER_DIR, STAIR_DIRS,
+  };
+  const sets = { ACTIVE_DUNGEON_BRICK_IDS, INACTIVE_DUNGEON_BRICK_IDS, DOOR_TOP_IDS, DOOR_X_IDS };
+  const fns = [
+    isWater, waterLevel, flowIdFor, isLava, lavaLevel, lavaFlowIdFor, isFluid,
+    isWallTorch, isTorch, isSapling, isOasisSapling, canPlantSaplingOn,
+    isFlower, isCrop, cropStage, isPlanterCell, canPlantFloopfruitOn,
+    isLadder, isSnowSheet, snowSheetLevel,
+    isDoor, isDoorOpen, isDoorTop, isDoorX, isBed,
+    isColoredWoolStairs, isColoredWoolSlab, isSlab, isVSlab, isSlabCombo,
+    dungeonRankInfo, isDungeonDoor, dungeonDoorAxisAt,
+    isActiveDungeonBlock, isDungeonGeneratedBlock,
+    dungeonChestBlockForRank, dungeonCrateBlockForRank,
+    isDungeonChestBlock, isDungeonCrateBlock, isStorageChestBlock,
+    dungeonSpawnerBlockForRank, dungeonRankForSpawnerBlock,
+    isDungeonSpawnerBlock, isBrokenSpawnerBlock, isSpawnerBlock, isRetiredStackId,
+    dungeonBrickForRank, dungeonBrickInactiveForRank,
+    isActiveDungeonBrick, isInactiveDungeonBrick,
+  ];
+  let out = '';
+  for (const [k, v] of Object.entries(data)) out += 'const ' + k + ' = ' + JSON.stringify(v) + ';\n';
+  for (const [k, v] of Object.entries(sets)) out += 'const ' + k + ' = new Set(' + JSON.stringify([...v]) + ');\n';
+  for (const f of fns) out += f.toString() + '\n';
+  return out;
+})();

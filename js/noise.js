@@ -1,5 +1,8 @@
-// Seeded value noise + fBm for F_Floop Craft terrain
-const NoiseGen = (() => {
+// Seeded value noise + fBm for F_Floop Craft terrain.
+// A NAMED factory (not an anonymous IIFE) so the worldgen Blob worker can ship
+// it whole via NoiseGenFactory.toString() — file:// pages cannot importScripts,
+// so the worker is assembled from the code already loaded in the page.
+function NoiseGenFactory() {
 
   function mulberry(seed) {
     let s = seed | 0;
@@ -59,4 +62,5 @@ const NoiseGen = (() => {
   }
 
   return { mulberry, hash2, hash3, value2, value3, fbm2 };
-})();
+}
+const NoiseGen = NoiseGenFactory();

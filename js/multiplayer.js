@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v118',
+  versionTag: 'ffloopcraft-v119',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -6306,6 +6306,84 @@ const Multiplayer = {
             this.hostSendFurnaceSnapshot(holder, lk.slice(1));
           }
         }
+      }
+    }
+  };
+})();
+
+
+// ============================================================
+// Container edit acknowledgements (installFloopContainerAcks)
+// On a lossy connection a chest_state/furnace_state edit could vanish in
+// transit: the host never learned you took the coal, its next broadcast put
+// the coal back while you kept your copy — a dupe (or the mirror case, a
+// loss). Edits are full-state and idempotent, so the fix is at-least-once
+// delivery: every edit carries a seq, the host acks it, and the client
+// RESENDS the newest unacked state every ~900ms (keeping the anti-stomp
+// guard alive) until the ack lands.
+// ============================================================
+(function installFloopContainerAcks() {
+  const MP = Multiplayer;
+  let seqCounter = 0;
+  const pending = () => MP._containerPending || (MP._containerPending = new Map()); // key -> {seq, msg, t0, last}
+
+  const prevSend = MP.send.bind(MP);
+  MP.send = function(msg) {
+    if (msg && this.role === 'client' && (msg.type === 'chest_state' || msg.type === 'furnace_state') && msg.key && !msg.__resend) {
+      msg.seq = ++seqCounter;
+      pending().set(String(msg.key), { seq: msg.seq, msg: Object.assign({}, msg, { __resend: true }), t0: performance.now(), last: performance.now() });
+    }
+    return prevSend(msg);
+  };
+
+  const ackIfContainerEdit = (self, msg, fromId, cameFromClient) => {
+    if (msg && self.role === 'host' && cameFromClient && msg.seq && msg.key && (msg.type === 'chest_state' || msg.type === 'furnace_state') && !msg.__acked) {
+      msg.__acked = true; // both hooks may see the same message object — ack once
+      const conn = self.connections && self.connections.get(fromId);
+      if (conn) self.sendTo(conn, { type: 'container_ack', key: String(msg.key), seq: msg.seq });
+    }
+  };
+
+  const prevReceive = MP.receiveNetworkMessage.bind(MP);
+  MP.receiveNetworkMessage = function(msg, fromId, cameFromClient) {
+    if (msg && msg.type === 'container_ack') {
+      if (this.role === 'client' && msg.key) {
+        const p = pending().get(String(msg.key));
+        if (p && p.seq <= (msg.seq || 0)) pending().delete(String(msg.key));
+      }
+      return;
+    }
+    if (msg && msg.type === 'joined' && this.role !== 'host') pending().clear(); // fresh session: drop stale retries
+    const r = prevReceive(msg, fromId, cameFromClient);
+    ackIfContainerEdit(this, msg, fromId, cameFromClient);
+    return r;
+  };
+
+  // chest_state is consumed by the init-time handleFullSyncMessage gate and
+  // never falls through to the load-time receive chain — ack it there too
+  const prevHandle = MP.handleFullSyncMessage ? MP.handleFullSyncMessage.bind(MP) : null;
+  if (prevHandle) MP.handleFullSyncMessage = function(msg, fromId, cameFromClient) {
+    const r = prevHandle(msg, fromId, cameFromClient);
+    ackIfContainerEdit(this, msg, fromId, cameFromClient);
+    return r;
+  };
+
+  const prevTick = MP.fullSyncUpdate ? MP.fullSyncUpdate.bind(MP) : function(){};
+  MP.fullSyncUpdate = function(dt) {
+    prevTick(dt || 0);
+    if (this.role !== 'client' || !this.connected || !this._containerPending || !this._containerPending.size) return;
+    const now = performance.now();
+    const recent = this._recentContainerEdits || (this._recentContainerEdits = new Map());
+    for (const [key, p] of this._containerPending) {
+      if (now - p.t0 > 20000) {
+        this._containerPending.delete(key);
+        if (typeof UI !== 'undefined' && UI.chat) UI.chat('A container edit could not be confirmed by the host — reopen it to double-check.', '#ff8080');
+        continue;
+      }
+      if (now - p.last > 900) {
+        p.last = now;
+        recent.set(key, now + 5000); // container stays stomp-guarded while unconfirmed
+        this.send(p.msg);
       }
     }
   };
