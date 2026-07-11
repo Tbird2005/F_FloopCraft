@@ -916,12 +916,16 @@ const World = {
 
   initChest(x, y, z, rnd, rich = false, source = 'surface', size = 27) {
     const k = this.pkey(x, y, z);
-    if (this.chests.has(k)) return;
+    // DETERMINISM: rnd is the caller's seeded stream (dungeon/structure build).
+    // The rolls below must ALWAYS run so the stream advances identically on
+    // every machine and every regen — early-returning here (old behavior) made
+    // dungeon layouts differ between host/client and across save reloads.
+    // The "skip" cases only skip STORING the loot, never rolling it.
+    const skipStore = this.chests.has(k)
+      // Multiplayer: only the host rolls container loot into storage. Clients
+      // receive the authoritative slots via chest_snapshot on open.
+      || (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client');
     size = Math.max(27, Math.floor(+size || 27));
-    // Multiplayer: only the host rolls container loot. Clients must NEVER generate
-    // their own chest contents (they'd diverge from the host and hand out infinite
-    // loot on reopen). Clients receive the authoritative slots via chest_snapshot.
-    if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client') return;
     const slots = new Array(size).fill(null);
 
     // Surface monuments/houses/towers are meant to be early-game finds.
@@ -1029,7 +1033,7 @@ const World = {
     for (const [id, min, max, chance] of table) {
       if (rnd() <= chance) putLoot(id, min, max);
     }
-    this.chests.set(k, slots);
+    if (!skipStore) this.chests.set(k, slots);
   },
 
   // ---------- biomes & terrain ----------
@@ -2053,7 +2057,10 @@ const World = {
         const sx2 = cx0 + (w >> 1), sz2 = cz0 + (l >> 1);
         setC(sx2, y0, sz2, rankSpawner);
         const sk = this.pkey(sx2, y0, sz2);
-        if (!this.spawners.has(sk)) this.spawners.set(sk, this.createDungeonSpawnerState(rankInfo.rank, k, r));
+        // ALWAYS roll the state (keeps the seeded stream identical on regen);
+        // only store it when this spawner isn't already registered
+        const state = this.createDungeonSpawnerState(rankInfo.rank, k, r);
+        if (!this.spawners.has(sk)) this.spawners.set(sk, state);
       }
       const nLoot = 1 + ((r() * 2) | 0);
       for (let i = 0; i < nLoot; i++) {
@@ -2274,6 +2281,31 @@ const World = {
     };
     ensureRankedStorage(rankCrate, true);
     ensureRankedStorage(rankChest, true);
+
+    // Every dungeon guards its loot: the per-room spawner dice could leave a
+    // small dungeon with ZERO spawners. Guarantee a rank-based minimum
+    // (green 1, blue 2, gold 3, diamond 4). Deterministic — this is part of
+    // the seeded dungeon build, so host/client/worker all regenerate it alike.
+    if (!conqueredAlready && rooms.length) {
+      const minSpawners = 1 + (rankInfo.mobBonus || 0);
+      let placed = 0;
+      for (const c of cells.values()) if (c.id === rankSpawner) placed++;
+      for (let ri = 0; ri < rooms.length * 2 && placed < minSpawners; ri++) {
+        const room = rooms[ri % rooms.length];
+        // offset from the room center so the final room's core is never stomped;
+        // second lap tries the opposite corner offset
+        const off = ri < rooms.length ? 1 : -1;
+        const sx2 = room.x + (room.w >> 1) + off, sz2 = room.z + (room.l >> 1) - off;
+        if (sx2 <= room.x || sx2 >= room.x + room.w - 1 || sz2 <= room.z || sz2 >= room.z + room.l - 1) continue;
+        const skey = this.pkey(sx2, room.y, sz2);
+        const cur = cells.get(skey);
+        if (cur && cur.id !== B.AIR) continue; // keep crates/chests/torches/core intact
+        setC(sx2, room.y, sz2, rankSpawner);
+        const state = this.createDungeonSpawnerState(rankInfo.rank, k, r); // always roll: stream determinism
+        if (!this.spawners.has(skey)) this.spawners.set(skey, state);
+        placed++;
+      }
+    }
 
     const byChunk = new Map();
     for (const c of cells.values()) {

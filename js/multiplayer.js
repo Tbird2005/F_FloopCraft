@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v117',
+  versionTag: 'ffloopcraft-v118',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -6133,5 +6133,180 @@ const Multiplayer = {
       if (msg.furnace && msg.furnace.key) recent.set(String(msg.furnace.key), performance.now() + 5000);
     }
     return prevSend(msg);
+  };
+})();
+
+// ============================================================
+// Furnace protocol (installFloopFurnaceSync)
+// Chest-style authority for furnaces:
+//  - one player per furnace (reuses the chest lock map with 'F'-prefixed
+//    keys, so disconnect cleanup is inherited for free)
+//  - the HOST owns burn/cook progress; clients send SLOT edits only
+//    (the old channel echoed the client's stale scalars every 350ms,
+//    perpetually rewinding the host's smelt progress — furnaces never
+//    cooked for clients)
+//  - while a client holds the lock, the host streams furnace_snapshot
+//    every 400ms so the GUI shows live progress and finished smelts
+// ============================================================
+(function installFloopFurnaceSync() {
+  const MP = Multiplayer;
+  const FKEY = (k) => 'F' + String(k);
+  const pack = (s) => (typeof Save !== 'undefined' && Save.packStack) ? Save.packStack(s) : (s ? { id: s.id, count: s.count, dur: s.dur } : null);
+  const unpack = (s) => (typeof Save !== 'undefined' && Save.unpackStack) ? Save.unpackStack(s) : (s ? { id: s.id, count: s.count, dur: s.dur } : null);
+  const furnaceEntry = (key) => {
+    let f = World.furnaces.get(key);
+    if (!f) { f = { in: null, fuel: null, out: null, burn: 0, burnMax: 0, cook: 0 }; World.furnaces.set(key, f); }
+    return f;
+  };
+  const dirtyFurnaceChunk = (key) => {
+    const p = String(key).split(',').map(Number);
+    if (p.length >= 3) World.dirty.add(World.chunkKeyForBlock ? World.chunkKeyForBlock(p[0], p[2]) : World.key(Math.floor(p[0] / 16), Math.floor(p[2] / 16)));
+  };
+  const markRecent = (key) => {
+    const recent = MP._recentContainerEdits || (MP._recentContainerEdits = new Map());
+    recent.set(String(key), performance.now() + 5000);
+  };
+
+  // strip the furnace part from the legacy 350ms client echo — it fought the
+  // host's cook progress; slot edits go through furnace_state now
+  const oldMakeStorage = MP.makeClientStorageState ? MP.makeClientStorageState.bind(MP) : null;
+  if (oldMakeStorage) MP.makeClientStorageState = function() {
+    const msg = oldMakeStorage();
+    if (msg && msg.furnace) { delete msg.furnace; if (!msg.chest) return null; }
+    return msg;
+  };
+  // defense in depth: even if a furnace payload arrives on the old channel,
+  // never let it rewind the host's progress scalars
+  const oldApplyStorage = MP.hostApplyClientStorage ? MP.hostApplyClientStorage.bind(MP) : null;
+  if (oldApplyStorage) MP.hostApplyClientStorage = function(msg) {
+    if (msg && msg.furnace && msg.furnace.key) {
+      const cur = World.furnaces.get(String(msg.furnace.key));
+      const f = msg.furnace.f || {};
+      if (cur) { f.burn = cur.burn; f.burnMax = cur.burnMax; f.cook = cur.cook; }
+    }
+    return oldApplyStorage(msg);
+  };
+
+  MP.hostSendFurnaceSnapshot = function(pid, key) {
+    const conn = this.connections && this.connections.get(pid);
+    if (!conn) return;
+    const f = furnaceEntry(String(key));
+    this.sendTo(conn, { type: 'furnace_snapshot', key: String(key), f: { i: pack(f.in), f: pack(f.fuel), o: pack(f.out), burn: f.burn || 0, burnMax: f.burnMax || 0, cook: f.cook || 0 } });
+  };
+
+  const prevReceive = MP.receiveNetworkMessage.bind(MP);
+  MP.receiveNetworkMessage = function(msg, fromId, cameFromClient) {
+    if (msg && msg.type === 'furnace_open_request') {
+      if (this.role === 'host' && cameFromClient && msg.key) {
+        if (!this.hostAcquireChestLock(FKEY(msg.key), fromId)) {
+          const conn = this.connections && this.connections.get(fromId);
+          if (conn) this.sendTo(conn, { type: 'furnace_busy', key: msg.key });
+        } else {
+          this.hostSendFurnaceSnapshot(fromId, msg.key);
+        }
+      }
+      return;
+    }
+    if (msg && msg.type === 'furnace_state') {
+      if (this.role === 'host' && cameFromClient && msg.key) {
+        // slot edits only, and only from the lock holder; progress stays ours
+        if (this.chestLockMap().get(FKEY(msg.key)) !== fromId) return;
+        const f = furnaceEntry(String(msg.key));
+        f.in = unpack(msg.i); f.fuel = unpack(msg.f); f.out = unpack(msg.o);
+        dirtyFurnaceChunk(msg.key);
+      }
+      return;
+    }
+    if (msg && msg.type === 'furnace_close') {
+      if (this.role === 'host' && cameFromClient && msg.key) this.hostReleaseChestLock(FKEY(msg.key), fromId);
+      return;
+    }
+    if (msg && msg.type === 'furnace_busy') {
+      if (this.role === 'client' && typeof UI !== 'undefined') {
+        if (UI.screen === 'furnace' && UI.close) UI.close();
+        if (UI.chat) UI.chat('That furnace is in use by another player.', '#ffb347');
+      }
+      return;
+    }
+    if (msg && msg.type === 'furnace_snapshot') {
+      if (this.role === 'client' && msg.key && msg.f) {
+        const recent = this._recentContainerEdits;
+        const cur = furnaceEntry(String(msg.key));
+        const editing = recent && (recent.get(String(msg.key)) || 0) > performance.now();
+        if (!editing) { cur.in = unpack(msg.f.i); cur.fuel = unpack(msg.f.f); cur.out = unpack(msg.f.o); }
+        cur.burn = msg.f.burn || 0; cur.burnMax = msg.f.burnMax || 0; cur.cook = msg.f.cook || 0;
+        dirtyFurnaceChunk(msg.key);
+        if (typeof UI !== 'undefined' && UI.screen === 'furnace' && UI.furnaceKey === String(msg.key) && UI.refreshAll) UI.refreshAll();
+      }
+      return;
+    }
+    return prevReceive(msg, fromId, cameFromClient);
+  };
+
+  // open/close hooks: lock on open (host locally, client via request), release on close
+  if (typeof UI !== 'undefined' && UI.open && !UI.__mpFurnacePatch) {
+    UI.__mpFurnacePatch = true;
+    const oldOpen = UI.open.bind(UI);
+    UI.open = function(name, data) {
+      const ret = oldOpen(name, data);
+      if (name === 'furnace' && data && MP.connected && MP.role !== 'solo' && typeof World !== 'undefined') {
+        const key = World.pkey(data.bx, data.by, data.bz);
+        if (MP.role === 'client') {
+          MP.send({ type: 'furnace_open_request', key });
+        } else if (!MP.hostAcquireChestLock(FKEY(key), MP.id)) {
+          this.close && this.close();
+          this.chat && this.chat('That furnace is in use by another player.', '#ffb347');
+        }
+      }
+      return ret;
+    };
+    const oldClose = UI.close.bind(UI);
+    UI.close = function(reopening) {
+      const wasFurnace = this.screen === 'furnace';
+      const fKey = wasFurnace ? this.furnaceKey : null;
+      const ret = oldClose(reopening);
+      if (wasFurnace && fKey && MP.connected && MP.role !== 'solo') {
+        if (MP.role === 'client') { MP.clientSendFurnaceState(true); MP.send({ type: 'furnace_close', key: fKey }); }
+        else MP.hostReleaseChestLock(FKEY(fKey), MP.id);
+      }
+      return ret;
+    };
+  }
+
+  // client slot edits: send only when the slots actually changed
+  MP.clientSendFurnaceState = function(force) {
+    if (this.role !== 'client' || !this.connected || typeof UI === 'undefined' || typeof World === 'undefined') return;
+    if (UI.screen !== 'furnace' || !UI.furnaceKey) return;
+    const f = World.furnaces.get(UI.furnaceKey);
+    if (!f) return;
+    const body = { i: pack(f.in), f: pack(f.fuel), o: pack(f.out) };
+    const sig = JSON.stringify(body);
+    if (!force && sig === this.__lastFurnaceSig) return;
+    this.__lastFurnaceSig = sig;
+    markRecent(UI.furnaceKey);
+    this.send(Object.assign({ type: 'furnace_state', key: UI.furnaceKey }, body));
+  };
+
+  const prevTick = MP.fullSyncUpdate ? MP.fullSyncUpdate.bind(MP) : function(){};
+  MP.fullSyncUpdate = function(dt) {
+    prevTick(dt || 0);
+    if (!this.connected || this.role === 'solo') return;
+    const now = performance.now();
+    if (this.role === 'client') {
+      if (now - (this.__lastFurnaceEditCheck || 0) > 250) {
+        this.__lastFurnaceEditCheck = now;
+        this.clientSendFurnaceState(false);
+      }
+    } else if (this.role === 'host') {
+      // live GUI for whoever holds each furnace lock
+      if (now - (this.__lastFurnaceStream || 0) > 400) {
+        this.__lastFurnaceStream = now;
+        for (const [lk, holder] of this.chestLockMap()) {
+          if (holder !== this.id && lk.charAt(0) === 'F' && this.connections.has(holder)) {
+            this.hostSendFurnaceSnapshot(holder, lk.slice(1));
+          }
+        }
+      }
+    }
   };
 })();
