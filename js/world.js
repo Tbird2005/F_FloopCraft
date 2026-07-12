@@ -2251,40 +2251,27 @@ const World = {
         setC(lx, y0, lz, rankCrate);
         this.initChest(lx, y0, lz, r, r() < rankInfo.richBonus, 'dungeon:' + rankInfo.rank);
       }
-      if (isLast) {
-        setC(cx0 + (w >> 1), y0, cz0 + (l >> 1), B.DUNGEON_CORE);
-        setC(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), rankCrate);
-        this.initChest(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), r, true, 'dungeon:' + rankInfo.rank);
-        setC(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, rankChest);
-        this.initChest(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, r, true, 'dungeon:' + rankInfo.rank);
-        const li = (r() * LORE.length) | 0;
-        setC(cx0 + (w >> 1) - 1, y0, cz0 + (l >> 1), B.LORE);
-        this.putLore(cx0 + (w >> 1) - 1, y0, cz0 + (l >> 1), li);
-      }
+    };
+    // Stamp the dungeon core (+ its guardian chest/crate/lore) into a room. Kept
+    // separate so it can target the room FARTHEST from the entrance instead of
+    // whichever room happened to be carved last.
+    const placeCore = (room) => {
+      const cx0 = room.x, cz0 = room.z, w = room.w, l = room.l, y0 = baseY;
+      setC(cx0 + (w >> 1), y0, cz0 + (l >> 1), B.DUNGEON_CORE);
+      setC(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), rankCrate);
+      this.initChest(cx0 + (w >> 1) + 1, y0, cz0 + (l >> 1), r, true, 'dungeon:' + rankInfo.rank);
+      setC(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, rankChest);
+      this.initChest(cx0 + (w >> 1), y0, cz0 + (l >> 1) + 1, r, true, 'dungeon:' + rankInfo.rank);
+      const li = (r() * LORE.length) | 0;
+      setC(cx0 + (w >> 1) - 1, y0, cz0 + (l >> 1), B.LORE);
+      this.putLore(cx0 + (w >> 1) - 1, y0, cz0 + (l >> 1), li);
     };
 
-    const carveCorridor = (x0, y0, z0, dx, dz, len) => {
-      let x = x0, z = z0;
-      for (let i = 0; i < len; i++) {
-        x += dx; z += dz;
-        for (let o = 0; o < 2; o++) {
-          const ox = dz !== 0 ? o : 0, oz = dx !== 0 ? o : 0;
-          for (let y = y0; y < y0 + 3; y++) setC(x + ox, y, z + oz, B.AIR);
-          if (!cells.has(this.pkey(x + ox, y0 - 1, z + oz))) setC(x + ox, y0 - 1, z + oz, rankBrick);
-          if (!cells.has(this.pkey(x + ox, y0 + 3, z + oz))) setC(x + ox, y0 + 3, z + oz, rankBrick);
-        }
-        for (let y = y0; y < y0 + 3; y++) {
-          if (dx !== 0) {
-            if (!cells.has(this.pkey(x, y, z - 1))) setC(x, y, z - 1, rankBrick);
-            if (!cells.has(this.pkey(x, y, z + 2))) setC(x, y, z + 2, rankBrick);
-          } else {
-            if (!cells.has(this.pkey(x - 1, y, z))) setC(x - 1, y, z, rankBrick);
-            if (!cells.has(this.pkey(x + 2, y, z))) setC(x + 2, y, z, rankBrick);
-          }
-        }
-      }
-      return [x, z];
-    };
+    // Position-only: this used to carve a corridor stub that dead-ended 3 blocks
+    // short of the next room (px/pz jump past it), leaving stone-walled dead ends.
+    // The room-to-room connections are made entirely by carveGuaranteedPath below
+    // (clean, fully brick-lined tubes), so this only advances the room walk now.
+    const carveCorridor = (x0, y0, z0, dx, dz, len) => [x0 + dx * len, z0 + dz * len];
 
     const roomWalkPoint = (room) => {
       const cx = room.x + (room.w >> 1), cz = room.z + (room.l >> 1);
@@ -2341,7 +2328,7 @@ const World = {
     let px = startX, pz = startZ;
     for (let i = 0; i < nRooms; i++) {
       const w = 5 + ((r() * 4) | 0), l = 5 + ((r() * 4) | 0);
-      carveRoom(px - (w >> 1), baseY, pz - (l >> 1), w, 4, l, i === nRooms - 1);
+      carveRoom(px - (w >> 1), baseY, pz - (l >> 1), w, 4, l);
       if (i < nRooms - 1) {
         const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]].sort(() => r() - 0.5);
         const len = 5 + ((r() * 5) | 0) + ((w + l) >> 2);
@@ -2359,6 +2346,19 @@ const World = {
     }
     const walkPoints = rooms.map(roomWalkPoint);
     for (let i = 1; i < walkPoints.length; i++) carveGuaranteedPath(walkPoints[i - 1], walkPoints[i]);
+
+    // Core in the room FARTHEST from the entrance (rooms[0]) — the random walk
+    // can loop back and place the last-carved room beside the entrance.
+    if (rooms.length) {
+      const home = rooms[0], hcx = home.x + (home.w >> 1), hcz = home.z + (home.l >> 1);
+      let coreRoom = rooms[rooms.length - 1], bestD = -1;
+      for (const rm of rooms) {
+        const dxr = (rm.x + (rm.w >> 1)) - hcx, dzr = (rm.z + (rm.l >> 1)) - hcz;
+        const d2 = dxr * dxr + dzr * dzr;
+        if (d2 > bestD) { bestD = d2; coreRoom = rm; }
+      }
+      placeCore(coreRoom);
+    }
 
     if (rooms.length) {
       const first = rooms[0];
@@ -2488,6 +2488,26 @@ const World = {
         if (!this.spawners.has(skey)) this.spawners.set(skey, state);
         placed++;
       }
+    }
+
+    // Wall-seal pass: every dungeon air pocket must be fully enclosed in rank
+    // brick. Any solid-terrain neighbor of an air cell that isn't already part
+    // of the dungeon becomes brick — this closes corner leaks and old dead-end
+    // faces so you never see raw stone where a dungeon wall should be. Pure
+    // geometry (no r()), so it stays worker/main deterministic. Skip the surface
+    // tower (y above the deepest room ceiling) so the entrance can't get capped.
+    const SEAL_TOP = baseY + 6;
+    const sealTargets = [];
+    for (const c of cells.values()) {
+      if (c.id !== B.AIR || c.y > SEAL_TOP) continue;
+      for (const [ox, oy, oz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+        const nx = c.x + ox, ny = c.y + oy, nz = c.z + oz;
+        if (!cells.has(this.pkey(nx, ny, nz))) sealTargets.push(nx, ny, nz);
+      }
+    }
+    for (let i = 0; i < sealTargets.length; i += 3) {
+      const nx = sealTargets[i], ny = sealTargets[i + 1], nz = sealTargets[i + 2];
+      if (!cells.has(this.pkey(nx, ny, nz))) setC(nx, ny, nz, rankBrick);
     }
 
     const byChunk = new Map();

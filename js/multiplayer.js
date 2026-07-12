@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v1093',
+  versionTag: 'ffloopcraft-v1095',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -645,7 +645,7 @@ const Multiplayer = {
       h: p.body.h, hp: p.hp, dead: !!p.dead,
       held: held ? held.id : 0,
       dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
-      swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
+      swim: !!p.swimming, crawl: !!(p.swimming && !p.wasInWater), sneak: !!p.sneaking, sprint: !!p.sprinting,
       swing: p.swingSeq || 0,
       swingT: +swingIntent.toFixed(3),
       swinging: !!(swingIntent > 0 || p.mining || (p.lmb && !p.dead)),
@@ -1269,7 +1269,7 @@ const Multiplayer = {
         heldDur: held && held.dur !== undefined ? held.dur : undefined,
         armor: (p.armor || []).map(s => s ? { id:s.id, dur:s.dur } : null),
         dim: (typeof Dimensions !== 'undefined' ? Dimensions.current : 'overworld'),
-        swim: !!p.swimming, sneak: !!p.sneaking, sprint: !!p.sprinting,
+        swim: !!p.swimming, crawl: !!(p.swimming && !p.wasInWater), sneak: !!p.sneaking, sprint: !!p.sprinting,
         swing: p.swingSeq || 0,
         swingT: +swingIntent.toFixed(3),
         swinging: !!(swingIntent > 0 || p.mining || (p.lmb && !p.dead)),
@@ -1763,22 +1763,47 @@ const Multiplayer = {
           const board = !!p.target.board && !swim;
           const sit = !!p.target.sit && !board && !swim;
           const pitch = (p.state.pitch || 0) * 0.35;
+          p.parts.head.rotation.y = 0; // default: head aligned with body; the board pose turns it to look along travel
           if (!board && p.boardMesh) p.boardMesh.visible = false; // hide the board when not riding
-          if (swim) {
-            // prone 1x1 swim/crawl: body flat face-down, arms reaching ahead, legs flutter-kick
-            const kick = Math.sin(now * 0.02) * 0.55;
+          if (swim && p.target.crawl) {
+            // CRAWL (swim state, but out of water — squeezing prone through a
+            // 1-block gap on land): a commando belly-crawl, distinct from the
+            // water flutter. Arms alternate reach-and-pull, legs drag/push.
+            const ph = now * 0.006;
+            const arm = Math.sin(ph);            // alternating: one arm forward, one back
+            const drag = Math.sin(ph + 0.6) * 0.35;
             p.parts.armL.rotation.z = 0; p.parts.armR.rotation.z = 0;
             p.parts.body.position.set(0, 1.02, 0); p.parts.body.rotation.x = 0;
-            p.parts.head.position.set(0, 1.55, 0); p.parts.head.rotation.x = -0.7; // lift head to look ahead
+            p.parts.head.position.set(0, 1.55, 0); p.parts.head.rotation.x = 1.65; // head UP, looking ahead along the ground (prone group is tilted -90°)
+            p.parts.armL.position.set(-0.30, 1.24, 0); p.parts.armR.position.set(0.30, 1.24, 0);
+            p.parts.armL.rotation.x = Math.PI + 0.5 + arm * 0.2;   // gentle reach/pull, staggered
+            p.parts.armR.rotation.x = Math.PI + 0.5 - arm * 0.2;
+            p.parts.legL.position.set(-0.14, 0.34, 0); p.parts.legR.position.set(0.14, 0.34, 0);
+            p.parts.legL.rotation.z = -0.18; p.parts.legR.rotation.z = 0.18; // legs splayed out flat
+            p.parts.legL.rotation.x = 0.3 - drag; p.parts.legR.rotation.x = 0.3 + drag; // dragging push, not fluttering
+            p.parts.legL.scale.y = 1; p.parts.legR.scale.y = 1;
+            p.group.rotation.x = -Math.PI / 2;
+            p.group.position.y = p.state.y + 0.34; // rest ON the floor, not clipping into it
+            { const yb = p.state.yaw || 0; p.group.position.x = p.state.x + Math.sin(yb) * 1.55; p.group.position.z = p.state.z + Math.cos(yb) * 1.55; } // shift back so the head lands on the player's OWN block (their camera), not a block ahead
+          } else if (swim) {
+            // prone swim in water: body flat face-down, arms stretched overhead, legs flutter-kick
+            const kick = Math.sin(now * 0.02) * 0.55;
+            p.parts.armL.rotation.z = 0; p.parts.armR.rotation.z = 0;
+            p.parts.legL.rotation.z = 0; p.parts.legR.rotation.z = 0;
+            p.parts.body.position.set(0, 1.02, 0); p.parts.body.rotation.x = 0;
+            p.parts.head.position.set(0, 1.55, 0); p.parts.head.rotation.x = 1.8; // crane head UP to look ahead/slightly up (prone group is tilted -90°)
             p.parts.armL.position.set(-0.30, 1.30, 0); p.parts.armR.position.set(0.30, 1.30, 0);
             p.parts.armL.rotation.x = Math.PI + kick * 0.4; p.parts.armR.rotation.x = Math.PI - kick * 0.4; // stretched overhead
             p.parts.legL.position.set(-0.14, 0.34, 0); p.parts.legR.position.set(0.14, 0.34, 0);
             p.parts.legL.rotation.x = kick; p.parts.legR.rotation.x = -kick;
             p.parts.legL.scale.y = 1; p.parts.legR.scale.y = 1;
             p.group.rotation.x = -Math.PI / 2; // lie horizontal, head pointing FORWARD (model faces -z)
+            p.group.position.y = p.state.y + 0.5; // float ~half a block up so the model isn't sunk into the floor
+            { const yb = p.state.yaw || 0; p.group.position.x = p.state.x + Math.sin(yb) * 1.55; p.group.position.z = p.state.z + Math.cos(yb) * 1.55; } // shift back so the head lands on the player's OWN block (their camera), not a block ahead
           } else {
           // model faces -z: forward tilt = NEGATIVE rot.x on the torso; limbs reaching
           // FORWARD = POSITIVE rot.x (bottom of the limb swings toward -z).
+          p.parts.legL.rotation.z = 0; p.parts.legR.rotation.z = 0; // clear the crawl leg-splay so standing legs are straight again
           if (board) {
             // skateboarding: STAND with a slight forward crouch, knees bent, arms out to balance
             p.parts.body.position.set(0, 0.98, 0); p.parts.body.rotation.x = -0.18;
@@ -1789,7 +1814,8 @@ const Multiplayer = {
             p.parts.legL.position.set(-0.16, 0.32, 0.02); p.parts.legR.position.set(0.16, 0.32, -0.06);
             p.parts.legL.rotation.x = 0.12; p.parts.legR.rotation.x = -0.12;   // slight stance stagger
             p.parts.legL.scale.y = 0.9; p.parts.legR.scale.y = 0.9;
-            p.parts.head.rotation.x = pitch;
+            p.parts.head.rotation.x = 0; // keep the head LEVEL — applying pitch here (after the -90° turn) just rolls it sideways/cocks it, it doesn't nod
+            p.parts.head.rotation.y = -Math.PI / 2; // body stands sideways on the board, but TURN THE HEAD to face the way they're rolling
             p.group.rotation.x = 0;
             p.group.rotation.y = (p.state.yaw || 0) + Math.PI / 2; // stand SIDEWAYS on the board
             // give them a visible board so they're not "riding an invisible car"
@@ -1837,7 +1863,11 @@ const Multiplayer = {
     tintPeer(p) {
       if (!p || !p.group || typeof World === 'undefined') return;
       const flashing = p.hitFlashT > 0;
-      const c = World.getLightColor(Math.floor(p.body.x), Math.floor(p.body.y + 1), Math.floor(p.body.z), undefined, 0.10);
+      // prone players (swim/crawl) lie flat in a 1-block gap: sample light at their OWN
+      // (feet-level) air block, not one block up where a low ceiling reads as pitch black
+      const prone = !!(p.target && p.target.swim);
+      const ly = prone ? Math.floor(p.body.y) : Math.floor(p.body.y + 1);
+      const c = World.getLightColor(Math.floor(p.body.x), ly, Math.floor(p.body.z), undefined, 0.10);
       p.group.traverse(o => {
         const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
         for (const mat of mats) if (mat && mat.color) {

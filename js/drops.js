@@ -53,7 +53,9 @@ const Drops = {
       tex.minFilter = THREE.NearestFilter;
       this.texCache[id] = tex;
     }
-    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.texCache[id], transparent: true }));
+    // depthWrite:false so the transparent icon quad doesn't punch a hole in the transparent
+    // water (or other drops) rendered behind it — it still depth-TESTS against solid blocks
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.texCache[id], transparent: true, depthWrite: false }));
     spr.scale.set(0.45, 0.45, 0.45);
     return spr;
   },
