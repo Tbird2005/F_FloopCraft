@@ -245,29 +245,28 @@ const Mobs = {
   },
   // textured box.
   //  - painter as a FUNCTION: same skin on all faces (+ optional front faceCanvas).
-  //  - painter as an OBJECT { side, top, bottom, front, back }: a real per-face
-  //    unwrap so a mob's head/flank/belly/dorsal/tail all read differently.
-  // three.js BoxGeometry material order is [+x, -x, +y, -y, +z, -z]; this model
-  // set puts the face on +z, so front = +z (idx 4), back = -z (idx 5), and both
-  // ±x share the "side" skin (mirror flanks). Textures cache per skinKey+role.
+  //  - painter as an OBJECT { right, left, side, top, bottom, front, back }: a
+  //    real per-face unwrap so mob faces, flanks, bellies, backs, and clothing
+  //    details land only where they belong. `side` is the fallback for ±x.
+  // three.js BoxGeometry material order is [+x, -x, +y, -y, +z, -z].
   tbox(w, h, d, skinKey, painter, faceCanvas, opts) {
     const g = new THREE.BoxGeometry(w, h, d);
     const baseOpts = opts || {};
     const matFor = (fn, role) => new THREE.MeshLambertMaterial(Object.assign({ map: this.skinTex(skinKey + '#' + role, fn) }, baseOpts));
     if (painter && typeof painter === 'object') {
-      const P = painter, side = P.side || P.front || P.top;
+      const P = painter, side = P.side || P.front || P.top || P.back;
       const cache = {};
       const roleMat = (role, fn) => {
-        const use = fn || side, tag = fn ? role : 'side';
-        return cache[tag] || (cache[tag] = matFor(use, tag));
+        const use = fn || side;
+        return cache[role] || (cache[role] = matFor(use, role));
       };
-      const mSide = roleMat('side', side);
       return new THREE.Mesh(g, [
-        mSide, mSide,                       // +x / -x flanks
-        roleMat('top', P.top),              // +y
-        roleMat('bottom', P.bottom),        // -y
-        roleMat('front', P.front),          // +z front / face
-        roleMat('back', P.back),            // -z back / tail
+        roleMat('right', P.right || P.side), // +x
+        roleMat('left', P.left || P.side),   // -x
+        roleMat('top', P.top),               // +y
+        roleMat('bottom', P.bottom),         // -y
+        roleMat('front', P.front),           // +z
+        roleMat('back', P.back),             // -z
       ]);
     }
     const mk = () => matFor(painter, 'all');
@@ -288,6 +287,10 @@ const Mobs = {
     const br = (pb >> 16) & 255, bg = (pb >> 8) & 255, bb = pb & 255;
     const r = Math.round(ar + (br - ar) * t), gg = Math.round(ag + (bg - ag) * t), bl = Math.round(ab + (bb - ab) * t);
     return '#' + ((1 << 24) | (r << 16) | (gg << 8) | bl).toString(16).slice(1);
+  },
+
+  _mirrorPainter(painter) {
+    return (c) => { c.save(); c.translate(16, 0); c.scale(-1, 1); painter(c); c.restore(); };
   },
   // tiny deterministic speckle for skin painters
   _skinSpeck(c, cols, n, seed) {
@@ -584,25 +587,98 @@ const Mobs = {
         c.fillStyle = d.dark; c.fillRect(0, 0, 16, 4); c.fillRect(0, 12, 16, 4);
         this._skinSpeck(c, [d.main, d.dark, '#d7edf5'], 14, seed);
       });
+      const pale = this._mixHex(d.main, '#ffffff', 0.68);
+      const mid = this._mixHex(d.main, d.dark, 0.35);
+      const frontFace = (c) => {
+        c.fillStyle = d.main; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = d.dark; c.fillRect(0, 0, 16, 5);
+        c.fillStyle = pale; c.fillRect(0, 11, 16, 5);
+        c.fillStyle = '#eef7f8'; c.fillRect(3, 5, 3, 3); c.fillRect(10, 5, 3, 3);
+        c.fillStyle = '#10151b'; c.fillRect(4, 6, 2, 2); c.fillRect(10, 6, 2, 2);
+        c.fillStyle = d.dark; c.fillRect(4, 11, 8, 1);
+        if (d.hostile || d.angler) {
+          c.fillStyle = '#f4f0df';
+          for (let x = 4; x < 12; x += 2) { c.fillRect(x, 10, 1, 2); c.fillRect(x + 1, 12, 1, 2); }
+        }
+        if (type === 'pufferfish') { c.fillStyle = '#5f4f1c'; c.fillRect(2, 3, 2, 2); c.fillRect(12, 3, 2, 2); }
+        if (type === 'clownfish') { c.fillStyle = '#fbf6ec'; c.fillRect(0, 8, 16, 2); }
+      };
+      const backFace = (c) => {
+        c.fillStyle = mid; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = d.dark; c.fillRect(0, 0, 16, 5); c.fillRect(7, 0, 2, 16);
+        c.fillStyle = pale; c.fillRect(0, 12, 16, 4);
+        c.fillStyle = this._mixHex(d.dark, '#000000', 0.35); c.fillRect(3, 5, 10, 1);
+      };
+      const topFace = (c) => {
+        c.fillStyle = d.dark; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = mid; c.fillRect(2, 0, 12, 16);
+        c.fillStyle = this._mixHex(d.main, '#ffffff', 0.22); c.fillRect(7, 0, 2, 16);
+        this._skinSpeck(c, [d.dark, mid], 10, seed + 29);
+      };
+      const bottomFace = (c) => {
+        c.fillStyle = pale; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = this._mixHex(pale, d.main, 0.22); c.fillRect(0, 0, 16, 3);
+        c.fillStyle = this._mixHex(pale, '#ffffff', 0.35); c.fillRect(3, 3, 10, 10);
+        c.fillStyle = mid; c.fillRect(2, 13, 12, 1);
+      };
+      const bodyFaces = { right: paint, left: this._mirrorPainter(paint), top: topFace, bottom: bottomFace, front: frontFace, back: backFace };
+      const tailSide = (c) => {
+        c.fillStyle = d.main; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = d.dark; c.fillRect(0, 0, 16, 3); c.fillRect(0, 13, 16, 3);
+        c.fillStyle = mid; for (let x = 1; x < 16; x += 3) c.fillRect(x, 3, 1, 10);
+      };
+      const tailFaces = {
+        right: tailSide, left: this._mirrorPainter(tailSide),
+        top: topFace, bottom: bottomFace,
+        front: (c) => { c.fillStyle = mid; c.fillRect(0, 0, 16, 16); c.fillStyle = d.dark; c.fillRect(6, 0, 4, 16); },
+        back: (c) => { c.fillStyle = d.dark; c.fillRect(0, 0, 16, 16); c.fillStyle = d.main; c.fillRect(2, 2, 12, 12); c.fillStyle = mid; c.fillRect(7, 0, 2, 16); },
+      };
+      const finFaces = {
+        right: tailSide, left: this._mirrorPainter(tailSide), top: topFace, bottom: bottomFace,
+        front: (c) => { c.fillStyle = d.dark; c.fillRect(0, 0, 16, 16); c.fillStyle = mid; for (let y = 1; y < 16; y += 3) c.fillRect(0, y, 16, 1); },
+        back: (c) => { c.fillStyle = mid; c.fillRect(0, 0, 16, 16); c.fillStyle = d.dark; c.fillRect(0, 0, 2, 16); c.fillRect(14, 0, 2, 16); },
+      };
       if (d.shape === 'jelly') {
-        const bell = this.tbox(d.w * 2, d.h * 0.45, d.w * 2, 'ocean_' + type, paint, null, { transparent: true, opacity: 0.82 });
+        const bellFaces = {
+          right: paint, left: this._mirrorPainter(paint),
+          top: (c) => { c.fillStyle = '#d9c9ff'; c.fillRect(0, 0, 16, 16); c.fillStyle = '#b79cf5'; c.fillRect(2, 2, 12, 12); c.fillStyle = 'rgba(255,255,255,0.6)'; c.fillRect(4, 3, 5, 2); },
+          bottom: (c) => { c.fillStyle = '#6e4fb0'; c.fillRect(0, 0, 16, 16); c.fillStyle = '#d9c9ff'; for (const x of [2,6,10,14]) c.fillRect(x, 5, 1, 6); },
+          front: (c) => { paint(c); c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillRect(3, 2, 5, 2); c.fillStyle = '#7f5bc6'; c.fillRect(0, 12, 16, 2); },
+          back: (c) => { paint(c); c.fillStyle = '#7655bb'; c.fillRect(0, 11, 16, 3); },
+        };
+        const tentacleFaces = {
+          right: (c) => { c.fillStyle = '#8f6fd6'; c.fillRect(0,0,16,16); c.fillStyle='#d9c9ff'; c.fillRect(6,0,3,16); },
+          left: (c) => { c.fillStyle = '#7c5bc1'; c.fillRect(0,0,16,16); c.fillStyle='#c8b0f7'; c.fillRect(7,0,2,16); },
+          top: (c) => { c.fillStyle='#d9c9ff'; c.fillRect(0,0,16,16); }, bottom: (c) => { c.fillStyle='#5e3e9b'; c.fillRect(0,0,16,16); },
+          front: (c) => { c.fillStyle='#9f80df'; c.fillRect(0,0,16,16); c.fillStyle='#6e4fb0'; for(let y=1;y<16;y+=4)c.fillRect(0,y,16,1); },
+          back: (c) => { c.fillStyle='#7655bb'; c.fillRect(0,0,16,16); },
+        };
+        const bell = this.tbox(d.w * 2, d.h * 0.45, d.w * 2, 'ocean_' + type + '_bell', bellFaces, null, { transparent: true, opacity: 0.82 });
         bell.position.y = d.h * 0.72; g.add(bell); parts.head = bell; parts.tentacles = [];
-        for (const [x, z] of [[-0.16,-0.12],[0.16,-0.12],[-0.16,0.12],[0.16,0.12]]) { const t = this.tbox(0.06, d.h * 0.55, 0.06, 'ocean_' + type, paint, null, { transparent: true, opacity: 0.72 }); t.position.set(x, d.h * 0.28, z); g.add(t); parts.tentacles.push(t); }
+        for (const [x, z] of [[-0.16,-0.12],[0.16,-0.12],[-0.16,0.12],[0.16,0.12]]) { const t = this.tbox(0.06, d.h * 0.55, 0.06, 'ocean_' + type + '_tentacle', tentacleFaces, null, { transparent: true, opacity: 0.72 }); t.position.set(x, d.h * 0.28, z); g.add(t); parts.tentacles.push(t); }
       } else if (d.shape === 'ray') {
-        const body = this.tbox(d.w * 1.65, d.h * 0.65, d.len * 0.72, 'ocean_' + type, paint); body.position.y = d.h * 0.55; body.rotation.y = Math.PI / 4; g.add(body);
-        const tail = this.tbox(0.06, 0.07, d.len * 0.72, 'ocean_' + type, paint); tail.position.set(0, d.h * 0.48, -d.len * 0.62); g.add(tail); parts.tail = tail; parts.head = body;
+        const rayTop = paint;
+        const rayBottom = (c) => { c.fillStyle = pale; c.fillRect(0,0,16,16); c.fillStyle='#5d5047'; c.fillRect(6,5,4,1); for(const x of [3,5,10,12]) c.fillRect(x,8,1,5); };
+        const rayFront = (c) => { c.fillStyle=d.main;c.fillRect(0,0,16,16);c.fillStyle='#111';c.fillRect(3,5,2,2);c.fillRect(11,5,2,2);c.fillStyle=pale;c.fillRect(5,11,6,2); };
+        const rayFaces = { right: rayTop, left: this._mirrorPainter(rayTop), top: rayTop, bottom: rayBottom, front: rayFront, back: backFace };
+        const body = this.tbox(d.w * 1.65, d.h * 0.65, d.len * 0.72, 'ocean_' + type + '_body', rayFaces); body.position.y = d.h * 0.55; body.rotation.y = Math.PI / 4; g.add(body);
+        const tail = this.tbox(0.06, 0.07, d.len * 0.72, 'ocean_' + type + '_tail', tailFaces); tail.position.set(0, d.h * 0.48, -d.len * 0.62); g.add(tail); parts.tail = tail; parts.head = body;
       } else if (d.shape === 'octopus') {
-        const head = this.tbox(d.w * 1.35, d.h * 0.58, d.w * 1.25, 'ocean_' + type, paint); head.position.y = d.h * 0.68; g.add(head); parts.head = head; parts.tentacles = [];
-        for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, t = this.tbox(0.07, d.h * 0.55, 0.07, 'ocean_' + type, paint); t.position.set(Math.cos(a) * d.w * 0.65, d.h * 0.28, Math.sin(a) * d.w * 0.65); t.rotation.z = Math.cos(a) * 0.25; g.add(t); parts.tentacles.push(t); }
+        const mantleFaces = { right: paint, left: this._mirrorPainter(paint), top: topFace, bottom: bottomFace, front: frontFace, back: backFace };
+        const suckerSide = (c) => { c.fillStyle=d.main;c.fillRect(0,0,16,16);c.fillStyle=pale;for(let y=1;y<16;y+=3)c.fillRect(6,y,4,1); };
+        const tentacleFaces = { right:suckerSide,left:this._mirrorPainter(suckerSide),top:topFace,bottom:bottomFace,front:suckerSide,back:backFace };
+        const head = this.tbox(d.w * 1.35, d.h * 0.58, d.w * 1.25, 'ocean_' + type + '_mantle', mantleFaces); head.position.y = d.h * 0.68; g.add(head); parts.head = head; parts.tentacles = [];
+        for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, t = this.tbox(0.07, d.h * 0.55, 0.07, 'ocean_' + type + '_tentacle', tentacleFaces); t.position.set(Math.cos(a) * d.w * 0.65, d.h * 0.28, Math.sin(a) * d.w * 0.65); t.rotation.z = Math.cos(a) * 0.25; g.add(t); parts.tentacles.push(t); }
       } else if (d.shape === 'seahorse') {
-        const body = this.tbox(d.w * 1.25, d.h * 0.55, d.w, 'ocean_' + type, paint); body.position.y = d.h * 0.48;
-        const head = this.tbox(d.w * 1.1, d.h * 0.24, d.w * 1.4, 'ocean_' + type, paint); head.position.set(0, d.h * 0.83, d.w * 0.35);
-        const snout = this.tbox(d.w * 0.45, d.h * 0.11, d.w * 1.4, 'ocean_' + type, paint); snout.position.set(0, d.h * 0.83, d.w * 1.0);
-        const tail = this.tbox(0.07, d.h * 0.38, 0.07, 'ocean_' + type, paint); tail.position.set(0, d.h * 0.17, -d.w * 0.25); tail.rotation.x = 0.45; g.add(body, head, snout, tail); parts.head = head; parts.tail = tail;
+        const body = this.tbox(d.w * 1.25, d.h * 0.55, d.w, 'ocean_' + type + '_body', bodyFaces); body.position.y = d.h * 0.48;
+        const headFaces = { right:paint,left:this._mirrorPainter(paint),top:topFace,bottom:bottomFace,front:frontFace,back:backFace };
+        const head = this.tbox(d.w * 1.1, d.h * 0.24, d.w * 1.4, 'ocean_' + type + '_head', headFaces); head.position.set(0, d.h * 0.83, d.w * 0.35);
+        const snout = this.tbox(d.w * 0.45, d.h * 0.11, d.w * 1.4, 'ocean_' + type + '_snout', { right:paint,left:this._mirrorPainter(paint),top:topFace,bottom:bottomFace,front:frontFace,back:backFace }); snout.position.set(0, d.h * 0.83, d.w * 1.0);
+        const tail = this.tbox(0.07, d.h * 0.38, 0.07, 'ocean_' + type + '_tail', tailFaces); tail.position.set(0, d.h * 0.17, -d.w * 0.25); tail.rotation.x = 0.45; g.add(body, head, snout, tail); parts.head = head; parts.tail = tail;
       } else {
-        const body = this.tbox(d.w * 1.8, d.h * 0.72, d.len * 0.72, 'ocean_' + type, paint); body.position.y = d.h * 0.53; g.add(body); parts.head = body;
-        const tail = this.tbox(Math.max(0.05, d.w * 0.22), d.h * 0.72, d.len * 0.25, 'ocean_' + type, paint); tail.position.set(0, d.h * 0.53, -d.len * 0.49); tail.rotation.y = Math.PI / 4; g.add(tail); parts.tail = tail;
-        const fin = this.tbox(Math.max(0.05, d.w * 0.18), d.h * 0.8, d.len * 0.18, 'ocean_' + type, paint); fin.position.set(0, d.h * 0.93, -d.len * 0.05); fin.rotation.z = 0.35; g.add(fin); parts.fin = fin;
+        const body = this.tbox(d.w * 1.8, d.h * 0.72, d.len * 0.72, 'ocean_' + type + '_body', bodyFaces); body.position.y = d.h * 0.53; g.add(body); parts.head = body;
+        const tail = this.tbox(Math.max(0.05, d.w * 0.22), d.h * 0.72, d.len * 0.25, 'ocean_' + type + '_tail', tailFaces); tail.position.set(0, d.h * 0.53, -d.len * 0.49); tail.rotation.y = Math.PI / 4; g.add(tail); parts.tail = tail;
+        const fin = this.tbox(Math.max(0.05, d.w * 0.18), d.h * 0.8, d.len * 0.18, 'ocean_' + type + '_fin', finFaces); fin.position.set(0, d.h * 0.93, -d.len * 0.05); fin.rotation.z = 0.35; g.add(fin); parts.fin = fin;
         if (d.angler) { const stem = this.box(0.035, d.h * 0.7, 0.035, 0x293044); stem.position.set(0, d.h * 1.15, d.len * 0.2); stem.rotation.x = -0.55; const lure = this.box(0.12, 0.12, 0.12, 0xc8ffff); lure.position.set(0, d.h * 1.35, d.len * 0.48); g.add(stem, lure); parts.lure = lure; }
       }
     } else if (type === 'sprawler') {
@@ -724,7 +800,23 @@ const Mobs = {
         c.fillStyle = '#a8a8a8'; c.fillRect(0, 13, 16, 3);
         c.fillStyle = '#8a8a8a'; c.fillRect(3, 4, 1, 4); c.fillRect(10, 7, 3, 1); // cracks
       };
-      const body = this.tbox(0.45, 0.75, 0.22, 'skel_body', skelBody);
+      const skelBack = (c) => {
+        c.fillStyle = '#9b9b9b'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#dedede'; c.fillRect(7, 0, 2, 16); // spine
+        c.fillStyle = '#737373'; for (let y = 2; y < 14; y += 3) { c.fillRect(4, y, 3, 1); c.fillRect(9, y, 3, 1); }
+        c.fillStyle = '#686868'; c.fillRect(0, 13, 16, 3);
+      };
+      const skelSide = (c) => {
+        c.fillStyle = '#a9a9a9'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#d5d5d5'; for (let y = 2; y < 12; y += 3) c.fillRect(4, y, 8, 1);
+        c.fillStyle = '#777'; c.fillRect(0, 13, 16, 3);
+      };
+      const body = this.tbox(0.45, 0.75, 0.22, 'skel_body', {
+        right: skelSide, left: this._mirrorPainter(skelSide),
+        top: (c) => { c.fillStyle='#dedede'; c.fillRect(0,0,16,16); c.fillStyle='#8a8a8a'; c.fillRect(6,0,4,16); },
+        bottom: (c) => { c.fillStyle='#666'; c.fillRect(0,0,16,16); c.fillStyle='#999'; c.fillRect(2,2,12,12); },
+        front: skelBody, back: skelBack,
+      });
       body.position.y = 1.05;
       const head = this.tbox(0.5, 0.5, 0.5, 'skel_skull', skelSkull, this.skeletonFace());
       head.position.y = 1.7;
@@ -868,7 +960,16 @@ const Mobs = {
         c.fillStyle = '#332a32'; c.fillRect(4, 0, 2, 16); c.fillRect(10, 0, 2, 16); // joint bands
         c.fillStyle = '#0d0a0d'; c.fillRect(14, 0, 2, 16);
       };
-      const body = this.tbox(0.85, 0.45, 0.85, 'spider_body', spiderBody);
+      const spiderSide = (c) => {
+        c.fillStyle = '#2a2028'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#181217'; c.fillRect(0, 11, 16, 5);
+        this._skinSpeck(c, ['#3a3038', '#1a1418', '#453a44'], 28, 19);
+      };
+      const spiderBottom = (c) => { c.fillStyle='#171116'; c.fillRect(0,0,16,16); c.fillStyle='#332832'; for(let x=2;x<16;x+=4)c.fillRect(x,3,1,10); };
+      const body = this.tbox(0.85, 0.45, 0.85, 'spider_body', {
+        right: spiderSide, left: this._mirrorPainter(spiderSide), top: spiderBody, bottom: spiderBottom,
+        front: spiderSide, back: (c) => { spiderSide(c); c.fillStyle='#0f0b0e'; c.fillRect(0,0,2,16); c.fillRect(14,0,2,16); },
+      });
       body.position.y = 0.45;
       const head = this.tbox(0.5, 0.4, 0.5, 'spider_head', (c) => {
         c.fillStyle = '#2a2028'; c.fillRect(0, 0, 16, 16);
@@ -887,15 +988,30 @@ const Mobs = {
       }
     } else if (type === 'humbug') {
       // corporate menace: suit jacket with lapels and buttons, cuffed sleeves
-      const humbugSuit = (c) => {
+      const humbugSuitFront = (c) => {
         c.fillStyle = '#3a3f45'; c.fillRect(0, 0, 16, 16);
         c.fillStyle = '#2a2f35';
-        for (let i = 0; i < 6; i++) { c.fillRect(5 - i > 0 ? 5 - i : 0, i, 2, 1); c.fillRect(9 + i < 15 ? 9 + i : 14, i, 2, 1); } // lapel V
-        c.fillRect(7, 0, 2, 16); // jacket opening
-        c.fillStyle = '#c9ced4'; c.fillRect(6, 7, 1, 1); c.fillRect(6, 10, 1, 1); // buttons
-        c.fillStyle = '#6a7076'; c.fillRect(0, 0, 16, 1); // collar
-        c.fillStyle = '#c02020'; c.fillRect(7, 1, 2, 4);  // tie
+        for (let i = 0; i < 6; i++) { c.fillRect(Math.max(0, 5 - i), i, 2, 1); c.fillRect(Math.min(14, 9 + i), i, 2, 1); }
+        c.fillRect(7, 0, 2, 16); // jacket opening only on front
+        c.fillStyle = '#c9ced4'; c.fillRect(6, 7, 1, 1); c.fillRect(6, 10, 1, 1);
+        c.fillStyle = '#6a7076'; c.fillRect(0, 0, 16, 1);
+        c.fillStyle = '#c02020'; c.fillRect(7, 1, 2, 4); // tie only on front
       };
+      const humbugSuitBack = (c) => {
+        c.fillStyle = '#353a40'; c.fillRect(0,0,16,16);
+        c.fillStyle = '#272c31'; c.fillRect(7,0,2,16); // rear seam
+        c.fillStyle = '#555c63'; c.fillRect(1,2,14,2); // shoulder yoke
+        c.fillStyle = '#22272c'; c.fillRect(2,12,12,2); // back vent
+      };
+      const humbugSuitSide = (c) => {
+        c.fillStyle = '#383d43'; c.fillRect(0,0,16,16);
+        c.fillStyle = '#252a30'; c.fillRect(12,0,2,16); // side seam
+        c.fillStyle = '#555c63'; c.fillRect(0,1,16,2);
+        c.fillStyle = '#23282d'; c.fillRect(3,9,9,3); // side pocket
+      };
+      const humbugSuitTop = (c) => { c.fillStyle='#6a7076'; c.fillRect(0,0,16,16); c.fillStyle='#23282d'; c.fillRect(4,4,8,8); c.fillStyle='#c02020'; c.fillRect(7,8,2,8); };
+      const humbugSuitBottom = (c) => { c.fillStyle='#202429'; c.fillRect(0,0,16,16); c.fillStyle='#3a3f45'; c.fillRect(2,2,12,10); };
+      const humbugSuit = { right: humbugSuitSide, left: this._mirrorPainter(humbugSuitSide), top: humbugSuitTop, bottom: humbugSuitBottom, front: humbugSuitFront, back: humbugSuitBack };
       const humbugArm = (c) => {
         c.fillStyle = '#3a3f45'; c.fillRect(0, 0, 16, 16);
         c.fillStyle = '#2a2f35'; c.fillRect(0, 5, 16, 1);
@@ -907,14 +1023,24 @@ const Mobs = {
         c.fillStyle = '#22262b'; c.fillRect(7, 0, 2, 16);
         c.fillStyle = '#17191c'; c.fillRect(0, 13, 16, 3); // shoes
       };
-      const humbugHead = (c) => {
+      const humbugHeadSide = (c) => {
         c.fillStyle = '#9aa0a6'; c.fillRect(0, 0, 16, 16);
-        c.fillStyle = '#8a9096'; c.fillRect(0, 0, 16, 3); // dour brow shading
+        c.fillStyle = '#8a9096'; c.fillRect(0, 0, 16, 3);
+        c.fillStyle = '#737980'; c.fillRect(13, 4, 2, 8); // ear/side plate
         this._skinSpeck(c, ['#a8aeb4', '#8a9096'], 12, 29);
       };
+      const humbugHeadFront = (c) => {
+        c.fillStyle='#9aa0a6'; c.fillRect(0,0,16,16);
+        c.fillStyle='#747a81'; c.fillRect(0,0,16,4);
+        c.fillStyle='#07090b'; c.fillRect(2,5,4,5); c.fillRect(10,5,4,5);
+        c.fillStyle='#c7ccd1'; c.fillRect(3,5,1,1); c.fillRect(11,5,1,1);
+        c.fillStyle='#111417'; c.fillRect(4,12,8,1); c.fillRect(4,11,1,1); c.fillRect(11,11,1,1);
+      };
+      const humbugHeadBack = (c) => { c.fillStyle='#8e949a'; c.fillRect(0,0,16,16); c.fillStyle='#6f757b'; c.fillRect(0,0,16,4); c.fillStyle='#777d83'; c.fillRect(7,4,2,12); };
+      const humbugHead = { right:humbugHeadSide, left:this._mirrorPainter(humbugHeadSide), top:(c)=>{c.fillStyle='#777d83';c.fillRect(0,0,16,16);c.fillStyle='#9ea4aa';c.fillRect(3,3,10,10);}, bottom:(c)=>{c.fillStyle='#62686e';c.fillRect(0,0,16,16);}, front:humbugHeadFront, back:humbugHeadBack };
       const body = this.tbox(0.55, 0.85, 0.35, 'humbug_suit', humbugSuit);
       body.position.y = 1.0;
-      const head = this.tbox(0.58, 0.58, 0.58, 'humbug_head', humbugHead, this.humbugFace());
+      const head = this.tbox(0.58, 0.58, 0.58, 'humbug_head', humbugHead);
       head.position.y = 1.85;
       const antenna = this.box(0.06, 0.35, 0.06, 0x6a7076);
       antenna.position.y = 2.3;
@@ -923,7 +1049,12 @@ const Mobs = {
       g.add(body, head, antenna, antennaTip);
       parts.head = head;
       for (const px of [-0.15, 0.15]) {
-        const leg = this.tbox(0.2, 0.55, 0.2, 'humbug_leg', humbugLeg);
+        const leg = this.tbox(0.2, 0.55, 0.2, 'humbug_leg', {
+          right:humbugLeg, left:this._mirrorPainter(humbugLeg),
+          top:(c)=>{c.fillStyle='#3a3f45';c.fillRect(0,0,16,16);c.fillStyle='#22262b';c.fillRect(6,0,4,16);},
+          bottom:(c)=>{c.fillStyle='#111316';c.fillRect(0,0,16,16);}, front:humbugLeg,
+          back:(c)=>{c.fillStyle='#292e33';c.fillRect(0,0,16,16);c.fillStyle='#17191c';c.fillRect(0,13,16,3);c.fillStyle='#1f2327';c.fillRect(7,0,2,12);}
+        });
         leg.position.set(px, 0.28, 0);
         g.add(leg); parts.legs.push(leg);
       }
@@ -978,12 +1109,31 @@ const Mobs = {
       parts.bat = bat;
     } else { // Mr Floop
       // festive blue coat with white trim + gold buttons, mossy green skin
-      const floopCoat = (c) => {
+      const floopCoatFront = (c) => {
         c.fillStyle = '#3d6b8f'; c.fillRect(0, 0, 16, 16);
-        c.fillStyle = '#33597a'; c.fillRect(7, 0, 2, 16); // coat opening
+        c.fillStyle = '#33597a'; c.fillRect(7, 0, 2, 16); // opening only on front
         c.fillStyle = '#ffd700'; c.fillRect(6, 4, 1, 1); c.fillRect(6, 8, 1, 1); c.fillRect(6, 12, 1, 1);
-        c.fillStyle = '#ffffff'; c.fillRect(0, 0, 16, 2); c.fillRect(0, 14, 16, 2); // fur trim
+        c.fillStyle = '#ffffff'; c.fillRect(0, 0, 16, 2); c.fillRect(0, 14, 16, 2);
         this._skinSpeck(c, ['#477aa3', '#33597a'], 12, 37);
+      };
+      const floopCoatBack = (c) => {
+        c.fillStyle='#365f80'; c.fillRect(0,0,16,16);
+        c.fillStyle='#294c68'; c.fillRect(7,0,2,16); // rear seam
+        c.fillStyle='#ffffff'; c.fillRect(0,0,16,2); c.fillRect(0,14,16,2);
+        c.fillStyle='#ffd700'; c.fillRect(2,9,12,1); // belt
+        this._skinSpeck(c, ['#477aa3','#33597a'], 10, 43);
+      };
+      const floopCoatSide = (c) => {
+        c.fillStyle='#3b6789'; c.fillRect(0,0,16,16);
+        c.fillStyle='#2c5270'; c.fillRect(13,0,2,16);
+        c.fillStyle='#ffffff'; c.fillRect(0,0,16,2); c.fillRect(0,14,16,2);
+        c.fillStyle='#294c68'; c.fillRect(3,9,8,3); // pocket
+      };
+      const floopCoat = {
+        right:floopCoatSide, left:this._mirrorPainter(floopCoatSide),
+        top:(c)=>{c.fillStyle='#ffffff';c.fillRect(0,0,16,16);c.fillStyle='#3d6b8f';c.fillRect(4,4,8,12);},
+        bottom:(c)=>{c.fillStyle='#ffffff';c.fillRect(0,0,16,16);c.fillStyle='#294c68';c.fillRect(2,2,12,10);},
+        front:floopCoatFront, back:floopCoatBack,
       };
       const floopArm = (c) => {
         c.fillStyle = '#3d6b8f'; c.fillRect(0, 0, 16, 16);
@@ -1002,7 +1152,19 @@ const Mobs = {
       };
       const body = this.tbox(0.55, 0.85, 0.35, 'floop_coat', floopCoat);
       body.position.y = 1.0;
-      const head = this.tbox(0.6, 0.6, 0.6, 'floop_head', floopHead, this.floopFace());
+      const floopHeadFront = (c) => {
+        c.fillStyle='#7ec48a'; c.fillRect(0,0,16,16); c.fillStyle='#6fb37b'; c.fillRect(0,0,16,4);
+        c.fillStyle='#000'; c.fillRect(2,5,4,4); c.fillRect(10,5,4,4);
+        c.fillStyle='#fff'; c.fillRect(2,5,2,2); c.fillRect(10,5,2,2);
+        c.fillStyle='#4a375c'; c.fillRect(4,13,8,1);
+      };
+      const floopHeadSide = (c) => { floopHead(c); c.fillStyle='#5da36c'; c.fillRect(13,5,2,6); };
+      const head = this.tbox(0.6, 0.6, 0.6, 'floop_head', {
+        right:floopHeadSide, left:this._mirrorPainter(floopHeadSide),
+        top:(c)=>{c.fillStyle='#6fb37b';c.fillRect(0,0,16,16);c.fillStyle='#8fd49a';c.fillRect(3,3,10,10);},
+        bottom:(c)=>{c.fillStyle='#5da36c';c.fillRect(0,0,16,16);}, front:floopHeadFront,
+        back:(c)=>{floopHead(c);c.fillStyle='#5da36c';c.fillRect(7,0,2,16);}
+      });
       head.position.y = 1.85;
       const nose = this.box(0.18, 0.18, 0.35, 0x5da36c);
       nose.position.set(0, 1.78, 0.42);

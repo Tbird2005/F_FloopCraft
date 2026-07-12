@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v1092',
+  versionTag: 'ffloopcraft-v1093',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');

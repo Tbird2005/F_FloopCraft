@@ -454,7 +454,7 @@ const Game = {
     }
     UI.updateHotbar(); UI.updateStats(); UI.updateXp(); UI.updateModeLabel();
     if (!this.started) this.started = true;
-    UI.chat('Welcome to F_Floop Craft v 1.0.92!', '#ffd700');
+    UI.chat('Welcome to F_Floop Craft v 1.0.93!', '#ffd700');
     if (typeof Multiplayer !== 'undefined') {
       if (Multiplayer.role === 'host') Multiplayer.finishHostWorld();
       Multiplayer.updatePauseCode();
