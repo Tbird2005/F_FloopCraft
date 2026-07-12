@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v1095',
+  versionTag: 'ffloopcraft-v1099',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -3526,6 +3526,7 @@ const Multiplayer = {
       if (m && m.body) {
         s.lightRGB = this.entityVoxelLightColor(m.body.x, m.body.y + (m.body.h || 1.4) * 0.55, m.body.z, 0.06).map(v => +v.toFixed(3));
         s.light = +Math.max(...s.lightRGB).toFixed(3);
+        s.fireVisual = !!((m.fireT || 0) > 0 || m.sunFireVisual);
       }
     }
     return list;
@@ -3562,7 +3563,7 @@ const Multiplayer = {
     if (typeof Mobs === 'undefined') return;
     for (const s of list || []) {
       const m = s && s.mid ? this.findMobById(s.mid) : null;
-      if (m) { m.mpLightRGB = Array.isArray(s.lightRGB) ? s.lightRGB.slice(0, 3) : m.mpLightRGB; m.mpLight = Number.isFinite(+s.light) ? +s.light : m.mpLight; }
+      if (m) { m.mpLightRGB = Array.isArray(s.lightRGB) ? s.lightRGB.slice(0, 3) : m.mpLightRGB; m.mpLight = Number.isFinite(+s.light) ? +s.light : m.mpLight; m.mpFireVisual = !!s.fireVisual; }
     }
   };
 

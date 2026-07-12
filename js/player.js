@@ -10,6 +10,7 @@ const Player = {
   hp: 20, maxHp: 20,
   hunger: 20, exhaustion: 0, regenT: 0, starveT: 0,
   air: 10, airT: 0, suffocateT: 0,
+  burnT: 0, burnDmgT: 0, // lingering fire: keeps burning for a bit after leaving lava/fire
   xp: 0, level: 0,
   armor: [null, null, null, null, null],
   gamemode: 'survival',
@@ -761,8 +762,10 @@ const Player = {
     // eat
     if (Reg[s.id].food && this.eatT <= 0) {
       if (this.hunger >= 20 && this.gamemode !== 'creative') return false;
-      this.hunger = Math.min(20, this.hunger + Reg[s.id].food);
+      const foodDef = Reg[s.id];
+      this.hunger = Math.min(20, this.hunger + foodDef.food);
       this.consumeHeld(1);
+      if (foodDef.burnOnEat) this.igniteBurn(foodDef.burnOnEat);
       SFX.eat();
       Particles.burst(this.body.x + d.x * 0.5, this.eyeY() - 0.2 + d.y * 0.5, this.body.z + d.z * 0.5, [0.8, 0.3, 0.2], 6, 1.5);
       this.eatT = 0.45;
@@ -2202,6 +2205,14 @@ const Player = {
     if (this.hp <= 0) this.die(opts);
   },
 
+  // set you on fire for `secs` (lingers after leaving lava/fire; water puts it out).
+  // Refreshes rather than stacks so repeated ticks don't runaway.
+  igniteBurn(secs) {
+    if (this.dead || this.gamemode === 'creative') return;
+    if (typeof Physics !== 'undefined' && Physics.inWater(this.body, 0.25)) return;
+    this.burnT = Math.max(this.burnT || 0, secs || 0);
+  },
+
   die(opts) {
     if (this.dead) return;
     this.announceDeath(opts);
@@ -2296,7 +2307,7 @@ const Player = {
   },
 
   updateVitals(dt) {
-    if (this.dead) { UI.setWaterOverlay(false); UI.setBlockOverlay(null); this.suffocateT = 0; return; }
+    if (this.dead) { UI.setWaterOverlay(false); UI.setBlockOverlay(null); this.suffocateT = 0; this.burnT = 0; UI.setBurnOverlay(false); return; }
 
     const headBlock = this.headInsideBlock();
     if (headBlock !== B.AIR) UI.setBlockOverlay(headBlock);
@@ -2307,7 +2318,7 @@ const Player = {
 
     // Creative players still get the opaque head-in-block overlay so they
     // cannot use clipped/culling views as xray, but they do not take damage.
-    if (this.gamemode === 'creative') { this.suffocateT = 0; UI.setWaterOverlay(headWaterNow); return; }
+    if (this.gamemode === 'creative') { this.suffocateT = 0; this.burnT = 0; UI.setWaterOverlay(headWaterNow); UI.setBurnOverlay(false); return; }
 
     if (this.exhaustion >= 4) {
       this.exhaustion -= 4;
@@ -2379,6 +2390,21 @@ const Player = {
       UI.updateStats();
     }
     UI.setWaterOverlay(headWater);
+
+    // lingering burn: keep taking fire damage for a while after leaving lava/fire;
+    // any water contact snuffs it out instantly
+    if (headWater || (typeof Physics !== 'undefined' && Physics.inWater(this.body, 0.2))) this.burnT = 0;
+    if (this.burnT > 0) {
+      this.burnT = Math.max(0, this.burnT - dt);
+      this.burnDmgT -= dt;
+      if (this.burnDmgT <= 0) {
+        this.burnDmgT = 0.6;
+        this.hp -= 1; this.rememberDamage({ source: 'fire' }); SFX.hurt(); UI.damageFlash(); UI.updateStats();
+        if (this.hp <= 0) { this.die({ source: 'fire' }); return; }
+      }
+      if (typeof Particles !== 'undefined' && Math.random() < 0.6) Particles.burst(this.body.x, this.body.y + 0.5 + Math.random(), this.body.z, [1, 0.5, 0.12], 2, 1.6);
+    }
+    UI.setBurnOverlay(this.burnT > 0);
   },
 
   // ---------------- viewmodel ----------------

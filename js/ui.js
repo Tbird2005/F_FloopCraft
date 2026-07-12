@@ -107,7 +107,7 @@ const UI = {
     const def = Reg[id];
     if (!def) return '';
     let extra = '';
-    if (def.food) extra = '\n+' + def.food + ' hunger';
+    if (def.food) extra = '\n+' + def.food + ' hunger' + (def.burnOnEat ? '\nSets you on fire' : '');
     else if (def.tool) extra = '\nDMG ' + def.tool.dmg + ' · ' + def.tool.type;
     else if (def.armor) extra = '\n+' + def.armor.points + ' armor';
     else if (def.gun) extra = '\nDMG ' + def.gun.dmg + (def.gun.pellets > 1 ? '×' + def.gun.pellets : '') + ' · uses ' + Reg[def.gun.ammo].name;
@@ -307,6 +307,11 @@ const UI = {
 
   setWaterOverlay(on) {
     this.el('waterOverlay').style.opacity = on ? 1 : 0;
+  },
+
+  setBurnOverlay(on) {
+    const el = this.el('burnOverlay');
+    if (el) el.classList.toggle('active', !!on);
   },
 
   _blockOverlayCache: {},
@@ -1497,7 +1502,7 @@ const UI = {
     ]);
     putMany('Food/Farm', [
       I.APPLE, I.COOKIE, I.BERRY, I.FLOOPFRUIT, I.FLOOPFRUIT_SEEDS, I.BONEMEAL,
-      I.RAW_MUTTON, I.COOKED_MUTTON, I.RAW_CHICKEN, I.COOKED_CHICKEN, I.SMOOTHIE, I.SNOWBALL, I.STAR,
+      I.RAW_MUTTON, I.COOKED_MUTTON, I.BURNT_MUTTON, I.RAW_CHICKEN, I.COOKED_CHICKEN, I.BURNT_CHICKEN, I.RAW_FISH, I.COOKED_FISH, I.BURNT_FISH, I.SMOOTHIE, I.SNOWBALL, I.STAR,
     ]);
     putMany('Vehicles/Fun', [I.CAR, I.SUPER_CAR, I.PLANE_WHEEL, I.PLANE_BODY, I.PLANE_WING, I.PLANE_ENGINE, I.PLANE_TAIL, I.PLANE, I.SKATEBOARD, I.BOAT, I.OBSIDIAN_BOAT, I.SUN]);
     putMany('Mobs', [
@@ -1506,7 +1511,7 @@ const UI = {
       I.EGG_MINNOW, I.EGG_SALMON, I.EGG_TUNA, I.EGG_CLOWNFISH, I.EGG_PUFFERFISH,
       I.EGG_ANGLERFISH, I.EGG_SHARK, I.EGG_JELLYFISH, I.EGG_STINGRAY, I.EGG_OCTOPUS,
       I.EGG_DOLPHIN, I.EGG_SEAHORSE, I.EGG_BARRACUDA, I.EGG_SEA_SERPENT, I.EGG_GIANT_SQUID,
-      I.EGG_SPRAWLER, I.EGG_FIREFLY,
+      I.EGG_SPRAWLER, I.EGG_FIREFLY, I.EGG_LAVABACK,
       I.JELLY_PERSON_PINK, I.JELLY_PERSON_CYAN, I.JELLY_PERSON_LIME, I.JELLY_PERSON_GRAPE, I.JELLY_PERSON_ORANGE, I.JELLY_PERSON_YELLOW,
     ]);
 

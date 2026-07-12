@@ -213,8 +213,8 @@ const Dynamics = {
         });
         h.lava = this.hazardCheck(upperBody, true).lava;
       }
-      if (h.lava) Player.hurt(4, 0, 0, { pierce: true, source: 'lava' });
-      else if (h.fire) Player.hurt(1, 0, 0, { pierce: true, source: 'fire' });
+      if (h.lava) { Player.hurt(4, 0, 0, { pierce: true, source: 'lava' }); Player.igniteBurn(8); }
+      else if (h.fire) { Player.hurt(1, 0, 0, { pierce: true, source: 'fire' }); Player.igniteBurn(5); }
       else if (h.cactus) Player.hurt(1, 0, 0, { source: 'cactus' });
     }
     // mobs are host-authoritative; a client must not damage them (it runs this only
@@ -222,9 +222,10 @@ const Dynamics = {
     if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'client' && Multiplayer.connected) return;
     for (const m of Mobs.list) {
       if (m.dead) continue;
+      if (m.type === 'lavaback') continue; // lava-native: manages its own water/beach hazards, immune to lava/fire
       const h = this.hazardCheck(m.body, false, m);
-      if (h.lava) Mobs.hurt(m, 4, 0, 0);
-      else if (h.fire) Mobs.hurt(m, 1, 0, 0);
+      if (h.lava) { Mobs.hurt(m, 4, 0, 0); Mobs.igniteBurn(m, 6); }
+      else if (h.fire) { Mobs.hurt(m, 1, 0, 0); Mobs.igniteBurn(m, 5); }
       else if (h.cactus) Mobs.hurt(m, 1, 0, 0);
     }
   },

@@ -60,10 +60,13 @@ const OCEAN_MOB_DEFS = {
 };
 const OCEAN_MOB_TYPES = Object.keys(OCEAN_MOB_DEFS);
 
-const MOB_XP = { creeper: 5, skeleton: 5, spider: 4, humbug: 8, sheep: 1, floop: 0, chicken: 1, camel: 2, tung: 12, jelly: 1, big_jelly: 3, firefly: FIREFLY_DEF.xp };
-const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36, sprawler: 40, jelly: 8, big_jelly: 20, firefly: FIREFLY_DEF.hp };
-const MOB_HEIGHTS = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4, sprawler: 2.0, jelly: 0.95, big_jelly: 1.8, firefly: FIREFLY_DEF.h };
-const MOB_WIDTHS = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4, sprawler: 1.45, jelly: 0.24, big_jelly: 0.34, firefly: FIREFLY_DEF.w };
+// Lavaback: a Lapras-shaped lava beast that lurks submerged in lava pools, surfaces to
+// spit fireballs at nearby players, then dives back under. Sprawler-tough; water/land kill it.
+const LAVABACK_DEF = { speed: 2.4, sight: 20, keepAway: 5, fireballMin: 4.5, meleeRange: 1.6, meleeDmg: 7, fireballDmg: 5, fireballBurn: 5, cooldown: 1.9, waterDps: 8, beachSecs: 9 };
+const MOB_XP = { creeper: 5, skeleton: 5, spider: 4, humbug: 8, sheep: 1, floop: 0, chicken: 1, camel: 2, tung: 12, jelly: 1, big_jelly: 3, lavaback: 9, firefly: FIREFLY_DEF.xp };
+const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36, sprawler: 40, jelly: 8, big_jelly: 20, lavaback: 40, firefly: FIREFLY_DEF.hp };
+const MOB_HEIGHTS = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4, sprawler: 2.0, jelly: 0.95, big_jelly: 1.8, lavaback: 2.0, firefly: FIREFLY_DEF.h };
+const MOB_WIDTHS = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4, sprawler: 1.45, jelly: 0.24, big_jelly: 0.34, lavaback: 0.85, firefly: FIREFLY_DEF.w };
 for (const [type, d] of Object.entries(OCEAN_MOB_DEFS)) { MOB_XP[type] = d.xp; MOB_MAX_HP[type] = d.hp; MOB_HEIGHTS[type] = d.h; MOB_WIDTHS[type] = d.w; }
 const HOSTILES = ['creeper', 'skeleton', 'humbug', 'tung', 'sprawler'];
 const MOB_TARGET_MEMORY = 30; // seconds: mobs remember a target after LOS breaks, but only acquire targets through LOS
@@ -657,6 +660,46 @@ const Mobs = {
         const fin = this.tbox(Math.max(0.05, d.w * 0.18), d.h * 0.8, d.len * 0.18, 'ocean_' + type, paint); fin.position.set(0, d.h * 0.93, -d.len * 0.05); fin.rotation.z = 0.35; g.add(fin); parts.fin = fin;
         if (d.angler) { const stem = this.box(0.035, d.h * 0.7, 0.035, 0x293044); stem.position.set(0, d.h * 1.15, d.len * 0.2); stem.rotation.x = -0.55; const lure = this.box(0.12, 0.12, 0.12, 0xc8ffff); lure.position.set(0, d.h * 1.35, d.len * 0.48); g.add(stem, lure); parts.lure = lure; }
       }
+    } else if (type === 'lavaback') {
+      // Lapras cut from cooling lava: dark basalt crust webbed with glowing cracks, a
+      // molten underbelly + paddle flippers, a long neck to a small head, stubby tail.
+      const crust = (c) => {
+        c.fillStyle = '#241812'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#150d09'; c.fillRect(2, 0, 2, 16); c.fillRect(11, 0, 1, 16);
+        c.fillStyle = '#ff6a1e'; c.fillRect(0, 7, 16, 1); c.fillRect(6, 0, 1, 16); c.fillRect(12, 3, 1, 10);
+        c.fillStyle = '#ffb648'; c.fillRect(3, 4, 2, 1); c.fillRect(9, 10, 2, 1); c.fillRect(6, 12, 2, 1);
+        this._skinSpeck(c, ['#160e08', '#ff7a2a', '#32210f'], 30, 91);
+      };
+      const molten = (c) => {
+        c.fillStyle = '#ff6a1e'; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = '#ffd44a'; c.fillRect(0, 5, 16, 6);
+        c.fillStyle = '#c53810'; c.fillRect(0, 0, 16, 2); c.fillRect(0, 14, 16, 2);
+        this._skinSpeck(c, ['#ff9a3a', '#ffe98a', '#e2560f'], 26, 45);
+      };
+      const glow = { emissive: 0xff5a1e, emissiveIntensity: 0.5 };
+      const belly = { emissive: 0xff7a26, emissiveIntensity: 0.8 };
+      const body = this.tbox(1.5, 0.95, 1.5, 'lava_crust', crust, null, glow); body.position.set(0, 0.82, 0);
+      const under = this.tbox(1.3, 0.42, 1.32, 'lava_molten', molten, null, belly); under.position.set(0, 0.44, 0);
+      const shell = this.tbox(1.34, 0.62, 1.34, 'lava_crust', crust, null, glow); shell.position.set(0, 1.44, -0.06);
+      for (const [sx, sz] of [[0, -0.12], [-0.36, 0.16], [0.36, 0.16]]) {
+        const sp = this.tbox(0.2, 0.52, 0.2, 'lava_crust', crust, null, glow);
+        sp.position.set(sx, 1.84, sz); sp.rotation.x = sz > 0 ? 0.22 : -0.16; g.add(sp);
+      }
+      const neck = this.tbox(0.42, 1.0, 0.44, 'lava_crust', crust, null, glow); neck.position.set(0, 1.3, 0.6); neck.rotation.x = -0.5;
+      const head = this.tbox(0.5, 0.46, 0.62, 'lava_crust', crust, null, glow); head.position.set(0, 1.88, 1.0);
+      const eyeGeo = new THREE.BoxGeometry(0.1, 0.12, 0.05);
+      const eyeMat = new THREE.MeshBasicMaterial({ color: 0xfff2a0 });
+      const eyeL = new THREE.Mesh(eyeGeo, eyeMat), eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+      eyeL.position.set(-0.15, 0.06, 0.3); eyeR.position.set(0.15, 0.06, 0.3); head.add(eyeL, eyeR);
+      const tail = this.tbox(0.34, 0.34, 0.5, 'lava_crust', crust, null, glow); tail.position.set(0, 0.64, -0.86); tail.rotation.x = 0.42;
+      parts.flippers = [];
+      for (const [fx, fz] of [[-0.72, 0.5], [0.72, 0.5], [-0.72, -0.5], [0.72, -0.5]]) {
+        const fl = this.tbox(0.5, 0.2, 0.72, 'lava_molten', molten, null, belly);
+        fl.position.set(fx, 0.42, fz); fl.rotation.z = fx < 0 ? 0.5 : -0.5;
+        g.add(fl); parts.flippers.push(fl);
+      }
+      g.add(body, under, shell, neck, head, tail);
+      parts.head = head; parts.neck = neck; parts.body = body;
     } else if (type === 'sprawler') {
       // Uncanny found-footage cryptid silhouette: tar-black hide, stilt legs,
       // a hanging faceless hood, and no exposed flesh/bones.
@@ -1265,6 +1308,8 @@ const Mobs = {
     this.repairMobHealth(mob);
     mob.flash = 0.25;
     mob.lastSrc = src || null;
+    mob.lastDamageFire = !!mob._pendingFireDamage || ['fire', 'lava', 'sunlight', 'fireball'].includes(src);
+    mob._pendingFireDamage = false;
     // Hitting a daytime spider makes it hold a grudge for 10 minutes.
     // If the player leaves it alone, this counts down and it goes peaceful again.
     if (mob.type === 'spider' && src === 'player') mob.angryPlayerT = 600;
@@ -1297,6 +1342,10 @@ const Mobs = {
     if (mob.hp <= 0) this.kill(mob);
   },
 
+  fireKilled(mob) {
+    return !!(mob && (mob.lastDamageFire || ['fire', 'lava', 'sunlight', 'fireball'].includes(mob.lastSrc)));
+  },
+
   kill(mob) {
     mob.dead = true;
     const b = mob.body;
@@ -1304,11 +1353,18 @@ const Mobs = {
     if (mob.lastSrc === 'player') Player.addXp(MOB_XP[mob.type] || 0);
     if (OCEAN_MOB_DEFS[mob.type]) {
       const d = OCEAN_MOB_DEFS[mob.type];
-      if (d.drop) Drops.spawn(b.x, b.y + 0.35, b.z, d.drop, mob.type === 'shark' ? 1 + ((Math.random() * 3) | 0) : mob.type === 'tuna' ? 2 : 1);
+      if (d.drop) {
+        const dropId = this.fireKilled(mob) && d.drop === I.RAW_FISH ? I.BURNT_FISH : d.drop;
+        Drops.spawn(b.x, b.y + 0.35, b.z, dropId, mob.type === 'shark' ? 1 + ((Math.random() * 3) | 0) : mob.type === 'tuna' ? 2 : 1);
+      }
       if (mob.type === 'anglerfish' && Math.random() < 0.18) Drops.spawn(b.x, b.y + 0.35, b.z, I.PEARL, 1);
       if (mob.type === 'octopus' && Math.random() < 0.35) Drops.spawn(b.x, b.y + 0.35, b.z, I.INK_SAC, 1);
     } else if (mob.type === 'firefly') {
       Drops.spawn(b.x, b.y + 0.12, b.z, I.JELLY_GLOB_ORANGE, 1);
+    } else if (mob.type === 'lavaback') {
+      Drops.spawn(b.x, b.y + 0.6, b.z, I.OBSIDIAN, 1 + ((Math.random() * 2) | 0));
+      Drops.spawn(b.x, b.y + 0.6, b.z, I.COAL, 1 + ((Math.random() * 3) | 0));
+      if (Math.random() < 0.15) Drops.spawn(b.x, b.y + 0.6, b.z, I.FLOOPIUM, 1);
     } else if (mob.type === 'creeper') {
       Drops.spawn(b.x, b.y + 0.5, b.z, I.GUNPOWDER, 1 + ((Math.random() * 2) | 0));
     } else if (mob.type === 'skeleton') {
@@ -1317,10 +1373,10 @@ const Mobs = {
     } else if (mob.type === 'sheep') {
       const woolId = mob.color ? WOOL_COLOR_BLOCKS[mob.color] : B.WOOL;
       Drops.spawn(b.x, b.y + 0.5, b.z, woolId, 1 + ((Math.random() * 2) | 0));
-      Drops.spawn(b.x, b.y + 0.5, b.z, I.RAW_MUTTON, 1 + ((Math.random() * 2) | 0));
+      Drops.spawn(b.x, b.y + 0.5, b.z, this.fireKilled(mob) ? I.BURNT_MUTTON : I.RAW_MUTTON, 1 + ((Math.random() * 2) | 0));
     } else if (mob.type === 'chicken') {
       Drops.spawn(b.x, b.y + 0.5, b.z, I.FEATHER, 1 + ((Math.random() * 2) | 0));
-      Drops.spawn(b.x, b.y + 0.5, b.z, I.RAW_CHICKEN, 1);
+      Drops.spawn(b.x, b.y + 0.5, b.z, this.fireKilled(mob) ? I.BURNT_CHICKEN : I.RAW_CHICKEN, 1);
     } else if (mob.type === 'jelly' || mob.type === 'big_jelly') {
       const globId = (typeof JELLY_GLOB_BY_COLOR !== 'undefined' && JELLY_GLOB_BY_COLOR[mob.color]) ? JELLY_GLOB_BY_COLOR[mob.color] : I.JELLY_GLOB_PINK;
       Drops.spawn(b.x, b.y + 0.35, b.z, globId, mob.type === 'big_jelly' ? 5 + ((Math.random() * 2) | 0) : 1);
@@ -1370,10 +1426,9 @@ const Mobs = {
     const dx = (tx - ox) - (x - ox), dy = (ty - oy) - (y - oy), dz = (tz - oz) - (z - oz);
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
     const speed = opts.speed || (owner === 'player' ? 24 : 17);
-    const g = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 0.08, 0.5),
-      new THREE.MeshLambertMaterial({ color: 0xd8d8d8 })
-    );
+    const g = opts.fireball
+      ? new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffb24a }))
+      : new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.5), new THREE.MeshLambertMaterial({ color: 0xd8d8d8 }));
     g.position.set(x, y, z);
     this.scene.add(g);
     const arrow = {
@@ -1382,7 +1437,8 @@ const Mobs = {
       vy: (opts.straight || opts.aimed) ? (dy / dist * speed) : (dy / dist * speed + dist * 0.42),
       vz: dz / dist * speed,
       gravity: (opts.gravity !== undefined) ? opts.gravity : (opts.straight ? 0 : 18),
-      w: 0.08, h: 0.08, mesh: g, life: opts.life || 5, stuck: 0, owner: owner || null,
+      w: opts.fireball ? 0.2 : 0.08, h: opts.fireball ? 0.2 : 0.08, mesh: g, life: opts.life || 5, stuck: 0, owner: owner || null,
+      fireball: !!opts.fireball, dmg: opts.dmg || 0, burn: opts.burn || 0,
     };
     if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(arrow);
     g.userData.farBody = arrow;
@@ -1399,15 +1455,18 @@ const Mobs = {
         this.arrows.splice(i, 1);
         continue;
       }
-      // match voxel lighting like mobs/drops do (arrows used to glow in caves)
-      a._tintT = (a._tintT || 0) - dt;
-      if (a._tintT <= 0) {
-        a._tintT = 0.20;
-        const c = World.getLightColor(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z), undefined, 0.06);
-        const mt = a.mesh.material;
-        if (mt && mt.color) {
-          if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone();
-          mt.color.copy(mt.userData.mobBaseCol); mt.color.r *= c[0]; mt.color.g *= c[1]; mt.color.b *= c[2];
+      // match voxel lighting like mobs/drops do (arrows used to glow in caves).
+      // fireballs are self-lit — skip the tint so they stay glowing in dark caves.
+      if (!a.fireball) {
+        a._tintT = (a._tintT || 0) - dt;
+        if (a._tintT <= 0) {
+          a._tintT = 0.20;
+          const c = World.getLightColor(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z), undefined, 0.06);
+          const mt = a.mesh.material;
+          if (mt && mt.color) {
+            if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone();
+            mt.color.copy(mt.userData.mobBaseCol); mt.color.r *= c[0]; mt.color.g *= c[1]; mt.color.b *= c[2];
+          }
         }
       }
       if (a.stuck) continue;
@@ -1420,14 +1479,20 @@ const Mobs = {
         a.mesh.position.set(a.x, a.y, a.z);
         a.mesh.lookAt(a.x + a.vx, a.y + a.vy, a.z + a.vz);
       }
+      // fireballs leave a smoking trail as they fly
+      if (a.fireball && typeof Particles !== 'undefined' && Math.random() < 0.85) {
+        const tp = a._farPos || a;
+        Particles.burst(tp.x, tp.y, tp.z, [1, 0.55, 0.14], 2, 1.3);
+      }
       let consumed = false;
-      // hit the player? (mob arrows only; creative players are not targets)
+      // hit the player? (mob projectiles only; creative players are not targets)
       if (a.owner !== 'player' && !Player.dead && Player.gamemode !== 'creative') {
         const p = Player.body;
         const d = this.farDelta(p, a);
         if (d.x > -p.w - 0.1 && d.x < p.w + 0.1 &&
             d.y > 0 && d.y < p.h && d.z > -p.w - 0.1 && d.z < p.w + 0.1) {
-          Player.hurt(3, a.vx * 0.25, a.vz * 0.25, { source: 'arrow', attackerType: a.owner && a.owner.type || '' });
+          if (a.fireball) { Player.hurt(a.dmg || 5, a.vx * 0.2, a.vz * 0.2, { source: 'fireball', attackerType: (a.owner && a.owner.type) || 'lavaback' }); Player.igniteBurn(a.burn || 5); }
+          else Player.hurt(3, a.vx * 0.25, a.vz * 0.25, { source: 'arrow', attackerType: a.owner && a.owner.type || '' });
           consumed = true;
         }
       }
@@ -1435,18 +1500,25 @@ const Mobs = {
       if (!consumed) {
         for (const m of this.list) {
           if (m.dead || m === a.owner) continue;
+          if (a.fireball && m.type === 'lavaback') continue; // fire beasts shrug off fireballs
           const b = m.body;
           const d = this.farDelta(b, a);
           if (d.x > -b.w - 0.1 && d.x < b.w + 0.1 &&
               d.y > 0 && d.y < b.h && d.z > -b.w - 0.1 && d.z < b.w + 0.1) {
-            this.hurt(m, 3, a.vx * 0.25, a.vz * 0.25, a.owner === 'player' ? 'player' : a.owner);
+            if (a.fireball) { m._pendingFireDamage = true; this.hurt(m, a.dmg || 4, a.vx * 0.2, a.vz * 0.2, a.owner === 'player' ? 'player' : a.owner); this.igniteBurn(m, a.burn || 4); }
+            else this.hurt(m, 3, a.vx * 0.25, a.vz * 0.25, a.owner === 'player' ? 'player' : a.owner);
             consumed = true;
             break;
           }
         }
       }
       if (consumed || Physics.solidAt(a.x, a.y, a.z)) {
-        if (consumed) {
+        // fireballs burst on any impact instead of sticking like arrows
+        if (a.fireball) {
+          if (typeof Particles !== 'undefined') { const tp = a._farPos || a; Particles.burst(tp.x, tp.y, tp.z, [1, 0.55, 0.12], 12, 3.2); }
+          this.scene.remove(a.mesh); a.mesh.geometry.dispose();
+          this.arrows.splice(i, 1);
+        } else if (consumed) {
           this.scene.remove(a.mesh); a.mesh.geometry.dispose();
           this.arrows.splice(i, 1);
         } else {
@@ -2030,6 +2102,15 @@ const Mobs = {
     if (!World.hasChunk || !World.hasChunk(Math.floor(x), Math.floor(z))) return false;
     const w = MOB_WIDTHS[type] || 0.35;
     const h = MOB_HEIGHTS[type] || 1.8;
+    if (type === 'lavaback') {
+      const cx = Math.floor(x), cy = Math.floor(y), cz = Math.floor(z);
+      let lavaCells = 0;
+      for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+        if (isLava(World.getBlock(cx + ox, cy, cz + oz)) && isLava(World.getBlock(cx + ox, cy - 1, cz + oz))) lavaCells++;
+      }
+      if (lavaCells < 5) return false;
+      return !Physics.boxesIn(x - w, y + 0.15, z - w, x + w, y + h - 0.04, z + w).length;
+    }
     // no upper bound: the world is sparse-infinite above H (player skybases)
     if (y < 1) return false;
     if (Physics.boxesIn(x - w, y + 0.04, z - w, x + w, y + h - 0.04, z + w).length) return false;
@@ -2737,6 +2818,30 @@ const Mobs = {
     return null;
   },
 
+  // Find an underground or surface lava-pool top near the player. Do not stop at
+  // cave ceilings: the old early exit made every pool below solid rock invisible.
+  lavaSpot(p, minR, maxR) {
+    const top = World.H - 3, bottom = 2;
+    for (let tries = 0; tries < 24; tries++) {
+      const a = Math.random() * Math.PI * 2, r = minR + Math.random() * (maxR - minR);
+      const x = Math.floor(p.x + Math.cos(a) * r), z = Math.floor(p.z + Math.sin(a) * r);
+      if (!World.hasChunk(x, z)) continue;
+      for (let y = top; y >= bottom; y--) {
+        if (!isLava(World.getBlock(x, y, z))) continue;
+        // Only the top lava cell of a pool can host the creature.
+        if (isLava(World.getBlock(x, y + 1, z))) continue;
+        if (World.getBlock(x, y + 1, z) !== B.AIR || World.getBlock(x, y + 2, z) !== B.AIR || !isLava(World.getBlock(x, y - 1, z))) continue;
+        let lavaCells = 0, clearCells = 0;
+        for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+          if (isLava(World.getBlock(x + ox, y, z + oz)) && isLava(World.getBlock(x + ox, y - 1, z + oz))) lavaCells++;
+          if (World.getBlock(x + ox, y + 1, z + oz) === B.AIR && World.getBlock(x + ox, y + 2, z + oz) === B.AIR) clearCells++;
+        }
+        if (lavaCells >= 5 && clearCells >= 5) return { x: x + 0.5, y: y + 0.1, z: z + 0.5 };
+      }
+    }
+    return null;
+  },
+
   oceanType(depth, biome) {
     const r = Math.random(), ocean = biome === 'ocean' || biome === 'deep_ocean';
     if (ocean && Game.isNight) {
@@ -2769,6 +2874,175 @@ const Mobs = {
       if (World.isWaterAt(x, yy, z, id)) return { x: p.x, y: yy + Math.min(0.72, World.waterLevelAt(x, yy, z, id) / 9 - 0.08), z: p.z };
     }
     return null;
+  },
+
+  // ---------- fire / burning ----------
+  // shared additive flame billboard texture (yellow core -> orange -> transparent)
+  flameMaterial() {
+    if (!this._flameTex) {
+      const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+      const c = cv.getContext('2d');
+      const g = c.createRadialGradient(16, 20, 1, 16, 17, 15);
+      g.addColorStop(0, 'rgba(255,244,170,1)');
+      g.addColorStop(0.4, 'rgba(255,150,32,0.92)');
+      g.addColorStop(0.78, 'rgba(224,64,0,0.34)');
+      g.addColorStop(1, 'rgba(200,40,0,0)');
+      c.fillStyle = g; c.beginPath(); c.ellipse(16, 17, 12, 16, 0, 0, Math.PI * 2); c.fill();
+      this._flameTex = new THREE.CanvasTexture(cv);
+    }
+    return new THREE.SpriteMaterial({ map: this._flameTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  },
+
+  // set a mob on fire for `secs` (engulfing flames + burn damage). Lava-native mobs are immune.
+  igniteBurn(m, secs) {
+    if (!m || m.dead || m.type === 'lavaback') return;
+    if (typeof Physics !== 'undefined' && Physics.inWater(m.body, 0.3)) return;
+    m.fireT = Math.max(m.fireT || 0, secs || 0);
+  },
+
+  showMobFlames(m, dt) {
+    if (!m.flames) {
+      const b = m.body, n = b.h > 1.4 ? 5 : 3, base = 0.55 + b.w * 1.7;
+      m.flames = [];
+      for (let i = 0; i < n; i++) {
+        const s = new THREE.Sprite(this.flameMaterial());
+        s.userData = {
+          base: base * (0.7 + Math.random() * 0.6), phase: Math.random() * Math.PI * 2,
+          ox: (Math.random() - 0.5) * b.w * 2.2, oz: (Math.random() - 0.5) * b.w * 2.2,
+          oy: 0.15 + Math.random() * Math.max(0.5, b.h * 0.9),
+        };
+        m.group.add(s); m.flames.push(s);
+      }
+    }
+    m.flameAnim = (m.flameAnim || 0) + dt * 13;
+    for (const s of m.flames) {
+      const u = s.userData, flick = 0.72 + Math.sin(m.flameAnim + u.phase) * 0.28;
+      s.scale.set(u.base * flick, u.base * (1.25 + Math.sin(m.flameAnim * 1.3 + u.phase) * 0.3), 1);
+      s.position.set(u.ox, u.oy + Math.sin(m.flameAnim * 0.7 + u.phase) * 0.12, u.oz);
+    }
+  },
+
+  clearMobFlames(m) {
+    if (!m.flames) return;
+    for (const s of m.flames) { if (s.parent) s.parent.remove(s); if (s.material) s.material.dispose(); }
+    m.flames = null;
+  },
+
+  updateMobFire(m, dt) {
+    if (m.fireT > 0 && typeof Physics !== 'undefined' && Physics.inWater(m.body, 0.3)) m.fireT = 0;
+    const burning = m.fireT > 0, visual = burning || !!m.sunFireVisual || !!m.mpFireVisual;
+    if (burning) {
+      m.fireT -= dt;
+      m.fireDmgT = (m.fireDmgT || 0) - dt;
+      if (m.fireDmgT <= 0) { m.fireDmgT = 0.6; this.hurt(m, 1, 0, 0, 'fire'); if (m.hp <= 0) return; }
+      if (typeof Particles !== 'undefined' && Math.random() < 0.25) { const b = m.body; Particles.burst(b.x, b.y + b.h * 0.6, b.z, [0.25, 0.25, 0.27], 2, 1.4); }
+    }
+    if (visual) this.showMobFlames(m, dt);
+    else if (m.flames) this.clearMobFlames(m);
+  },
+
+  // ---------- lavaback: Lapras-shaped lava beast ----------
+  updateLavaMonster(m, dt) {
+    const b = m.body, cy = b.y + b.h * 0.5;
+    const bx = Math.floor(b.x), bz = Math.floor(b.z);
+    const lavaAt = (yy) => isLava(World.getBlock(bx, yy, bz));
+    const inLava = (typeof Physics !== 'undefined' && Physics.inLava(b, 0.3)) || lavaAt(Math.floor(b.y + 0.3)) || lavaAt(Math.floor(cy));
+    const inWater = typeof Physics !== 'undefined' && Physics.inWater(b, 0.3);
+
+    // hazards: water is lethal to a lava beast; sitting beached on land slowly kills it
+    if (inWater) {
+      if (typeof Particles !== 'undefined') Particles.burst(b.x, cy, b.z, [0.78, 0.8, 0.86], 8, 2.6);
+      m.douseT = (m.douseT || 0) - dt;
+      if (m.douseT <= 0) { m.douseT = 0.4; this.hurt(m, LAVABACK_DEF.waterDps * 0.4, 0, 0, 'water'); if (m.hp <= 0) { this.kill(m); return; } }
+      m.beachT = 0;
+    } else if (!inLava) {
+      m.beachT = (m.beachT || 0) + dt;
+      if (m.beachT > LAVABACK_DEF.beachSecs) {
+        m.beachDmgT = (m.beachDmgT || 0) - dt;
+        if (m.beachDmgT <= 0) { m.beachDmgT = 1.2; this.hurt(m, 3, 0, 0, 'beach'); if (typeof Particles !== 'undefined') Particles.burst(b.x, b.y + 1, b.z, [0.3, 0.3, 0.32], 6, 1.8); if (m.hp <= 0) { this.kill(m); return; } }
+      }
+    } else { m.beachT = 0; m.douseT = 0; }
+
+    // nearest player/peer (creative players return null, so they aren't targeted)
+    let tgt = null, tdist = 1e9, tp = null;
+    for (const cand of [this.makePlayerTarget(), ...this.makePeerTargets()]) {
+      if (!cand) continue;
+      const wp = this.targetWorldPos(cand);
+      const dd = Math.hypot(wp.x - b.x, wp.z - b.z);
+      if (dd < tdist) { tdist = dd; tgt = cand; tp = wp; }
+    }
+    const engaged = !!(tgt && tdist < LAVABACK_DEF.sight);
+
+    // topmost lava cell in this column = the pool surface
+    let surfaceY = null;
+    for (let yy = Math.floor(b.y) + 4; yy > Math.floor(b.y) - 3; yy--) { if (lavaAt(yy)) { surfaceY = yy + 1; break; } }
+
+    m.diveT = (m.diveT || 0) - dt;
+    if (engaged && m.diveT <= 0) m.surfaced = true;
+    if (m.surfaced && engaged && Math.random() < 0.004) { m.surfaced = false; m.diveT = 2 + Math.random() * 3; } // occasionally dive to hide
+    if (!engaged) m.surfaced = false;
+
+    if (inLava) {
+      let desiredY = b.y;
+      if (surfaceY !== null) desiredY = m.surfaced ? surfaceY - 0.35 : surfaceY - b.h - 0.1;
+      b.vy += (Math.max(-2.2, Math.min(2.6, (desiredY - b.y) * 3)) - b.vy) * Math.min(1, dt * 5);
+      const wander = (vx, vz) => {
+        b.vx += (vx - b.vx) * Math.min(1, dt * 2.5); b.vz += (vz - b.vz) * Math.min(1, dt * 2.5);
+        const ax = Math.floor(b.x + Math.sign(b.vx) * 1.1), az = Math.floor(b.z + Math.sign(b.vz) * 1.1);
+        if (!isLava(World.getBlock(ax, Math.floor(cy), az))) { b.vx *= -0.4; b.vz *= -0.4; } // stay in the pool, don't beach
+      };
+      if (engaged && tp) {
+        const dx = tp.x - b.x, dz = tp.z - b.z, dl = Math.hypot(dx, dz) || 1;
+        // Ranged mob spacing: approach only when too far away, retreat whenever
+        // the player closes inside five blocks, and hold position in the firing band.
+        if (dl < LAVABACK_DEF.keepAway) wander(-dx / dl * LAVABACK_DEF.speed, -dz / dl * LAVABACK_DEF.speed);
+        else if (dl > LAVABACK_DEF.keepAway + 2) wander(dx / dl * LAVABACK_DEF.speed * (m.surfaced ? 0.55 : 0.9), dz / dl * LAVABACK_DEF.speed * (m.surfaced ? 0.55 : 0.9));
+        else wander(0, 0);
+      } else {
+        m.swimT = (m.swimT || 0) - dt;
+        if (m.swimT <= 0 || !m.swimDir) { const a = Math.random() * Math.PI * 2; m.swimDir = [Math.cos(a), Math.sin(a)]; m.swimT = 2 + Math.random() * 3; }
+        wander(m.swimDir[0] * LAVABACK_DEF.speed * 0.5, m.swimDir[1] * LAVABACK_DEF.speed * 0.5);
+      }
+      Physics.move(b, dt, { stepUp: false });
+    } else {
+      b.vy = Math.max(-20, b.vy - Physics.GRAV * dt); b.vx *= 0.9; b.vz *= 0.9;
+      Physics.move(b, dt, { stepUp: false });
+    }
+
+    // Face the direction it is actually swimming. When nearly stationary at its
+    // preferred firing range, face the target instead.
+    const swimSpeed = Math.hypot(b.vx, b.vz);
+    const faceYaw = swimSpeed > 0.12 ? Math.atan2(b.vx, b.vz) : (tp ? Math.atan2(tp.x - b.x, tp.z - b.z) : m.yaw);
+    m.yaw += wrapAngle(faceYaw - m.yaw) * Math.min(1, 6 * dt);
+
+    m.meleeT = Math.max(0, (m.meleeT || 0) - dt);
+    if (engaged && tgt && tp && tdist <= LAVABACK_DEF.meleeRange && Math.abs((tp.y || b.y) - b.y) < 2.4 && m.meleeT <= 0) {
+      const dx = tp.x - b.x, dz = tp.z - b.z, dl = Math.hypot(dx, dz) || 1;
+      m.meleeT = 0.9;
+      this.dmgTarget(tgt, LAVABACK_DEF.meleeDmg, dx / dl * 7, dz / dl * 7, m);
+    }
+
+    m.shootCd = (m.shootCd === undefined ? LAVABACK_DEF.cooldown : m.shootCd) - dt;
+    const mouthY = b.y + b.h * 0.92;
+    const fullySurfaced = !!(m.surfaced && surfaceY !== null && b.y >= surfaceY - 0.52 && !isLava(World.getBlock(Math.floor(b.x), Math.floor(mouthY), Math.floor(b.z))));
+    if (engaged && tdist >= LAVABACK_DEF.fireballMin && fullySurfaced && m.shootCd <= 0 && tp && this.canSeeTarget(m, tgt)) {
+      m.shootCd = LAVABACK_DEF.cooldown + Math.random() * 0.8;
+      const mx = b.x, my = mouthY, mz = b.z;
+      this.shootArrow(mx, my, mz, tp.x, tp.y + 1.0, tp.z, m, { fireball: true, straight: true, speed: 15, gravity: 3, dmg: LAVABACK_DEF.fireballDmg, burn: LAVABACK_DEF.fireballBurn });
+      if (typeof Particles !== 'undefined') Particles.burst(mx, my, mz, [1, 0.5, 0.1], 8, 3);
+      if (typeof SFX !== 'undefined' && SFX.mobHurt) SFX.mobHurt({ x: mx, y: my, z: mz });
+    }
+
+    if (b.y < -12) { this.kill(m); return; }
+
+    m.group.position.set(b.x, b.y, b.z);
+    m.group.rotation.y = m.yaw;
+    m.walkAnim = (m.walkAnim || 0) + dt * 3;
+    if (m.parts.neck) m.parts.neck.rotation.x = -0.5 + Math.sin(m.walkAnim) * 0.08;
+    if (m.parts.flippers) m.parts.flippers.forEach((f, i) => { f.rotation.x = Math.sin(m.walkAnim * 1.4 + i) * 0.25; });
+    const pulse = 0.4 + (Math.sin(m.walkAnim * 1.5) * 0.5 + 0.5) * 0.35;
+    this.setEmissive(m, m.flash > 0 ? 1.4 : pulse, m.flash > 0 ? 0xff2020 : 0xff5a1e);
+    if (m.flash > 0) m.flash = Math.max(0, m.flash - dt);
   },
 
   updateAquaticMob(m, dt) {
@@ -2903,6 +3177,7 @@ const Mobs = {
       if (m.type === 'sprawler') {
         const sunlit = !Game.isNight && World.skyExposed(Math.floor(b.x), Math.floor(b.y + b.h), Math.floor(b.z));
         m.burnT = sunlit ? (m.burnT || 0) + dt : 0;
+        if (sunlit) this.igniteBurn(m, 1.0); // engulf it in visible flames while it cooks in daylight
         if (m.burnT >= 0.8) {
           m.burnT = 0;
           this.hurt(m, 4, 0, 0, 'sunlight');
@@ -2929,6 +3204,9 @@ const Mobs = {
       }
       if (m.floopHurtVoiceCd > 0) m.floopHurtVoiceCd = Math.max(0, m.floopHurtVoiceCd - dt);
       if ((distPlayer > 52 && !nearAnyMultiplayerPlayer) || !World.hasChunk(Math.floor(b.x), Math.floor(b.z))) continue;
+      m.sunFireVisual = m.type === 'skeleton' && !Game.isNight && World.skyExposed(Math.floor(b.x), Math.floor(b.y + 1), Math.floor(b.z)) && !(typeof Physics !== 'undefined' && Physics.inWater(b, 0.3));
+      this.updateMobFire(m, dt); if (m.hp <= 0) { this.kill(m); continue; }
+      if (m.type === 'lavaback') { this.updateLavaMonster(m, dt); continue; }
       if (OCEAN_MOB_DEFS[m.type]) { this.updateAquaticMob(m, dt); continue; }
       if (m.type === 'firefly') { this.updateFirefly(m, dt); continue; }
       if (this.updateMobBreathingAndSuffocation(m, dt)) { if (!m.dead && m.hp <= 0) this.kill(m); continue; }
@@ -3503,6 +3781,7 @@ const Mobs = {
     const tungs = this.list.filter(m => m.type === 'tung').length;
     const sprawlers = this.list.filter(m => m.type === 'sprawler').length;
     const fireflies = this.list.filter(m => m.type === 'firefly').length;
+    const lavabacks = this.list.filter(m => m.type === 'lavaback').length;
 
 
     // One lightweight nighttime swarm at a time. Each swarm is 5-10 fireflies.
@@ -3613,6 +3892,12 @@ const Mobs = {
         }
       }
     }
+    // Lavaback: lurks in lava, day or night, regardless of light level. Capped low so a
+    // lava lake usually holds 1-2 (sometimes 0), never a swarm.
+    if (lavabacks < 2 && Math.random() < 0.4) { // deliberately not gated by Game.isNight
+      const pos = this.lavaSpot(p, 8, 40);
+      if (pos && this.spawnFits('lavaback', pos.x, pos.y, pos.z)) this.spawn('lavaback', pos.x, pos.y, pos.z);
+    }
     if (!Game.isNight && passive < 7 && Math.random() < 0.09) {
       const pos = this.surfaceSpot(p, 16, 34);
       if (pos) {
@@ -3668,7 +3953,7 @@ const Mobs = {
   // spiders keep their old despawn behaviour so they can't pile up in the dormant store.
   isPersistentType(t) {
     if (HOSTILES.includes(t) || JELLY_MOB_TYPES.includes(t)) return false;
-    if (t === 'floop' || t === 'firefly' || t === 'spider') return false;
+    if (t === 'floop' || t === 'firefly' || t === 'spider' || t === 'lavaback') return false;
     const od = OCEAN_MOB_DEFS[t];
     if (od && od.hostile) return false;
     return true;

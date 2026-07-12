@@ -151,9 +151,10 @@ const I = {
   EGG_MINNOW: 5010, EGG_SALMON: 5011, EGG_TUNA: 5012, EGG_CLOWNFISH: 5013, EGG_PUFFERFISH: 5014,
   EGG_ANGLERFISH: 5015, EGG_SHARK: 5016, EGG_JELLYFISH: 5017, EGG_STINGRAY: 5018, EGG_OCTOPUS: 5019,
   EGG_DOLPHIN: 5020, EGG_SEAHORSE: 5021, EGG_BARRACUDA: 5022, EGG_SEA_SERPENT: 5023, EGG_GIANT_SQUID: 5024,
-  EGG_SPRAWLER: 5025, EGG_FIREFLY: 5026,
+  EGG_SPRAWLER: 5025, EGG_FIREFLY: 5026, EGG_LAVABACK: 5027,
   DIVING_HELMET: 5030, DIVING_CHEST: 5031, DIVING_LEGS: 5032, DIVING_BOOTS: 5033,
   OXYGEN_TANK_1M: 5034, OXYGEN_TANK_5M: 5035, SEA_LANTERN_SHARD: 5036,
+  BURNT_MUTTON: 5037, BURNT_CHICKEN: 5038, BURNT_FISH: 5039,
 };
 I.IRON_CHUNK = I.IRON_INGOT;
 I.GOLD_CHUNK = I.GOLD_INGOT;
@@ -1133,7 +1134,7 @@ const EGG_TYPE = {
   [I.EGG_PUFFERFISH]: 'pufferfish', [I.EGG_ANGLERFISH]: 'anglerfish', [I.EGG_SHARK]: 'shark', [I.EGG_JELLYFISH]: 'jellyfish',
   [I.EGG_STINGRAY]: 'stingray', [I.EGG_OCTOPUS]: 'octopus', [I.EGG_DOLPHIN]: 'dolphin', [I.EGG_SEAHORSE]: 'seahorse',
   [I.EGG_BARRACUDA]: 'barracuda', [I.EGG_SEA_SERPENT]: 'sea_serpent', [I.EGG_GIANT_SQUID]: 'giant_squid',
-  [I.EGG_SPRAWLER]: 'sprawler', [I.EGG_FIREFLY]: 'firefly',
+  [I.EGG_SPRAWLER]: 'sprawler', [I.EGG_FIREFLY]: 'firefly', [I.EGG_LAVABACK]: 'lavaback',
 };
 
 // ---------------------------------------------------------------
@@ -1539,10 +1540,13 @@ defItem(I.BERRY, 'Floop Berry', { food: 6 });
 defItem(I.FLOOPFRUIT, 'Floopfruit', { food: 10, stack: 16, tip: 'A rich fruit grown in plantation pots.' });
 defItem(I.RAW_MUTTON, 'Raw Mutton', { food: 2 });
 defItem(I.COOKED_MUTTON, 'Cooked Mutton', { food: 8 }); // the new best food
+defItem(I.BURNT_MUTTON, 'Burnt Mutton', { food: 1, burnOnEat: 5, tip: 'Charred beyond recognition. Somehow still edible.' });
 defItem(I.RAW_CHICKEN, 'Raw Chicken', { food: 1 });
 defItem(I.COOKED_CHICKEN, 'Cooked Chicken', { food: 5 }); // respectably worse than floop berries
+defItem(I.BURNT_CHICKEN, 'Burnt Chicken', { food: 0.5, burnOnEat: 5, tip: 'It fights back on the way down.' });
 defItem(I.RAW_FISH, 'Raw Fish', { food: 2 });
 defItem(I.COOKED_FISH, 'Cooked Fish', { food: 7 });
+defItem(I.BURNT_FISH, 'Burnt Fish', { food: 1, burnOnEat: 5, tip: 'Crispy enough to be considered a weapon.' });
 defItem(I.SHARK_TOOTH, 'Shark Tooth');
 defItem(I.INK_SAC, 'Ink Sac');
 defItem(I.PEARL, 'Pearl');
@@ -2943,10 +2947,13 @@ const Icons = {
       [I.DYE_GREEN]: { m: '#27ae60', M: '#1d8a4a' },
       [I.RAW_MUTTON]: { m: '#e2606a', M: '#a83240' },
       [I.COOKED_MUTTON]: { m: '#9a5a2e', M: '#5e3013' },
+      [I.BURNT_MUTTON]: { m: '#2a211c', M: '#090706', w: '#8f775f' },
       [I.RAW_CHICKEN]: { m: '#f2c9a4', M: '#d8a87e' },
       [I.COOKED_CHICKEN]: { m: '#c9803a', M: '#96591e' },
+      [I.BURNT_CHICKEN]: { m: '#2b241f', M: '#0a0807', w: '#8f775f' },
       [I.RAW_FISH]: { m: '#6eb4cf', M: '#2e6f8a', w: '#d8f5ff' },
       [I.COOKED_FISH]: { m: '#c58a48', M: '#7d4d22', w: '#f6d7a8' },
+      [I.BURNT_FISH]: { m: '#29231f', M: '#090706', w: '#7d6a58' },
       [I.SHARK_TOOTH]: { m: '#f2efe3', M: '#aaa69b' },
       [I.INK_SAC]: { m: '#322548', M: '#120d1d' },
       [I.PEARL]: { m: '#e7f6ff', M: '#87b8d3', w: '#ffffff' },
@@ -2987,6 +2994,7 @@ const Icons = {
       [I.EGG_GIANT_SQUID]: { m: '#7f354d', M: '#220d19' },
       [I.EGG_SPRAWLER]: { m: '#171b1d', M: '#aeb0a6' },
       [I.EGG_FIREFLY]: { m: '#ff7a18', M: '#5b2200' },
+      [I.EGG_LAVABACK]: { m: '#2b292b', M: '#ff5a16', w: '#ffc04a' },
       [I.JELLY_GLOB_PINK]: { m: '#ff7fd4', M: '#b83b99' },
       [I.JELLY_GLOB_CYAN]: { m: '#6ee8ff', M: '#268ba8' },
       [I.JELLY_GLOB_LIME]: { m: '#9cff6e', M: '#459a31' },
@@ -3583,6 +3591,8 @@ const Icons = {
         '....mmkmmMmmm...',
         '.....mmmmmmm....',
         '......mmmmm.....']),
+      [I.BURNT_MUTTON]: pad([
+        '................','...ww...........','..wssw..........','...wws..........','.....ww.........','......wmmm......','.....mMmmmmM....','....MMmmmmmmM...','....mmmmMwwmm...','....mMmmwwmMm...','....MMmmmmmmm...','....mMmmmmMMm...','.....mmmmMmm....','......mmmmm.....']),
       // whole bird, drumstick legs w/ bone tips (palette swaps raw/roasted)
       [I.RAW_CHICKEN]: pad([
         '................',
@@ -3610,8 +3620,12 @@ const Icons = {
         '.....mMmmMm.....',
         '.....mm..mm.....',
         '.....ww..ww.....']),
+      [I.BURNT_CHICKEN]: pad([
+        '................','................','.....mMmmMm.....','....MMmmmmMM....','...mMmmmmmmMm...','...MMmmMMmmMM...','...mmmmMmmmmm...','...mMmmmmmmMm...','....MMmmmmMM....','.....mMmmMm.....','.....mm..mm.....','.....ww..ww.....']),
       [I.RAW_FISH]: pad([
         '................','................','..........m.....','..M....mmmm....','..mMmmmmmmmm...','..mmmmmmwmmmm..','..mMmmmmmmmm...','..M....mmmm....','..........m.....']),
+      [I.BURNT_FISH]: pad([
+        '................','................','..........m.....','..M....mMmM....','..mMmmMMmmmm...','..mmMmmmwMmmm..','..mMmmmmMMmmm...','..M....mMmM....','..........m.....']),
       [I.COOKED_FISH]: pad([
         '................','................','..........m.....','..M....mmmm....','..mMmmmMmmmm...','..mmmmmmwmmmm..','..mMmmmmMmmm...','..M....mmmm....','..........m.....']),
       [I.SHARK_TOOTH]: pad([
