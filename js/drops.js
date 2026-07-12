@@ -61,12 +61,12 @@ const Drops = {
   // dim/brighten a drop to match the voxel light where it sits
   tint(d) {
     const b = d.body;
-    const raw = World.getLightRaw(Math.floor(b.x), Math.floor(b.y + 0.3), Math.floor(b.z));
-    const l = Math.max(0.12, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
-    if (Math.abs(l - (d._light || -1)) < 0.06) return;
-    d._light = l;
+    const c = World.getLightColor(Math.floor(b.x), Math.floor(b.y + 0.3), Math.floor(b.z), undefined, 0.12);
+    const key = c.map(v => v.toFixed(2)).join(',');
+    if (key === d._lightRGB) return;
+    d._lightRGB = key;
     const mat = d.mesh.material;
-    if (mat && mat.color) mat.color.setRGB(l, l, l);
+    if (mat && mat.color) mat.color.setRGB(c[0], c[1], c[2]);
   },
 
   spawn(x, y, z, id, count, vel, dur, data) {

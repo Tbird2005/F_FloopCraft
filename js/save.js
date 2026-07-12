@@ -149,7 +149,7 @@ const Save = {
     let changed = false;
     for (const k of [
       'diffs','signs','signDirs','lore','chests','spawners','jellyHouses','dungeonConquered',
-      'bedDirs','photoDirs','stairSideways','crops','plantationOrigins',
+      'bedDirs','photoDirs','stairSideways','waterlogged','crops','plantationOrigins',
       'plantationUnderSlabs','furnaces','mobs','cars','boards','boats','dynamics',
     ]) {
       if (Object.prototype.hasOwnProperty.call(out, k)) {
@@ -300,6 +300,7 @@ const Save = {
         bedDirs: [...World.bedDirs.entries()],
         photoDirs: [...World.photoDirs.entries()],
         stairSideways: [...World.stairSideways.entries()],
+        waterlogged: [...World.waterlogged],
         crops: [...World.crops.entries()],
         plantationOrigins: [...World.plantationOrigins.entries()],
         plantationUnderSlabs: [...World.plantationUnderSlabs.entries()],
@@ -378,6 +379,7 @@ const Save = {
     for (const [k, d] of data.bedDirs || []) World.bedDirs.set(k, d);
     for (const [k, d] of data.photoDirs || []) World.photoDirs.set(k, d);
     for (const [k, d] of data.stairSideways || []) World.stairSideways.set(k, d);
+    for (const k of data.waterlogged || []) World.waterlogged.add(String(k));
     for (const [k, c] of data.crops || []) World.crops.set(k, c);
     for (const [k, o] of data.plantationOrigins || []) World.plantationOrigins.set(k, o);
     for (const [k, id] of data.plantationUnderSlabs || []) World.plantationUnderSlabs.set(k, id);

@@ -28,7 +28,7 @@ const Multiplayer = {
   joinInputEl: null,
   statusEl: null,
   chars: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-  versionTag: 'ffloopcraft-v1080',
+  versionTag: 'ffloopcraft-v1092',
 
   init() {
     this.joinErrorEl = document.getElementById('mpError');
@@ -453,6 +453,12 @@ const Multiplayer = {
       return;
     }
 
+    if (msg.type === 'death_message') {
+      if (msg.id !== this.id && typeof UI !== 'undefined' && UI.chat) UI.chat(String(msg.text || 'A player died.').slice(0, 180), '#ff7777');
+      if (this.role === 'host' && cameFromClient) this.broadcast(msg, msg.id || fromId);
+      return;
+    }
+
     if (msg.type === 'host_time') {
       if (this.role === 'client') this.applyHostTime(msg);
       return;
@@ -611,6 +617,7 @@ const Multiplayer = {
       base.bedDirs = [...World.bedDirs.entries()];
       base.photoDirs = [...World.photoDirs.entries()];
       base.stairSideways = [...World.stairSideways.entries()];
+      base.waterlogged = [...World.waterlogged];
       base.crops = [...World.crops.entries()];
       base.plantationOrigins = [...World.plantationOrigins.entries()];
       base.plantationUnderSlabs = [...World.plantationUnderSlabs.entries()];
@@ -721,6 +728,12 @@ const Multiplayer = {
   sendChat(text) {
     if (!this.connected || this.role === 'solo') return;
     this.send({ type: 'chat', text: String(text || '').slice(0, 120), name: this.localName });
+  },
+
+  announceDeath(text) {
+    text = String(text || 'A player died.').slice(0, 180);
+    if (typeof UI !== 'undefined' && UI.chat) UI.chat(text, '#ff7777');
+    if (this.connected && this.role !== 'solo') this.send({ type: 'death_message', text, name: this.localName });
   },
 
   getPeer(id) {
@@ -1027,7 +1040,7 @@ const Multiplayer = {
         const oldDmgTarget = Mobs.dmgTarget.bind(Mobs);
         Mobs.dmgTarget = function(tgt, dmg, kx, kz, src) {
           if (typeof Multiplayer !== 'undefined' && Multiplayer.role === 'host' && tgt && tgt.remotePlayerId) {
-            Multiplayer.damageRemotePlayer(tgt.remotePlayerId, dmg, kx, kz, 'mob');
+            Multiplayer.damageRemotePlayer(tgt.remotePlayerId, dmg, kx, kz, src && src.type ? ('mob:' + src.type) : 'mob');
             return;
           }
           return oldDmgTarget(tgt, dmg, kx, kz, src);
@@ -1186,7 +1199,7 @@ const Multiplayer = {
       if (msg.type === 'mob_hurt_request') {
         if (this.role === 'host' && cameFromClient) {
           const m = this.findMobById(msg.mobId);
-          if (m) Mobs.hurt(m, +msg.dmg || 0, +msg.kx || 0, +msg.kz || 0, 'player');
+          if (m) Mobs.hurt(m, +msg.dmg || 0, +msg.kx || 0, +msg.kz || 0, 'peer:' + sender);
         }
         return true;
       }
@@ -1217,7 +1230,7 @@ const Multiplayer = {
         return true;
       }
       if (msg.type === 'pvp_damage') {
-        if (this.role === 'client') Player.hurt(+msg.dmg || 0, +msg.kx || 0, +msg.kz || 0, { source:'pvp', pierce:false });
+        if (this.role === 'client') Player.hurt(+msg.dmg || 0, +msg.kx || 0, +msg.kz || 0, { source: msg.source && msg.source !== 'world' ? msg.source : 'pvp', attackerName: msg.attackerName || this.peerNames.get(msg.attacker) || '', attackerType: msg.attackerType || '', pierce:false });
         return true;
       }
       if (msg.type === 'vehicle_request') {
@@ -1614,24 +1627,29 @@ const Multiplayer = {
       if (st && st.inv) { this.flashPeer(hit.id, true); return true; }
       const kx = dx * (knock || 0), kz = dz * (knock || 0);
       this.send({ type:'pvp_hit', target:hit.id, dmg:+dmg || 1, kx, kz, kind:kind || 'hit', x:ox, y:oy, z:oz });
-      if (this.role === 'host') this.hostHandlePvpHit(this.id, { target:hit.id, dmg:+dmg || 1, kx, kz });
+      if (this.role === 'host') this.hostHandlePvpHit(this.id, { target:hit.id, dmg:+dmg || 1, kx, kz, kind:kind || 'hit' });
       this.flashPeer(hit.id); // local red hit feedback (flash + sound) so we SEE our hit connect
       return true;
     },
 
     hostHandlePvpHit(attackerId, msg) {
       if (!msg || !msg.target) return;
+      const source = msg.kind === 'vehicle' ? 'vehicle' : msg.kind === 'gun' ? 'gun' : msg.kind === 'arrow' ? 'arrow' : 'pvp';
+      const attackerName = this.peerNames.get(attackerId) || (attackerId === this.id ? this.localName : '');
       if (msg.target === this.id) {
-        Player.hurt(+msg.dmg || 0, +msg.kx || 0, +msg.kz || 0, { source:'pvp' });
+        Player.hurt(+msg.dmg || 0, +msg.kx || 0, +msg.kz || 0, { source, attackerName });
         return;
       }
       const conn = this.connections.get(msg.target);
-      if (conn) this.sendTo(conn, { type:'pvp_damage', dmg:+msg.dmg || 0, kx:+msg.kx || 0, kz:+msg.kz || 0, attacker:attackerId || '' });
+      if (conn) this.sendTo(conn, { type:'pvp_damage', dmg:+msg.dmg || 0, kx:+msg.kx || 0, kz:+msg.kz || 0, source, attacker:attackerId || '', attackerName });
     },
 
     damageRemotePlayer(pid, dmg, kx, kz, source) {
       const conn = this.connections.get(pid);
-      if (conn) this.sendTo(conn, { type:'pvp_damage', dmg:+dmg || 0, kx:+kx || 0, kz:+kz || 0, source:source || 'world' });
+      if (!conn) return;
+      source = source || 'world';
+      const mobType = source.indexOf('mob:') === 0 ? source.slice(4) : '';
+      this.sendTo(conn, { type:'pvp_damage', dmg:+dmg || 0, kx:+kx || 0, kz:+kz || 0, source:mobType ? 'mob' : source, attackerType:mobType });
     },
 
     // Explosions damage remote players too (host-authoritative). Cover check uses the
@@ -1664,7 +1682,7 @@ const Multiplayer = {
         if ((st.dim || 'overworld') !== myDim) continue;
         if (Math.abs(st.x - b.x) < 1.4 && Math.abs(st.z - b.z) < 1.7 && Math.abs(st.y - b.y) < 1.4) {
           this.send({ type:'pvp_hit', target:pid, dmg:+dmg || 1, kx, kz, kind:'vehicle', x:b.x, y:b.y, z:b.z });
-          if (this.role === 'host') this.hostHandlePvpHit(this.id, { target:pid, dmg:+dmg || 1, kx, kz });
+          if (this.role === 'host') this.hostHandlePvpHit(this.id, { target:pid, dmg:+dmg || 1, kx, kz, kind:'vehicle' });
           this.flashPeer(pid);
         }
       }
@@ -1819,14 +1837,13 @@ const Multiplayer = {
     tintPeer(p) {
       if (!p || !p.group || typeof World === 'undefined') return;
       const flashing = p.hitFlashT > 0;
-      const raw = World.getLightRaw(Math.floor(p.body.x), Math.floor(p.body.y + 1), Math.floor(p.body.z));
-      const l = Math.max(0.10, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
+      const c = World.getLightColor(Math.floor(p.body.x), Math.floor(p.body.y + 1), Math.floor(p.body.z), undefined, 0.10);
       p.group.traverse(o => {
         const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
         for (const mat of mats) if (mat && mat.color) {
           if (!mat.userData.baseColor) mat.userData.baseColor = mat.color.clone();
           if (flashing) { if (p.hitFlashBlue) mat.color.setRGB(0.35, 0.6, 1); else mat.color.setRGB(1, 0.25, 0.25); }
-          else mat.color.copy(mat.userData.baseColor).multiplyScalar(l);
+          else { mat.color.copy(mat.userData.baseColor); mat.color.r *= c[0]; mat.color.g *= c[1]; mat.color.b *= c[2]; }
         }
       });
     },
@@ -2066,24 +2083,44 @@ const Multiplayer = {
       c.fillStyle = col.hi;
       for (const [x,y] of specks) c.fillRect(x, y, 1, 1);
       if (col.diving) {
-        c.fillStyle = '#41545e';
-        if (slot === 0) {
-          c.fillRect(1,1,14,2); c.fillRect(1,12,14,3); c.fillRect(1,3,2,9); c.fillRect(13,3,2,9);
-          c.fillStyle = '#7df5ec'; c.fillRect(3,4,10,7); c.fillStyle = '#173642'; c.fillRect(4,5,8,5);
-          c.fillStyle = '#ff9d2e'; c.fillRect(2,9,2,2);
-        } else if (slot === 1) {
-          c.fillRect(1,1,14,2); c.fillRect(1,13,14,2); c.fillRect(7,1,2,14); c.fillRect(2,7,12,1);
-          c.fillStyle = '#7df5ec'; c.fillRect(3,3,2,9); c.fillRect(11,3,2,9);
-          c.fillStyle = '#ff9d2e'; c.fillRect(6,5,4,2);
-        } else if (slot === 2) {
-          c.fillRect(7,0,2,16); c.fillRect(1,10,5,2); c.fillRect(10,10,5,2);
-          c.fillStyle = '#7df5ec'; c.fillRect(2,2,2,7); c.fillRect(12,2,2,7);
-        } else if (slot === 3) {
-          c.fillRect(0,10,16,5); c.fillStyle = '#7df5ec'; c.fillRect(2,8,5,2); c.fillRect(9,8,5,2);
-          c.fillStyle = '#ff9d2e'; c.fillRect(3,3,2,3); c.fillRect(11,3,2,3);
-        } else if (slot === 4) {
-          c.fillRect(6,1,4,14); c.fillStyle = '#dfe6e9'; c.fillRect(3,3,10,2); c.fillRect(3,11,10,2);
-          c.fillStyle = '#7df5ec'; c.fillRect(4,6,8,4); c.fillStyle = '#ff9d2e'; c.fillRect(7,1,2,2);
+        // Fully repaint each diving piece (over the generic base) so it reads as
+        // proper brass-and-steel deep-sea gear, not a muddy overlay.
+        const steel = '#c9d2d6', steelD = '#7d8a90', steelHi = '#eef4f6';
+        const rubber = '#37474d', rubberD = '#222d31', rubberHi = '#556d75';
+        const brass = '#d8b24a', brassD = '#8a6c1f', glass = '#8fe8ff', glassHi = '#e8ffff', warn = '#ff9d2e';
+        const R = (x, y, w, h, cc) => { c.fillStyle = cc; c.fillRect(x, y, w, h); };
+        if (slot === 0) { // brass-rimmed steel dive helmet with porthole
+          R(0, 0, 16, 16, steel);
+          R(0, 0, 16, 2, steelHi); R(0, 14, 16, 2, steelD); R(0, 0, 2, 16, steelHi); R(14, 0, 2, 16, steelD);
+          R(3, 3, 10, 10, brassD); R(4, 4, 8, 8, glass); R(4, 4, 4, 3, glassHi); // porthole + glint
+          R(3, 3, 10, 1, brass); R(3, 12, 10, 1, brass); R(3, 3, 1, 10, brass); R(12, 3, 1, 10, brass);
+          for (const [bx, by] of [[2, 2], [13, 2], [2, 13], [13, 13]]) R(bx, by, 1, 1, brass); // rim bolts
+          R(1, 7, 1, 2, warn); // air-valve nub
+        } else if (slot === 1) { // ribbed rubber suit with control box + straps
+          R(0, 0, 16, 16, rubber);
+          for (let yy = 2; yy < 15; yy += 3) R(1, yy, 14, 1, rubberD); // ribs
+          R(1, 1, 14, 1, rubberHi);
+          R(5, 5, 6, 5, steelD); R(6, 6, 4, 3, glass); R(6, 6, 2, 1, glassHi); // chest gauge box
+          R(2, 0, 2, 16, rubberD); R(12, 0, 2, 16, rubberD); // shoulder straps
+          R(2, 7, 2, 2, brass); R(12, 7, 2, 2, brass); // buckles
+          R(7, 11, 2, 3, warn); // hose port
+        } else if (slot === 2) { // ribbed leggings with steel knee pads
+          R(0, 0, 16, 16, rubber);
+          R(7, 0, 2, 16, rubberD);
+          for (let yy = 2; yy < 15; yy += 3) { R(1, yy, 5, 1, rubberD); R(10, yy, 5, 1, rubberD); }
+          R(2, 6, 4, 3, steelD); R(10, 6, 4, 3, steelD); R(2, 6, 4, 1, steelHi); R(10, 6, 4, 1, steelHi);
+        } else if (slot === 3) { // heavy rubber boots with metal soles
+          R(0, 0, 16, 16, rubber);
+          R(2, 3, 5, 2, rubberHi); R(9, 3, 5, 2, rubberHi); // cuffs
+          R(0, 10, 16, 6, steelD); R(0, 14, 16, 2, rubberD); // metal sole
+          for (const bx of [1, 5, 9, 13]) R(bx, 12, 2, 1, steel); // treads
+        } else if (slot === 4) { // scuba tank wrap: bands, valve base, gauge
+          R(0, 0, 16, 16, steel);
+          R(0, 0, 16, 3, steelHi); R(0, 13, 16, 3, steelD);
+          R(3, 0, 2, 16, steelD); R(11, 0, 2, 16, steelHi); // cylinder shading
+          R(0, 5, 16, 2, warn); R(0, 9, 16, 1, brassD); // warning stripe + band
+          R(6, 0, 4, 3, brass); // valve base
+          R(3, 10, 4, 3, glass); R(3, 10, 4, 1, glassHi); // pressure gauge
         }
       }
       if (col.jelly) {
@@ -3083,6 +3120,21 @@ const Multiplayer = {
         this.sendGrantXp(pid, xp);
         return;
       }
+      if (liveId === B.DUNGEON_CORE) {
+        // Client mining is host-delegated, so the singleplayer core-break branch in
+        // player.js never runs for a remote player. Mirror it here: quiet the core
+        // to its rank inactive brick AND run the mass deactivation (which itself
+        // replicates via dungeon_deactivated) so the whole dungeon opens up.
+        const dgHit = World.dungeonAtBlock ? World.dungeonAtBlock(bx, by, bz) : null;
+        const inactiveId = (typeof dungeonBrickInactiveForRank === 'function') ? dungeonBrickInactiveForRank(dgHit && dgHit.rank) : B.DUNGEON_BRICK_INACTIVE;
+        World.setBlock(bx, by, bz, inactiveId, { skipPortalCheck: true });
+        if (World.deactivateDungeonAt) World.deactivateDungeonAt(bx, by, bz);
+        if (typeof Particles !== 'undefined' && Particles.blockBurst) Particles.blockBurst(bx, by, bz, liveId);
+        if (!creative && toolOk) Drops.spawn(bx + 0.5, by + 0.55, bz + 0.5, I.DUNGEON_CORE_SHARD, 1);
+        if (toolOk && Reg[liveId] && Reg[liveId].xp) xp += Reg[liveId].xp | 0;
+        this.sendGrantXp(pid, xp);
+        return;
+      }
       if (liveId === B.PLANTATION_POT) { World.destroyMultiblockAt(bx, by, bz, { drop: !creative, kind:'plantation' }); this.sendGrantXp(pid, xp); return; }
       if (typeof isDoor !== 'undefined' && isDoor(liveId)) { World.destroyMultiblockAt(bx, by, bz, { drop: !creative, kind:'door' }); this.sendGrantXp(pid, xp); return; }
       if (typeof isBed !== 'undefined' && isBed(liveId)) { World.destroyMultiblockAt(bx, by, bz, { drop: !creative, kind:'bed' }); this.sendGrantXp(pid, xp); return; }
@@ -3231,17 +3283,20 @@ const Multiplayer = {
   Object.assign(MP, {
     clientChunkLoadCursor: 0,
 
+    entityVoxelLightColor(x, y, z, minLight) {
+      if (typeof World === 'undefined' || !World || !World.getLightColor) return [1, 1, 1];
+      return World.getLightColor(Math.floor(finite(x, 0)), Math.floor(finite(y, 0)), Math.floor(finite(z, 0)), undefined, Number.isFinite(+minLight) ? +minLight : 0.06);
+    },
+
     entityVoxelLightLevel(x, y, z, minLight) {
-      if (typeof World === 'undefined' || !World || !World.getLightRaw) return 1;
-      const raw = World.getLightRaw(Math.floor(finite(x, 0)), Math.floor(finite(y, 0)), Math.floor(finite(z, 0)));
-      const sky = (raw >> 4) * (World.dayFUniform ? World.dayFUniform.value : 1);
-      const block = raw & 15;
-      return Math.max(Number.isFinite(+minLight) ? +minLight : 0.06, Math.max(block, sky) / 15);
+      const c = this.entityVoxelLightColor(x, y, z, minLight);
+      return Math.max(c[0], c[1], c[2]);
     },
 
     applyVoxelLightToObject(obj, light, key) {
-      if (!obj || !Number.isFinite(+light)) return;
-      const l = clamp(+light, 0.04, 1.25);
+      if (!obj) return;
+      const c = Array.isArray(light) ? [clamp(finite(light[0], 1), 0.04, 1.25), clamp(finite(light[1], 1), 0.04, 1.25), clamp(finite(light[2], 1), 0.04, 1.25)] : (Number.isFinite(+light) ? [clamp(+light, 0.04, 1.25), clamp(+light, 0.04, 1.25), clamp(+light, 0.04, 1.25)] : null);
+      if (!c) return;
       const baseKey = key || 'mpBaseCol';
       obj.traverse(o => {
         if (!o.isMesh && !o.isSprite) return;
@@ -3249,7 +3304,7 @@ const Multiplayer = {
         for (const mat of mats) {
           if (!mat || !mat.color) continue;
           if (!mat.userData[baseKey]) mat.userData[baseKey] = mat.color.clone();
-          mat.color.copy(mat.userData[baseKey]).multiplyScalar(l);
+          mat.color.copy(mat.userData[baseKey]); mat.color.r *= c[0]; mat.color.g *= c[1]; mat.color.b *= c[2];
         }
       });
     },
@@ -3381,6 +3436,7 @@ const Multiplayer = {
         v.speed += (finite(t.speed, v.speed || 0) - finite(v.speed, 0)) * 0.12;
       }
       v.hp = finite(t.hp, v.hp || 1);
+      v.mpLightRGB = Array.isArray(t.lightRGB) ? t.lightRGB.slice(0, 3) : v.mpLightRGB;
       v.mpLight = Number.isFinite(+t.light) ? +t.light : v.mpLight;
     },
 
@@ -3404,11 +3460,13 @@ const Multiplayer = {
           v.yaw = lerpAngle(finite(v.yaw, 0), finite(t.yaw, v.yaw || 0), interp);
           v.speed = finite(t.speed, v.speed || 0);
           v.wheelSpin = finite(t.wheelSpin, v.wheelSpin || 0) || ((v.wheelSpin || 0) + (v.speed || 0) * (dt || 0) * 3);
+          v.mpLightRGB = Array.isArray(t.lightRGB) ? t.lightRGB.slice(0, 3) : v.mpLightRGB;
           v.mpLight = Number.isFinite(+t.light) ? +t.light : v.mpLight;
         }
         this.positionVehicleMesh(v);
         if (Vehicles.applyFlash) Vehicles.applyFlash(v, dt || 0);
-        if (Number.isFinite(+v.mpLight)) this.applyVoxelLightToObject(v.group || v.mesh, v.mpLight, 'vehicleBaseCol');
+        if (Array.isArray(v.mpLightRGB)) this.applyVoxelLightToObject(v.group || v.mesh, v.mpLightRGB, 'vehicleBaseCol');
+        else if (Number.isFinite(+v.mpLight)) this.applyVoxelLightToObject(v.group || v.mesh, v.mpLight, 'vehicleBaseCol');
         else if (Vehicles.tintVehicle) Vehicles.tintVehicle(v, dt || 0);
       }
       if (riding) {
@@ -3435,7 +3493,10 @@ const Multiplayer = {
     if (typeof Mobs === 'undefined') return list;
     for (const s of list) {
       const m = s && s.mid ? this.findMobById(s.mid) : null;
-      if (m && m.body) s.light = +this.entityVoxelLightLevel(m.body.x, m.body.y + (m.body.h || 1.4) * 0.55, m.body.z, 0.06).toFixed(3);
+      if (m && m.body) {
+        s.lightRGB = this.entityVoxelLightColor(m.body.x, m.body.y + (m.body.h || 1.4) * 0.55, m.body.z, 0.06).map(v => +v.toFixed(3));
+        s.light = +Math.max(...s.lightRGB).toFixed(3);
+      }
     }
     return list;
   };
@@ -3446,7 +3507,10 @@ const Multiplayer = {
     if (typeof Drops === 'undefined') return list;
     for (const s of list) {
       const d = s && s.did ? Drops.list.find(x => x && x.mpId === s.did) : null;
-      if (d && d.body) s.light = +this.entityVoxelLightLevel(d.body.x, d.body.y + 0.3, d.body.z, 0.12).toFixed(3);
+      if (d && d.body) {
+        s.lightRGB = this.entityVoxelLightColor(d.body.x, d.body.y + 0.3, d.body.z, 0.12).map(v => +v.toFixed(3));
+        s.light = +Math.max(...s.lightRGB).toFixed(3);
+      }
     }
     return list;
   };
@@ -3456,7 +3520,8 @@ const Multiplayer = {
     const s = oldSerializeVehicleObject ? oldSerializeVehicleObject(v) : null;
     if (s && v) {
       const b = v.body || v;
-      s.light = +this.entityVoxelLightLevel(b.x, b.y + ((v.body && v.body.h) ? v.body.h * 0.55 : 0.4), b.z, 0.06).toFixed(3);
+      s.lightRGB = this.entityVoxelLightColor(b.x, b.y + ((v.body && v.body.h) ? v.body.h * 0.55 : 0.4), b.z, 0.06).map(v => +v.toFixed(3));
+      s.light = +Math.max(...s.lightRGB).toFixed(3);
     }
     return s;
   };
@@ -3467,7 +3532,7 @@ const Multiplayer = {
     if (typeof Mobs === 'undefined') return;
     for (const s of list || []) {
       const m = s && s.mid ? this.findMobById(s.mid) : null;
-      if (m) m.mpLight = Number.isFinite(+s.light) ? +s.light : m.mpLight;
+      if (m) { m.mpLightRGB = Array.isArray(s.lightRGB) ? s.lightRGB.slice(0, 3) : m.mpLightRGB; m.mpLight = Number.isFinite(+s.light) ? +s.light : m.mpLight; }
     }
   };
 
@@ -3477,7 +3542,7 @@ const Multiplayer = {
     if (typeof Drops === 'undefined') return;
     for (const s of list || []) {
       const d = s && s.did ? Drops.list.find(x => x && x.mpId === s.did) : null;
-      if (d) d.mpLight = Number.isFinite(+s.light) ? +s.light : d.mpLight;
+      if (d) { d.mpLightRGB = Array.isArray(s.lightRGB) ? s.lightRGB.slice(0, 3) : d.mpLightRGB; d.mpLight = Number.isFinite(+s.light) ? +s.light : d.mpLight; }
     }
   };
 
@@ -3487,7 +3552,7 @@ const Multiplayer = {
     const states = [...((msg && msg.cars) || []), ...((msg && msg.boats) || []), ...((msg && msg.boards) || [])];
     for (const s of states) {
       const v = s && s.vid ? this.findVehicleById(s.vid) : null;
-      if (v) v.mpLight = Number.isFinite(+s.light) ? +s.light : v.mpLight;
+      if (v) { v.mpLightRGB = Array.isArray(s.lightRGB) ? s.lightRGB.slice(0, 3) : v.mpLightRGB; v.mpLight = Number.isFinite(+s.light) ? +s.light : v.mpLight; }
     }
   };
 
@@ -3497,8 +3562,8 @@ const Multiplayer = {
     if (typeof Mobs === 'undefined') return;
     for (const m of Mobs.list || []) {
       if (!m || !m.group) continue;
-      const lvl = Number.isFinite(+m.mpLight) ? +m.mpLight : (m.body ? this.entityVoxelLightLevel(m.body.x, m.body.y + (m.body.h || 1.4) * 0.55, m.body.z, 0.06) : 1);
-      this.applyVoxelLightToObject(m.group, lvl, 'mobBaseCol');
+      const light = Array.isArray(m.mpLightRGB) ? m.mpLightRGB : (Number.isFinite(+m.mpLight) ? +m.mpLight : (m.body ? this.entityVoxelLightColor(m.body.x, m.body.y + (m.body.h || 1.4) * 0.55, m.body.z, 0.06) : [1, 1, 1]));
+      this.applyVoxelLightToObject(m.group, light, 'mobBaseCol');
     }
   };
 
@@ -3508,8 +3573,8 @@ const Multiplayer = {
     if (typeof Drops === 'undefined') return;
     for (const d of Drops.list || []) {
       if (!d || !d.mesh) continue;
-      const lvl = Number.isFinite(+d.mpLight) ? +d.mpLight : (d.body ? this.entityVoxelLightLevel(d.body.x, d.body.y + 0.3, d.body.z, 0.12) : 1);
-      this.applyVoxelLightToObject(d.mesh, lvl, 'dropBaseCol');
+      const light = Array.isArray(d.mpLightRGB) ? d.mpLightRGB : (Number.isFinite(+d.mpLight) ? +d.mpLight : (d.body ? this.entityVoxelLightColor(d.body.x, d.body.y + 0.3, d.body.z, 0.12) : [1, 1, 1]));
+      this.applyVoxelLightToObject(d.mesh, light, 'dropBaseCol');
     }
   };
 
@@ -3632,8 +3697,8 @@ const Multiplayer = {
           const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
           for (const mat of mats) if (mat && mat.color && !mat.userData.dropBaseCol) mat.userData.dropBaseCol = new THREE.Color(1,1,1);
         }) : null;
-        const lvl = Number.isFinite(+d.mpLight) ? +d.mpLight : (this.entityVoxelLightLevel ? this.entityVoxelLightLevel(b.x, b.y + 0.3, b.z, 0.12) : 1);
-        if (this.applyVoxelLightToObject) this.applyVoxelLightToObject(d.mesh, lvl, 'dropBaseCol');
+        const light = Array.isArray(d.mpLightRGB) ? d.mpLightRGB : (Number.isFinite(+d.mpLight) ? +d.mpLight : (this.entityVoxelLightColor ? this.entityVoxelLightColor(b.x, b.y + 0.3, b.z, 0.12) : [1, 1, 1]));
+        if (this.applyVoxelLightToObject) this.applyVoxelLightToObject(d.mesh, light, 'dropBaseCol');
       }
       if (d.mpId && d.age >= (d.pickupDelay || 0) && !Player.dead && Player.canAccept(d.id)) {
         const dist = Math.hypot(p.x - b.x, (p.y + 0.6) - b.y, p.z - b.z);
@@ -5120,11 +5185,13 @@ const Multiplayer = {
         } else v.yaw = finite(t.yaw, v.yaw || 0);
         v.speed = finite(t.speed, v.speed || 0);
         v.wheelSpin = finite(t.wheelSpin, v.wheelSpin || 0) || ((v.wheelSpin || 0) + (v.speed || 0) * (dt || 0) * 3);
+        v.mpLightRGB = Array.isArray(t.lightRGB) ? t.lightRGB.slice(0, 3) : v.mpLightRGB;
         v.mpLight = Number.isFinite(+t.light) ? +t.light : v.mpLight;
       }
       if (this.positionVehicleMesh) this.positionVehicleMesh(v);
       if (Vehicles.applyFlash) Vehicles.applyFlash(v, dt || 0);
-      if (Number.isFinite(+v.mpLight) && this.applyVoxelLightToObject) this.applyVoxelLightToObject(v.group || v.mesh, v.mpLight, 'vehicleBaseCol');
+      if (Array.isArray(v.mpLightRGB) && this.applyVoxelLightToObject) this.applyVoxelLightToObject(v.group || v.mesh, v.mpLightRGB, 'vehicleBaseCol');
+      else if (Number.isFinite(+v.mpLight) && this.applyVoxelLightToObject) this.applyVoxelLightToObject(v.group || v.mesh, v.mpLight, 'vehicleBaseCol');
       else if (Vehicles.tintVehicle) Vehicles.tintVehicle(v, dt || 0);
     }
     if (riding) {
@@ -5304,13 +5371,14 @@ const Multiplayer = {
   const dropState = (d) => {
     const b = d && d.body;
     if (!d || !b) return null;
+    const lightRGB = (MP.entityVoxelLightColor ? MP.entityVoxelLightColor(b.x, b.y + 0.3, b.z, 0.12) : [1, 1, 1]).map(v => +v.toFixed(3));
     return {
       did: ensureDropId(d), item:idOf(d.id), count:Math.max(1, Math.floor(+d.count || 1)),
       dur:hasDur(d.dur) ? +d.dur : undefined, data:d.data,
       x:+finite(b.x, 0).toFixed(3), y:+finite(b.y, 0).toFixed(3), z:+finite(b.z, 0).toFixed(3),
       vx:+finite(b.vx, 0).toFixed(3), vy:+finite(b.vy, 0).toFixed(3), vz:+finite(b.vz, 0).toFixed(3),
       age:+finite(d.age, 0).toFixed(2), pd:+finite(d.pickupDelay, 0).toFixed(2),
-      light:Number.isFinite(+d.mpLight) ? +d.mpLight : undefined,
+      light:+Math.max(...lightRGB).toFixed(3), lightRGB,
     };
   };
 
@@ -5335,6 +5403,8 @@ const Multiplayer = {
         d.age = finite(s.age, d.age || 0); d.pickupDelay = finite(s.pd, d.pickupDelay || 0);
         const b = d.body; if (b) { b.x = finite(s.x, b.x); b.y = finite(s.y, b.y); b.z = finite(s.z, b.z); b.vx = finite(s.vx, b.vx || 0); b.vy = finite(s.vy, b.vy || 0); b.vz = finite(s.vz, b.vz || 0); }
         d.mpTarget = Object.assign({}, s);
+        d.mpLightRGB = Array.isArray(s.lightRGB) ? s.lightRGB.slice(0, 3) : d.mpLightRGB;
+        d.mpLight = Number.isFinite(+s.light) ? +s.light : d.mpLight;
         if (d.mesh && b) d.mesh.position.set(b.x, b.y + 0.18, b.z);
       }
     } finally { this.applyingRemoteState = false; }
@@ -5478,9 +5548,9 @@ const Multiplayer = {
     return (Dynamics.falling || []).map(f => {
       if (!f.mpId) f.mpId = 'f' + Math.random().toString(36).slice(2, 9);
       const b = f.body || {};
-      const raw = (typeof World !== 'undefined' && World.getLightRaw) ? World.getLightRaw(Math.floor(finite(b.x,0)), Math.floor(finite(b.y,0) + 0.5), Math.floor(finite(b.z,0))) : 15;
-      const l = Math.max(0.12, Math.max(raw & 15, (raw >> 4) * ((World && World.dayFUniform && World.dayFUniform.value) || 1)) / 15);
-      return { fid:f.mpId, id:idOf(f.id), x:+finite(b.x,0).toFixed(3), y:+finite(b.y,0).toFixed(3), z:+finite(b.z,0).toFixed(3), vx:+finite(b.vx,0).toFixed(3), vy:+finite(b.vy,0).toFixed(3), vz:+finite(b.vz,0).toFixed(3), light:+l.toFixed(3) };
+      const c = (typeof World !== 'undefined' && World.getLightColor) ? World.getLightColor(Math.floor(finite(b.x,0)), Math.floor(finite(b.y,0) + 0.5), Math.floor(finite(b.z,0)), undefined, 0.12) : [1, 1, 1];
+      const lightRGB = c.map(v => +v.toFixed(3));
+      return { fid:f.mpId, id:idOf(f.id), x:+finite(b.x,0).toFixed(3), y:+finite(b.y,0).toFixed(3), z:+finite(b.z,0).toFixed(3), vx:+finite(b.vx,0).toFixed(3), vy:+finite(b.vy,0).toFixed(3), vz:+finite(b.vz,0).toFixed(3), light:+Math.max(...lightRGB).toFixed(3), lightRGB };
     });
   };
   MP.applyFallingLiveReliable = function(list) {
@@ -5499,6 +5569,7 @@ const Multiplayer = {
       }
       f.id = idOf(s.id);
       f.mpTarget = Object.assign({}, s);
+      f.mpLightRGB = Array.isArray(s.lightRGB) ? s.lightRGB.slice(0, 3) : f.mpLightRGB;
       f.mpLight = Number.isFinite(+s.light) ? +s.light : f.mpLight;
     }
     for (let i = Dynamics.falling.length - 1; i >= 0; i--) {
@@ -5555,7 +5626,8 @@ const Multiplayer = {
           }
           if (f.mesh) {
             f.mesh.position.set(b.x, b.y + 0.49, b.z);
-            if (Number.isFinite(+f.mpLight) && f.mesh.material && f.mesh.material.color) f.mesh.material.color.setRGB(f.mpLight, f.mpLight, f.mpLight);
+            const c = Array.isArray(f.mpLightRGB) ? f.mpLightRGB : (Number.isFinite(+f.mpLight) ? [f.mpLight, f.mpLight, f.mpLight] : null);
+            if (c && f.mesh.material && f.mesh.material.color) f.mesh.material.color.setRGB(c[0], c[1], c[2]);
           }
         }
         return;
@@ -5951,6 +6023,8 @@ const Multiplayer = {
     if (World.signDirs && World.signDirs.has(k)) meta.signDir = World.signDirs.get(k);
     if (World.photoDirs && World.photoDirs.has(k)) meta.photoDir = World.photoDirs.get(k);
     if (World.stairSideways && World.stairSideways.has(k)) meta.stairSide = World.stairSideways.get(k);
+    const bid = World.getBlock ? World.getBlock(Math.floor(+x), Math.floor(+y), Math.floor(+z)) : 0;
+    if (typeof canWaterlogBlock === 'function' && canWaterlogBlock(bid)) meta.waterlogged = World.waterlogged && World.waterlogged.has(k) ? 1 : 0;
     // Plantation Pot multiblock: carry the raised/slab metadata so the 3x3 planter renders
     // raised (and preserves the slabs beneath) for everyone, not just the placer.
     if (World.plantationOrigins && World.plantationOrigins.has(k)) meta.potOrigin = World.plantationOrigins.get(k);
@@ -5968,6 +6042,7 @@ const Multiplayer = {
     if (meta.signDir !== undefined && World.signDirs) World.signDirs.set(k, meta.signDir);
     if (meta.photoDir !== undefined && World.photoDirs) World.photoDirs.set(k, meta.photoDir);
     if (meta.stairSide !== undefined && World.stairSideways) World.stairSideways.set(k, meta.stairSide);
+    if (meta.waterlogged !== undefined && World.setWaterloggedAt) World.setWaterloggedAt(x, y, z, !!meta.waterlogged, { remote: true, silentNetwork: true, noUpdate: true });
     if (meta.potOrigin !== undefined && World.plantationOrigins) World.plantationOrigins.set(k, meta.potOrigin);
     if (meta.potUnderSlab !== undefined && World.plantationUnderSlabs) World.plantationUnderSlabs.set(k, meta.potUnderSlab);
     if ((meta.jellyHouse !== undefined || meta.jellyRoster !== undefined) && typeof B !== 'undefined' && typeof Jelly !== 'undefined' && World.getBlock && World.getBlock(Math.floor(+x), Math.floor(+y), Math.floor(+z)) === B.JELLY_HOUSE) {

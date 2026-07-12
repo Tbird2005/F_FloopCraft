@@ -59,6 +59,7 @@ const World = {
   bedDirs: new Map(),     // "x,y,z" -> 0..3 (facing stored at placement, no neighbor guessing)
   photoDirs: new Map(),   // "x,y,z" -> 0..3 (Mr Floop block top/bottom rotation)
   stairSideways: new Map(), // "x,y,z" -> {nx,nz,side:1|2} for wall-mounted sideways stairs
+  waterlogged: new Set(),  // position metadata lets every stair/slab/door/sign state share its existing block id
   relightQueue: new Set(),// chunks queued for a full light recompute (emitter removal safety net)
   ready: false,
   grassSweepCursor: 0,
@@ -89,25 +90,47 @@ const World = {
     this.megaTorches.clear(); this.fires.clear();
     this.floopSpots.length = 0; this.dungeonSpots.length = 0;
     this.signs.clear(); this.furnaces.clear(); this.chests.clear(); this.signDirs.clear();
-    this.spawners.clear(); this.jellyHouses.clear(); this.jellyHouseIds.clear(); this.diffIndex.clear(); this.bedDirs.clear(); this.photoDirs.clear(); this.stairSideways.clear(); this.relightQueue.clear();
+    this.spawners.clear(); this.jellyHouses.clear(); this.jellyHouseIds.clear(); this.diffIndex.clear(); this.bedDirs.clear(); this.photoDirs.clear(); this.stairSideways.clear(); this.waterlogged.clear(); this.relightQueue.clear();
     if (typeof Jelly !== 'undefined' && Jelly.resetStorageCache) Jelly.resetStorageCache();
     for (const s of this.signSprites.values()) scene.remove(s);
     this.signSprites.clear();
     this.ready = false;
     this.grassSweepCursor = 0;
+    if (!this.fireflyLightUniforms) {
+      this.fireflyLightUniforms = {
+        count: { value: 0 },
+        positions: { value: Array.from({ length: 10 }, () => new THREE.Vector3()) },
+        powers: { value: new Float32Array(10) },
+      };
+    }
     if (!this.matSolid) {
       const lightPatch = (mat) => {
         mat.onBeforeCompile = (sh) => {
           sh.uniforms.dayF = this.dayFUniform;
-          sh.vertexShader = 'uniform float dayF;\n' + sh.vertexShader.replace(
-            '#include <color_vertex>',
-            `#include <color_vertex>
+          sh.uniforms.uFireflyLightCount = this.fireflyLightUniforms.count;
+          sh.uniforms.uFireflyLightPos = this.fireflyLightUniforms.positions;
+          sh.uniforms.uFireflyLightPower = this.fireflyLightUniforms.powers;
+          sh.vertexShader = 'uniform float dayF;\nvarying vec3 vFireflyWorldPos;\n' + sh.vertexShader
+            .replace('#include <color_vertex>', `#include <color_vertex>
             {
-              float packed = floor(vColor.g * 4095.0 + 0.5);
-              vec3 lb = vec3(mod(packed, 16.0), mod(floor(packed / 16.0), 16.0), floor(packed / 256.0)) / 15.0;
+              float packed = floor(vColor.g * 65535.0 + 0.5);
+              vec3 lb = vec3(mod(packed, 16.0), mod(floor(packed / 16.0), 16.0), mod(floor(packed / 256.0), 16.0)) / 15.0;
+              float dark = mod(floor(packed / 4096.0), 16.0) / 15.0;
               float ls = vColor.b * dayF;
-              vColor = vColor.r * max(max(lb, vec3(ls)), vec3(0.045));
-            }`
+              vColor = vColor.r * max(max(lb, vec3(ls)) - vec3(dark), vec3(0.045));
+            }`)
+            .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vFireflyWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+          sh.fragmentShader = 'uniform int uFireflyLightCount;\nuniform vec3 uFireflyLightPos[10];\nuniform float uFireflyLightPower[10];\nvarying vec3 vFireflyWorldPos;\n' + sh.fragmentShader.replace(
+            '#include <color_fragment>',
+            `vec3 ffLight = vec3(0.0);
+            for (int i = 0; i < 10; i++) {
+              if (i < uFireflyLightCount) {
+                float fd = distance(vFireflyWorldPos, uFireflyLightPos[i]);
+                float fp = max(0.0, 1.0 - fd / 2.35) * uFireflyLightPower[i] / 15.0;
+                ffLight += vec3(1.0, 0.38, 0.035) * fp;
+              }
+            }
+            diffuseColor.rgb *= min(vec3(1.0), vColor + ffLight);`
           );
         };
         return mat;
@@ -129,7 +152,7 @@ const World = {
             '#include <map_fragment>',
             `#ifdef USE_MAP
               vec2 mUv = vUv;
-              if (vRep.x + vRep.y > 0.0001) mUv = vUv + vec2(fract(vRep.x), min(vRep.y, 0.9999)) * uTile;
+              if (vRep.x + vRep.y > 0.0001) mUv = vUv + fract(vRep) * uTile;
               vec4 sampledDiffuseColor = texture2D(map, mUv);
               diffuseColor *= sampledDiffuseColor;
             #endif`
@@ -139,7 +162,7 @@ const World = {
       this.matCutout = lightPatch(new THREE.MeshBasicMaterial({ map: Atlas.texture, vertexColors: true, alphaTest: 0.45, side: THREE.DoubleSide }));
       this.matWater = lightPatch(new THREE.MeshBasicMaterial({
         map: Atlas.texture, vertexColors: true, transparent: true, opacity: 0.72,
-        side: THREE.DoubleSide, depthWrite: false,
+        side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
       }));
       this.matLava = lightPatch(new THREE.MeshBasicMaterial({
         map: Atlas.texture, vertexColors: true, side: THREE.DoubleSide,
@@ -163,6 +186,28 @@ const World = {
   coordsPlayable(x, z) { return this.coordPlayable(x) && this.coordPlayable(z); },
   chunkKeyForBlock(x, z) { return this.key(this.chunkCoord(x), this.chunkCoord(z)); },
   isBaseY(y) { return y >= 0 && y < this.H; },
+  isWaterloggedAt(x, y, z, id) {
+    id = id === undefined ? this.getBlock(x, y, z) : id;
+    return isWaterlogged(id) || (canWaterlogBlock(id) && this.waterlogged.has(this.pkey(Math.floor(x), Math.floor(y), Math.floor(z))));
+  },
+  isWaterAt(x, y, z, id) { id = id === undefined ? this.getBlock(x, y, z) : id; return isWater(id) || this.isWaterloggedAt(x, y, z, id); },
+  waterLevelAt(x, y, z, id) { id = id === undefined ? this.getBlock(x, y, z) : id; return this.isWaterloggedAt(x, y, z, id) ? 8 : waterLevel(id); },
+  isWaterSourceAt(x, y, z, id) { id = id === undefined ? this.getBlock(x, y, z) : id; return id === B.WATER || this.isWaterloggedAt(x, y, z, id); },
+
+  setWaterloggedAt(x, y, z, on, opts) {
+    opts = opts || {}; x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    const id = this.getBlock(x, y, z), k = this.pkey(x, y, z), want = !!on;
+    if (want && !canWaterlogBlock(id)) return false;
+    if (this.waterlogged.has(k) === want) return false;
+    want ? this.waterlogged.add(k) : this.waterlogged.delete(k);
+    const cx = this.chunkCoord(x), cz = this.chunkCoord(z), lx = this.localCoord(x), lz = this.localCoord(z);
+    this.dirty.add(this.key(cx, cz));
+    if (lx === 0) this.dirty.add(this.key(cx - 1, cz)); if (lx === 15) this.dirty.add(this.key(cx + 1, cz));
+    if (lz === 0) this.dirty.add(this.key(cx, cz - 1)); if (lz === 15) this.dirty.add(this.key(cx, cz + 1));
+    if (!opts.noUpdate && typeof Water !== 'undefined') Water.wakeNeighbors(x, y, z);
+    if (!opts.silentNetwork && typeof Multiplayer !== 'undefined' && Multiplayer.onLocalBlockChange) Multiplayer.onLocalBlockChange(x, y, z, id, { noUpdate: true, waterMetaOnly: true }, id);
+    return true;
+  },
 
   extraBlock(ch, x, y, z) {
     if (!ch || !ch.extraBlocks) return B.AIR;
@@ -287,6 +332,8 @@ const World = {
   },
 
   lightRGBMax(packed) { return Math.max(packed & 15, (packed >> 4) & 15, (packed >> 8) & 15); },
+  lightDark(packed) { return (packed >> 12) & 15; },
+  lightAllMax(packed) { return Math.max(this.lightRGBMax(packed), this.lightDark(packed)); },
 
   lightEmitRGB(id) {
     const d = Reg[id], lvl = d && d.lightLevel ? Math.max(0, Math.min(15, d.lightLevel | 0)) : 0;
@@ -301,6 +348,11 @@ const World = {
     return r | (g << 4) | (b << 8);
   },
 
+  lightEmitPacked(id) {
+    const d = Reg[id], dark = d && d.darkLevel ? Math.max(0, Math.min(15, d.darkLevel | 0)) : 0;
+    return this.lightEmitRGB(id) | (dark << 12);
+  },
+
   getBlockLightRGBRaw(x, y, z) {
     if (y >= this.H) return this.sparseBlockLightRGBAt(x, y, z);
     if (y < 0) return 0;
@@ -313,7 +365,7 @@ const World = {
   },
 
   getLightRaw(x, y, z) {
-    if (y >= this.H) return 0xF0 | this.lightRGBMax(this.sparseBlockLightRGBAt(x, y, z));
+    if (y >= this.H) { const p = this.sparseBlockLightRGBAt(x, y, z); return 0xF0 | Math.max(0, this.lightRGBMax(p) - this.lightDark(p)); }
     if (y < 0) return 0;
     const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch) return 0xF0;
@@ -322,14 +374,50 @@ const World = {
     // light from chunks waiting to be recomputed after a roof hole got patched.
     if (!ch.light) return 0;
     const i = this.idx(this.localCoord(x), y, this.localCoord(z));
-    return (ch.light[i] & 0xF0) | this.lightRGBMax(ch.blockRGB ? ch.blockRGB[i] : ((ch.light[i] & 15) * 0x111));
+    const p = ch.blockRGB ? ch.blockRGB[i] : ((ch.light[i] & 15) * 0x111);
+    return (ch.light[i] & 0xF0) | Math.max(0, this.lightRGBMax(p) - this.lightDark(p));
   },
 
   getSkyLight(x, y, z) { return this.getLightRaw(x, y, z) >> 4; },
-  getBlockLight(x, y, z) { return this.lightRGBMax(this.getBlockLightRGBRaw(x, y, z)); },
-  getLightColor(x, y, z, dayF) {
-    const p = this.getBlockLightRGBRaw(x, y, z), sky = this.getSkyLight(x, y, z) / 15 * (dayF === undefined ? (this.dayFUniform ? this.dayFUniform.value : 1) : dayF);
-    return [Math.max((p & 15) / 15, sky), Math.max(((p >> 4) & 15) / 15, sky), Math.max(((p >> 8) & 15) / 15, sky)];
+  getBlockLight(x, y, z) { const p = this.getBlockLightRGBRaw(x, y, z); return Math.max(0, this.lightRGBMax(p) - this.lightDark(p)); },
+  getLightColor(x, y, z, dayF, minLight) {
+    const p = this.getBlockLightRGBRaw(x, y, z), dark = this.lightDark(p) / 15;
+    const sky = this.getSkyLight(x, y, z) / 15 * (dayF === undefined ? (this.dayFUniform ? this.dayFUniform.value : 1) : dayF);
+    const floor = Number.isFinite(+minLight) ? Math.max(0, +minLight) : 0;
+    const out = [
+      Math.max(floor, Math.max((p & 15) / 15, sky) - dark),
+      Math.max(floor, Math.max(((p >> 4) & 15) / 15, sky) - dark),
+      Math.max(floor, Math.max(((p >> 8) & 15) / 15, sky) - dark),
+    ];
+    if (typeof Mobs !== 'undefined' && Mobs && Mobs.fireflyLightAt) {
+      const f = Mobs.fireflyLightAt(x, y, z);
+      out[0] = Math.min(1, out[0] + f[0]); out[1] = Math.min(1, out[1] + f[1]); out[2] = Math.min(1, out[2] + f[2]);
+    }
+    return out;
+  },
+  getEffectiveLight(x, y, z, dayF) { const c = this.getLightColor(x, y, z, dayF, 0); return Math.max(c[0], c[1], c[2]) * 15; },
+
+  updateFireflyLightUniforms(ox, oy, oz) {
+    const u = this.fireflyLightUniforms;
+    if (!u) return;
+    const p = (typeof Player !== 'undefined' && Player.body) ? Player.body : { x: 0, y: 0, z: 0 };
+    const flies = (typeof Mobs !== 'undefined' && Mobs.list) ? Mobs.list.filter(m => m && !m.dead && m.type === 'firefly' && m.body) : [];
+    flies.sort((a, b) => {
+      const da = (a.body.x - p.x) ** 2 + (a.body.y - p.y) ** 2 + (a.body.z - p.z) ** 2;
+      const db = (b.body.x - p.x) ** 2 + (b.body.y - p.y) ** 2 + (b.body.z - p.z) ** 2;
+      return da - db;
+    });
+    const n = Math.min(10, flies.length);
+    u.count.value = n;
+    for (let i = 0; i < 10; i++) {
+      const m = flies[i], v = u.positions.value[i];
+      if (m) {
+        const st = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(m.body) : null;
+        const wx = st ? st.ox + st.x : m.body.x, wy = st ? st.oy + st.y : m.body.y, wz = st ? st.oz + st.z : m.body.z;
+        v.set(wx - (ox || 0), wy + 0.11 - (oy || 0), wz - (oz || 0));
+        u.powers.value[i] = Number.isFinite(+m.fireflyLightPower) ? +m.fireflyLightPower : 1;
+      } else { v.set(0, -999999, 0); u.powers.value[i] = 0; }
+    }
   },
 
   markLightBucketsDirty() { this._lightBucketVersion = (this._lightBucketVersion || 0) + 1; },
@@ -372,7 +460,7 @@ const World = {
     if (!this.lightBuckets || this._lightBucketCount !== this.lights.size || this._lightBucketBuiltVersion !== (this._lightBucketVersion || 0)) this.rebuildLightBuckets();
     if (!this.lightBuckets.size) return 0;
     const cx = this.chunkCoord(x), cy = Math.floor(y / 16), cz = this.chunkCoord(z);
-    let br = 0, bg = 0, bb = 0;
+    let br = 0, bg = 0, bb = 0, bd = 0;
     for (let dxs = -1; dxs <= 1; dxs++) for (let dys = -1; dys <= 1; dys++) for (let dzs = -1; dzs <= 1; dzs++) {
       const arr = this.lightBuckets.get((cx + dxs) + ',' + (cy + dys) + ',' + (cz + dzs));
       if (!arr) continue;
@@ -380,14 +468,15 @@ const World = {
         const lx = v[0], ly = v[1], lz = v[2];
         const dist = Math.abs(lx - x) + Math.abs(ly - y) + Math.abs(lz - z);
         if (dist > 15) continue;
-        const em = this.lightEmitRGB(this.getBlock(lx, ly, lz));
+        const em = this.lightEmitPacked(this.getBlock(lx, ly, lz));
         br = Math.max(br, (em & 15) - dist);
         bg = Math.max(bg, ((em >> 4) & 15) - dist);
         bb = Math.max(bb, ((em >> 8) & 15) - dist);
-        if (br >= 15 && bg >= 15 && bb >= 15) return 0xFFF;
+        bd = Math.max(bd, ((em >> 12) & 15) - dist);
+        if (br >= 15 && bg >= 15 && bb >= 15 && bd >= 15) return 0xFFFF;
       }
     }
-    return Math.max(0, br) | (Math.max(0, bg) << 4) | (Math.max(0, bb) << 8);
+    return Math.max(0, br) | (Math.max(0, bg) << 4) | (Math.max(0, bb) << 8) | (Math.max(0, bd) << 12);
   },
 
   sparseBlockLightAt(x, y, z) { return this.lightRGBMax(this.sparseBlockLightRGBAt(x, y, z)); },
@@ -398,7 +487,7 @@ const World = {
     const C = ch.blockRGB = new Uint16Array(16 * 16 * H);
     const blocks = ch.blocks;
     const X0 = ch.cx * 16, Z0 = ch.cz * 16;
-    const qx = [], qy = [], qz = [], ql = [], qc = []; // 0 sky, 1 red, 2 green, 3 blue
+    const qx = [], qy = [], qz = [], ql = [], qc = []; // 0 sky, 1 red, 2 green, 3 blue, 4 darkness
     const chan = (p, c) => (p >> ((c - 1) * 4)) & 15;
     const setChan = (i, c, lvl) => {
       const shift = (c - 1) * 4, mask = 15 << shift;
@@ -413,10 +502,10 @@ const World = {
         const i = this.idx(lx, y, lz), id = blocks[i];
         if (open && this.opaqueToLight(id)) { open = false; top = y + 1; }
         if (open) L[i] = 0xF0;
-        const em = this.lightEmitRGB(id);
+        const em = this.lightEmitPacked(id);
         if (em) {
           C[i] = em; L[i] = (L[i] & 0xF0) | this.lightRGBMax(em);
-          for (let c = 1; c <= 3; c++) { const v = chan(em, c); if (v) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(v); qc.push(c); } }
+          for (let c = 1; c <= 4; c++) { const v = chan(em, c); if (v) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(v); qc.push(c); } }
         }
       }
       if (open) top = 0;
@@ -447,7 +536,7 @@ const World = {
       const raw = this.getLightRaw(X0 + nx, y, Z0 + nz), p = this.getBlockLightRGBRaw(X0 + nx, y, Z0 + nz);
       const sky = (raw >> 4) - 1;
       if (sky > 0) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(sky); qc.push(0); }
-      for (let c = 1; c <= 3; c++) { const v = chan(p, c) - 1; if (v > 0) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(v); qc.push(c); } }
+      for (let c = 1; c <= 4; c++) { const v = chan(p, c) - 1; if (v > 0) { qx.push(lx); qy.push(y); qz.push(lz); ql.push(v); qc.push(c); } }
     };
     const nW = this.chunks.get(this.key(ch.cx - 1, ch.cz)), nE = this.chunks.get(this.key(ch.cx + 1, ch.cz));
     const nN = this.chunks.get(this.key(ch.cx, ch.cz - 1)), nS = this.chunks.get(this.key(ch.cx, ch.cz + 1));
@@ -461,7 +550,7 @@ const World = {
     while (qx.length) {
       const x = qx.pop(), y = qy.pop(), z = qz.pop(), lvl = ql.pop(), c = qc.pop();
       const i = this.idx(x, y, z), id = blocks[i];
-      if (this.opaqueToLight(id) && this.lightEmit(id) === 0) continue;
+      if (this.opaqueToLight(id) && this.lightEmitPacked(id) === 0) continue;
       const cur = c === 0 ? (L[i] >> 4) : chan(C[i], c);
       if (lvl < cur) continue;
       if (lvl > cur) c === 0 ? (L[i] = (lvl << 4) | (L[i] & 15)) : setChan(i, c, lvl);
@@ -588,9 +677,9 @@ const World = {
   // Rebuild only the Manhattan sphere a weakened emitter could have lit.
   // Real emitters and unaffected outside light seed the cleared cells again.
   relightBlockArea(sx, sy, sz, radius, touched) {
-    const r = Math.max(0, radius | 0), queues = [null, [], [], []], seed = (x, y, z, packed, through = true) => {
+    const r = Math.max(0, radius | 0), queues = [null, [], [], [], []], seed = (x, y, z, packed, through = true) => {
       if (!packed || (through && !this.transparentToLight(x, y, z))) return;
-      for (let c = 1; c <= 3; c++) { const l = (packed >> ((c - 1) * 4)) & 15; if (l) queues[c].push({ x, y, z, l }); }
+      for (let c = 1; c <= 4; c++) { const l = (packed >> ((c - 1) * 4)) & 15; if (l) queues[c].push({ x, y, z, l }); }
     };
     const each = fn => {
       for (let dx = -r; dx <= r; dx++) for (let dz = -(r - Math.abs(dx)); dz <= r - Math.abs(dx); dz++) {
@@ -610,48 +699,48 @@ const World = {
     });
 
     each((x, y, z, dx, dy, dz) => {
-      seed(x, y, z, this.lightEmitRGB(this.getBlock(x, y, z)), false);
+      seed(x, y, z, this.lightEmitPacked(this.getBlock(x, y, z)), false);
       for (const [ox, oy, oz] of this.LIGHT_DIRS) {
         if (Math.abs(dx + ox) + Math.abs(dy + oy) + Math.abs(dz + oz) <= r) continue;
         const p = this.getBlockLightRGBRaw(x + ox, y + oy, z + oz);
         let q = 0;
-        for (let c = 0; c < 3; c++) q |= Math.max(0, ((p >> (c * 4)) & 15) - 1) << (c * 4);
+        for (let c = 0; c < 4; c++) q |= Math.max(0, ((p >> (c * 4)) & 15) - 1) << (c * 4);
         seed(x, y, z, q);
       }
     });
-    for (let c = 1; c <= 3; c++) this.lightAdd(queues[c], c, touched);
+    for (let c = 1; c <= 4; c++) this.lightAdd(queues[c], c, touched);
   },
 
   lightOnBlockChanged(x, y, z, oldId, newId) {
     if (y < 0 || y >= this.H) return;
     const ch = this.chunks.get(this.chunkKeyForBlock(x, z));
     if (!ch || !ch.light) return;
-    const oldEm = this.lightEmitRGB(oldId), newEm = this.lightEmitRGB(newId);
+    const oldEm = this.lightEmitPacked(oldId), newEm = this.lightEmitPacked(newId);
     const oldOp = this.opaqueToLight(oldId), newOp = this.opaqueToLight(newId);
     if (oldEm === newEm && oldOp === newOp) return;
 
     const touched = new Set();
     if (oldOp !== newOp) this.lightRemove(x, y, z, 0, touched);
 
-    const decreased = [0, 4, 8].some(shift => ((newEm >> shift) & 15) < ((oldEm >> shift) & 15));
-    if (decreased) this.relightBlockArea(x, y, z, this.lightRGBMax(oldEm) - 1, touched);
+    const decreased = [0, 4, 8, 12].some(shift => ((newEm >> shift) & 15) < ((oldEm >> shift) & 15));
+    if (decreased) this.relightBlockArea(x, y, z, this.lightAllMax(oldEm) - 1, touched);
     else {
-      if (oldOp !== newOp) for (let c = 1; c <= 3; c++) this.lightRemove(x, y, z, c, touched);
-      for (let c = 1; c <= 3; c++) {
+      if (oldOp !== newOp) for (let c = 1; c <= 4; c++) this.lightRemove(x, y, z, c, touched);
+      for (let c = 1; c <= 4; c++) {
         const lvl = (newEm >> ((c - 1) * 4)) & 15;
         if (lvl) this.lightAdd([{ x, y, z, l: lvl }], c, touched);
       }
     }
 
     if (oldOp !== newOp && !newOp) {
-      const skyQ = [], rgbQ = [null, [], [], []];
+      const skyQ = [], rgbQ = [null, [], [], [], []];
       for (const [dx, dy, dz] of this.LIGHT_DIRS) {
         const sky = this.getChLight(x + dx, y + dy, z + dz, 0), l = (dy === 1 && sky === 15) ? 15 : sky - 1;
         if (l > 0) skyQ.push({ x, y, z, l });
-        if (!decreased) for (let c = 1; c <= 3; c++) { const v = this.getChLight(x + dx, y + dy, z + dz, c) - 1; if (v > 0) rgbQ[c].push({ x, y, z, l: v }); }
+        if (!decreased) for (let c = 1; c <= 4; c++) { const v = this.getChLight(x + dx, y + dy, z + dz, c) - 1; if (v > 0) rgbQ[c].push({ x, y, z, l: v }); }
       }
       this.lightAdd(skyQ, 0, touched);
-      if (!decreased) for (let c = 1; c <= 3; c++) this.lightAdd(rgbQ[c], c, touched);
+      if (!decreased) for (let c = 1; c <= 4; c++) this.lightAdd(rgbQ[c], c, touched);
     }
 
     // Opacity changes can affect skylight far beyond a block emitter's fixed
@@ -671,7 +760,7 @@ const World = {
   borderPush(ch) {
     const X0 = ch.cx * 16, Z0 = ch.cz * 16;
     const touched = new Set();
-    for (const channel of [0, 1, 2, 3]) {
+    for (const channel of [0, 1, 2, 3, 4]) {
       const q = [];
       const feed = (x, y, z, nx, nz) => {
         const l = this.getChLight(x, y, z, channel);
@@ -709,10 +798,14 @@ const World = {
     const baseY = y < this.H;
     const lx0 = this.localCoord(x), lz0 = this.localCoord(z);
     const old = baseY ? ch.blocks[this.idx(lx0, y, lz0)] : this.extraBlock(ch, x, y, z);
-    if (isWaterlogged(old) && id === B.AIR && !opts.noWaterRestore) id = B.WATER;
-    if (old === id) return;
+    const oldWet = this.isWaterloggedAt(x, y, z, old);
+    if (oldWet && id === B.AIR && !opts.noWaterRestore) id = B.WATER;
+    if (old === id) { if (opts.waterlogged !== undefined) this.setWaterloggedAt(x, y, z, !!opts.waterlogged, opts); return; }
+    const keepWet = opts.waterlogged !== undefined ? !!opts.waterlogged : (oldWet && canWaterlogBlock(id));
     if (baseY) ch.blocks[this.idx(lx0, y, lz0)] = id;
     else this.setExtraBlock(ch, x, y, z, id);
+    const wk = this.pkey(x, y, z);
+    if (keepWet && canWaterlogBlock(id)) this.waterlogged.add(wk); else this.waterlogged.delete(wk);
     if (this.ready && old !== id && id !== old && typeof Dynamics !== 'undefined' && Dynamics.isLogId && Dynamics.isLogId(old) && !Dynamics.isLogId(id)) {
       Dynamics.queueLeafDecay(x, y, z);
     }
@@ -750,7 +843,7 @@ const World = {
     // Mass edits like explosions/falling sand can opt out and queue a chunk
     // verification pass instead, avoiding one light flood-fill per destroyed block.
     if (opts.skipLight) {
-      const oldEm = this.lightEmit(old), newEm = this.lightEmit(id);
+      const oldEm = this.lightEmitPacked(old), newEm = this.lightEmitPacked(id);
       const oldOp = this.opaqueToLight(old), newOp = this.opaqueToLight(id);
       if (y >= 0 && y < this.H && (oldEm !== newEm || oldOp !== newOp)) this.relightQueue.add(this.key(cx, cz));
     } else {
@@ -878,6 +971,14 @@ const World = {
       return;
     }
 
+    if (isOceanPlant(above)) {
+      const supportDef = Reg[newId];
+      if (!(supportDef && supportDef.block && supportDef.solid && supportDef.shape === 'cube')) {
+        this.setBlock(x, y + 1, z, B.AIR); // restores water and deliberately drops nothing
+        return;
+      }
+    }
+
     if (solidNow) {
       // sand/gravel placed with nothing below starts falling (handled by caller via Dynamics)
       return;
@@ -895,7 +996,9 @@ const World = {
         cy++;
       }
     }
-    if (Reg[above] && Reg[above].needsSupport) {
+    if (isOceanPlant(above)) {
+      this.setBlock(x, y + 1, z, B.AIR); // waterlogged plant restores its water cell; support breaks never drop it
+    } else if (Reg[above] && Reg[above].needsSupport) {
       this.setBlock(x, y + 1, z, B.AIR);
       const dropId = above === B.SIGN ? B.SIGN : isSapling(above) ? above : isFlower(above) ? above : isTorch(above) ? torchItemId(above) : above;
       Drops.spawn(x + 0.5, y + 1.3, z + 0.5, dropId, 1);
@@ -1239,7 +1342,7 @@ const World = {
       [this.key(ch.cx, ch.cz - 1), 0, 15, false],  // north: my lz 0 <- nb lz 15
       [this.key(ch.cx, ch.cz + 1), 15, 0, false],
     ];
-    for (const channel of [0, 1, 2, 3]) {
+    for (const channel of [0, 1, 2, 3, 4]) {
       const q = [];
       for (const [nk, myEdge, nbEdge, xAxis] of sides) {
         const nb = this.chunks.get(nk);
@@ -1657,27 +1760,31 @@ const World = {
       }
     }
 
-    // Ocean and deep-ocean floor life stays on the normal deterministic feature path.
+    // Detailed waterlogged foliage uses the existing deterministic feature pass.
     {
       const corals = [B.CORAL_RED, B.CORAL_BLUE, B.CORAL_YELLOW, B.CORAL_PURPLE, B.CORAL_GREEN];
-      const attempts = 2 + ((tr() * 5) | 0);
+      const attempts = 8 + ((tr() * 9) | 0);
       for (let i = 0; i < attempts; i++) {
         const wx = cx * 16 + 1 + ((tr() * 14) | 0), wz = cz * 16 + 1 + ((tr() * 14) | 0);
         const biome = this.biomeAt(wx, wz), h = this.heightAt(wx, wz), depth = this.SEA - h;
         if ((biome !== 'ocean' && biome !== 'deep_ocean') || depth < 3) continue;
         if (biome === 'deep_ocean') {
-          if (tr() < 0.34) put(wx, h, wz, B.KELP_BLOCK, true);
-          if (tr() < 0.08) put(wx, h + 1, wz, B.SEA_LANTERN, true);
+          const roll = tr();
+          if (roll < 0.38) {
+            const n = Math.min(2 + ((tr() * 5) | 0), Math.max(1, depth - 1));
+            for (let ky = 1; ky <= n; ky++) put(wx, h + ky, wz, B.KELP_FROND, true);
+          } else if (roll < 0.62) put(wx, h + 1, wz, B.TALL_SEAGRASS, true);
+          else if (roll < 0.78) put(wx, h + 1, wz, B.RED_ALGAE, true);
+          else if (roll < 0.84) put(wx, h + 1, wz, B.SEA_LANTERN, true);
           continue;
         }
-        if (tr() < 0.18) put(wx, h, wz, B.SHELL_BLOCK, true);
-        if (tr() < Math.min(0.88, 0.25 + depth * 0.05)) {
-          put(wx, h + 1, wz, tr() < 0.025 ? B.SEA_LANTERN : corals[(tr() * corals.length) | 0], true);
-          if (depth > 5 && tr() < 0.35) {
-            const d = [[1,0],[-1,0],[0,1],[0,-1]][(tr() * 4) | 0], nh = this.heightAt(wx + d[0], wz + d[1]);
-            if (this.biomeAt(wx + d[0], wz + d[1]) === 'ocean') put(wx + d[0], nh + 1, wz + d[1], corals[(tr() * corals.length) | 0], true);
-          }
-        }
+        const roll = tr();
+        if (roll < 0.34) put(wx, h + 1, wz, B.SEAGRASS, true);
+        else if (roll < 0.49) put(wx, h + 1, wz, B.TALL_SEAGRASS, true);
+        else if (roll < 0.59) put(wx, h + 1, wz, B.SEA_FAN, true);
+        else if (roll < 0.65) put(wx, h + 1, wz, B.RED_ALGAE, true);
+        else if (roll < 0.71) put(wx, h, wz, B.SHELL_BLOCK, true);
+        else if (roll < Math.min(0.94, 0.74 + depth * 0.025)) put(wx, h + 1, wz, tr() < 0.035 ? B.SEA_LANTERN : corals[(tr() * corals.length) | 0], true);
       }
     }
 
@@ -2100,6 +2207,10 @@ const World = {
     const rankCrate = typeof dungeonCrateBlockForRank === 'function' ? dungeonCrateBlockForRank(rankInfo.rank) : B.LOOT_CRATE;
     const rankSpawner = typeof dungeonSpawnerBlockForRank === 'function' ? dungeonSpawnerBlockForRank(rankInfo.rank) : B.SPAWNER;
     const rankBrick = typeof dungeonBrickForRank === 'function' ? dungeonBrickForRank(rankInfo.rank) : B.DUNGEON_BRICK;
+    const dungeonTorch = rankInfo.rank === 'diamond' ? B.JELLY_TORCH_C0 + 1
+      : rankInfo.rank === 'gold' ? B.COLORED_TORCH_C0 + 2
+      : rankInfo.rank === 'blue' ? B.COLORED_TORCH_C0 + 3
+      : B.COLORED_TORCH_C0 + 5;
     const conqueredAlready = this.dungeonConquered && this.dungeonConquered.has(k);
 
     const cells = new Map();
@@ -2123,7 +2234,7 @@ const World = {
           }
         } else setC(x, y, z, B.AIR);
       }
-      setC(cx0, y0, cz0, B.TORCH); setC(cx0 + w - 1, y0, cz0 + l - 1, B.TORCH);
+      setC(cx0, y0, cz0, dungeonTorch); setC(cx0 + w - 1, y0, cz0 + l - 1, dungeonTorch);
       // some rooms guard their loot with a monster spawner
       if (!conqueredAlready && r() < 0.35 + rankInfo.mobBonus * 0.12) {
         const sx2 = cx0 + (w >> 1), sz2 = cz0 + (l >> 1);
@@ -2185,7 +2296,7 @@ const World = {
       for (const [x, z] of candidates) {
         if (x <= room.x || x >= room.x + room.w - 1 || z <= room.z || z >= room.z + room.l - 1) continue;
         const cell = cells.get(this.pkey(x, baseY, z));
-        if (!cell || cell.id === B.AIR || cell.id === B.TORCH) return { x, z };
+        if (!cell || cell.id === B.AIR || isTorch(cell.id)) return { x, z };
       }
       return { x: cx, z: cz };
     };
@@ -2325,8 +2436,8 @@ const World = {
           setC(x, surfaceFloorY + 3, z, B.AIR);
         }
       }
-      setC(shaftX - 1, surfaceFloorY + 1, shaftZ - 1, B.TORCH);
-      setC(shaftX + 1, first.y, shaftZ + 1, B.TORCH);
+      setC(shaftX - 1, surfaceFloorY + 1, shaftZ - 1, dungeonTorch);
+      setC(shaftX + 1, first.y, shaftZ + 1, dungeonTorch);
     }
 
     const ensureRankedStorage = (id, rich) => {
@@ -2344,7 +2455,7 @@ const World = {
         if (sx <= room.x || sx >= room.x + room.w - 1 || sz <= room.z || sz >= room.z + room.l - 1) continue;
         const key = this.pkey(sx, y, sz);
         const cur = cells.get(key);
-        if (cur && cur.id !== B.AIR && cur.id !== B.TORCH) continue;
+        if (cur && cur.id !== B.AIR && !isTorch(cur.id)) continue;
         setC(sx, y, sz, id);
         this.initChest(sx, y, sz, r, rich, 'dungeon:' + rankInfo.rank);
         return true;
@@ -2589,10 +2700,12 @@ const World = {
       // cannot be copied from one queued chunk to another.
       for (const rc of group) { rc.light = null; rc.blockRGB = null; }
       for (const rc of group) this.computeChunkLight(rc);
-      for (const rc of group) {
-        this.borderPush(rc);
-        if (rc.hasMesh) this.dirty.add(this.key(rc.cx, rc.cz));
-      }
+      // Re-exchange both directions. The old correction pass only pushed
+      // outward, so a chunk rebuilt after an opacity edit could lose RGB light
+      // that originated in a neighboring chunk until that neighbor changed too.
+      for (const rc of group) this.borderPush(rc);
+      for (const rc of group) this.borderPull(rc);
+      for (const rc of group) if (rc.hasMesh) this.dirty.add(this.key(rc.cx, rc.cz));
     }
     // rebuild dirty chunks with a per-frame budget, nearest first —
     // mass events (fluid cascades, 3x3 mining) spread over frames instead of one spike
@@ -2869,20 +2982,27 @@ const World = {
       return l | (l << 4) | (l << 8);
     };
 
-    const lightAt = (x, y, z) => [glRGB(x, y, z) / 4095, (gl(x, y, z) >> 4) / 15];
+    const lightAt = (x, y, z) => [glRGB(x, y, z) / 65535, (gl(x, y, z) >> 4) / 15];
 
-    const pushQuad = (b, verts, uvr, uvs, shade, lb, ls, repX) => {
+    // Keep shared block-grid vertices bit-identical in chunk-local space. This
+    // matters at greedy/non-greedy and chunk-section boundaries: tiny float
+    // disagreements there show up as 1px cave "stars" while the camera moves.
+    const localMeshCoord = (value, origin) => {
+      const local = value - origin, snapped = Math.round(local);
+      return Math.abs(local - snapped) < 1e-7 ? snapped : local;
+    };
+    const pushQuad = (b, verts, uvr, uvs, shade, lb, ls, repeat) => {
       const base = b.pos.length / 3;
       const ox = Number.isFinite(b.ox) ? b.ox : 0;
       const oy = Number.isFinite(b.oy) ? b.oy : 0;
       const oz = Number.isFinite(b.oz) ? b.oz : 0;
       for (let i = 0; i < 4; i++) {
-        b.pos.push(verts[i][0] - ox, verts[i][1] - oy, verts[i][2] - oz);
-        if (repX) {
-          // greedy-merged run: uv carries the tile ORIGIN, aRep carries repeat
-          // coords; the solid material re-tiles with fract() in the fragment shader
+        b.pos.push(localMeshCoord(verts[i][0], ox), localMeshCoord(verts[i][1], oy), localMeshCoord(verts[i][2], oz));
+        if (repeat) {
+          // Greedy rectangles carry the tile origin in UV and independent U/V repeats in aRep.
+          const ru = Array.isArray(repeat) ? repeat[0] : repeat, rv = Array.isArray(repeat) ? repeat[1] : 1;
           b.uv.push(uvr.u0, uvr.v0);
-          b.rep.push(uvs[i][0] * repX, uvs[i][1]);
+          b.rep.push(uvs[i][0] * ru, uvs[i][1] * rv);
         } else {
           const u = uvr.u0 + (uvr.u1 - uvr.u0) * uvs[i][0];
           const v = uvr.v0 + (uvr.v1 - uvr.v0) * uvs[i][1];
@@ -2893,22 +3013,60 @@ const World = {
       }
       b.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
+
+    // Keep every greedy rectangle at exactly four vertices / two triangles.
+    // A tiny in-plane overdraw closes rasterization cracks at T-junctions without
+    // subdividing the quad or changing its face plane, so it cannot create the
+    // center-fan triangle explosion from v1.0.84.
+    const pushCrackSafeGreedyQuad = (b, verts, uvr, shade, lb, ls, w, h) => {
+      if (w === 1 && h === 1) { pushQuad(b, verts, uvr, UVQ, shade, lb, ls, [1, 1]); return; }
+      const eps = 1 / 2048;
+      const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+      for (const v of verts) for (let a = 0; a < 3; a++) { min[a] = Math.min(min[a], v[a]); max[a] = Math.max(max[a], v[a]); }
+      const expanded = verts.map(v => v.map((n, a) => {
+        if (max[a] === min[a]) return n; // preserve the face plane exactly
+        return n < (min[a] + max[a]) * 0.5 ? n - eps : n + eps;
+      }));
+      pushQuad(b, expanded, uvr, UVQ, shade, lb, ls, [w, h]);
+    };
     const UVQ = [[0, 0], [1, 0], [1, 1], [0, 1]];
     const rotUVQ = (n) => n === 0 ? UVQ : UVQ.map((_, i) => UVQ[(i + n) % 4]);
 
-    // greedy meshing: pending row-merge runs for plain opaque cube faces.
-    // The main voxel loop walks x innermost, so faces whose quads extend along
-    // X (+y,-y,+z,-z) accumulate while id+light match; a gap (endWx !== wx),
-    // any mismatch, or the end of the mesh flushes the run as ONE wide quad.
-    const cubeRuns = [null, null, null, null, null, null];
-    const flushCubeRun = (f) => {
-      const r = cubeRuns[f];
-      if (!r) return;
-      cubeRuns[f] = null;
-      const n = r.endWx - r.startWx;
-      const face = this.FACES[f];
-      const verts = face.c.map(cn => [r.startWx + cn[0] * n, r.y + cn[1], r.wz + cn[2]]);
-      pushQuad(r.target, verts, r.uvr, UVQ, face.shade, r.lb, r.ls, n > 1 ? n : 0);
+    // Full 2D greedy meshing for every face direction. Only plain opaque cube
+    // faces enter this collector; partial/cutout geometry keeps its exact renderer.
+    const greedyFaces = Array.from({ length: 6 }, () => new Map());
+    const collectGreedyFace = (f, wx, y, wz, id, lb, ls, target, texName) => {
+      let plane, u, v;
+      if (f < 2) { plane = wx + (f === 0 ? 1 : 0); u = wz; v = y; }
+      else if (f < 4) { plane = y + (f === 2 ? 1 : 0); u = wx; v = wz; }
+      else { plane = wz + (f === 4 ? 1 : 0); u = wx; v = y; }
+      const key = target.oy + '|' + plane + '|' + id + '|' + lb + '|' + ls + '|' + texName;
+      let g = greedyFaces[f].get(key);
+      if (!g) { g = { f, plane, id, lb, ls, target, texName, cells: new Set() }; greedyFaces[f].set(key, g); }
+      g.cells.add(u + ',' + v);
+    };
+    const emitGreedyFaces = () => {
+      for (let f = 0; f < 6; f++) for (const g of greedyFaces[f].values()) {
+        const cells = g.cells;
+        while (cells.size) {
+          const first = cells.values().next().value, [u0, v0] = first.split(',').map(Number);
+          let w = 1, h = 1;
+          while (cells.has((u0 + w) + ',' + v0)) w++;
+          outer: while (true) {
+            for (let du = 0; du < w; du++) if (!cells.has((u0 + du) + ',' + (v0 + h))) break outer;
+            h++;
+          }
+          for (let dv = 0; dv < h; dv++) for (let du = 0; du < w; du++) cells.delete((u0 + du) + ',' + (v0 + dv));
+          let verts;
+          if (f === 0) verts = [[g.plane, v0, u0 + w], [g.plane, v0, u0], [g.plane, v0 + h, u0], [g.plane, v0 + h, u0 + w]];
+          else if (f === 1) verts = [[g.plane, v0, u0], [g.plane, v0, u0 + w], [g.plane, v0 + h, u0 + w], [g.plane, v0 + h, u0]];
+          else if (f === 2) verts = [[u0, g.plane, v0 + h], [u0 + w, g.plane, v0 + h], [u0 + w, g.plane, v0], [u0, g.plane, v0]];
+          else if (f === 3) verts = [[u0, g.plane, v0], [u0 + w, g.plane, v0], [u0 + w, g.plane, v0 + h], [u0, g.plane, v0 + h]];
+          else if (f === 4) verts = [[u0, v0, g.plane], [u0 + w, v0, g.plane], [u0 + w, v0 + h, g.plane], [u0, v0 + h, g.plane]];
+          else verts = [[u0 + w, v0, g.plane], [u0, v0, g.plane], [u0, v0 + h, g.plane], [u0 + w, v0 + h, g.plane]];
+          pushCrackSafeGreedyQuad(g.target, verts, Atlas.uv(g.texName), this.FACES[f].shade, g.lb, g.ls, w, h);
+        }
+      }
     };
 
     const emitBox = (buf, wx, y, wz, x0, y0, z0, x1, y1, z1, texTop, texSide, texBottom, topRot, selfLight, skipFaces) => {
@@ -3411,7 +3569,7 @@ const World = {
           const wx = X0 + lx, wz = Z0 + lz;
           const def = Reg[id];
 
-          if (def && def.waterlogged) this.meshFluid(bufs.water, pushQuad, wx, y, wz, B.WATER, false, lightAt, gb);
+          if (this.isWaterloggedAt(wx, y, wz, id)) this.meshFluid(bufs.water, pushQuad, wx, y, wz, B.WATER, false, lightAt, gb);
           if (isWater(id)) { this.meshFluid(bufs.water, pushQuad, wx, y, wz, id, false, lightAt, gb); continue; }
           if (isLava(id)) { this.meshFluid(bufs.lava, pushQuad, wx, y, wz, id, true, lightAt, gb); continue; }
 
@@ -3587,21 +3745,10 @@ const World = {
               else visible = !(def.cutout && nb === id);
             }
             else visible = false;
-            if (!visible) { if (mergeable && f >= 2) flushCubeRun(f); continue; }
+            if (!visible) continue;
             const [lb, ls] = lightAt(nx, ny, nz);
-            if (mergeable && f >= 2) {
-              // greedy meshing: faces whose quads extend along X (+y,-y,+z,-z)
-              // merge into one wide quad while id + light stay identical
-              const r = cubeRuns[f];
-              if (r && r.endWx === wx && r.y === y && r.wz === wz && r.id === id && r.lb === lb && r.ls === ls && r.target === bufs.solid) {
-                r.endWx = wx + 1;
-                continue;
-              }
-              flushCubeRun(f);
-              cubeRuns[f] = { id, startWx: wx, endWx: wx + 1, lb, ls, y, wz, target: bufs.solid, uvr: Atlas.uv(Atlas.texName(id, f === 2 ? 'top' : f === 3 ? 'bottom' : 'side')) };
-              continue;
-            }
             const texName = Atlas.texName(id, f === 2 ? 'top' : f === 3 ? 'bottom' : 'side');
+            if (mergeable) { collectGreedyFace(f, wx, y, wz, id, lb, ls, bufs.solid, texName); continue; }
             const uvr = Atlas.uv(texName);
             let verts = face.c.map(cn => [wx + cn[0], y + cn[1], wz + cn[2]]);
             if (def.cutout && def.shape === 'cube') {
@@ -3615,7 +3762,7 @@ const World = {
         }
       }
     }
-    for (let f = 2; f < 6; f++) flushCubeRun(f); // tail runs from the last row
+    emitGreedyFaces();
 
     const emitSparseCell = (wx, y, wz, id) => {
       if (id === B.AIR) return;
@@ -3623,7 +3770,7 @@ const World = {
       if (!def || !def.block) return;
       bufs = bufsForY(y);
 
-      if (def && def.waterlogged) this.meshFluid(bufs.water, pushQuad, wx, y, wz, B.WATER, false, lightAt, gb);
+      if (this.isWaterloggedAt(wx, y, wz, id)) this.meshFluid(bufs.water, pushQuad, wx, y, wz, B.WATER, false, lightAt, gb);
       if (isWater(id)) { this.meshFluid(bufs.water, pushQuad, wx, y, wz, id, false, lightAt, gb); return; }
       if (isLava(id)) { this.meshFluid(bufs.lava, pushQuad, wx, y, wz, id, true, lightAt, gb); return; }
       if (id === B.MR_FLOOP_DRINKING_WATER) { emitPhotoCube(bufs.photo, wx, y, wz); return; }
@@ -3940,41 +4087,35 @@ const World = {
     if (!gb) gb = (x, yy, z) => this.getBlock(x, yy, z);
     const uvr = Atlas.uv(lava ? 'lava' : 'water');
     const UVQ = [[0, 0], [1, 0], [1, 1], [0, 1]];
-    const same = lava ? isLava : isWaterCell;
-    const levelOf = lava ? lavaLevel : waterCellLevel;
-    const lvl = levelOf(id);
-    const above = gb(wx, y + 1, wz);
-    const topH = same(above) ? 1 : Math.max(0.12, lvl / 9);
+    const sameAt = (x, yy, z, bid) => lava ? isLava(bid) : this.isWaterAt(x, yy, z, bid);
+    const levelAt = (x, yy, z, bid) => lava ? lavaLevel(bid) : this.waterLevelAt(x, yy, z, bid);
+    const fullCube = (bid) => { const d = Reg[bid]; return !!(d && d.block && d.solid && d.shape === 'cube'); };
+    const lvl = levelAt(wx, y, wz, id), above = gb(wx, y + 1, wz), aboveSame = sameAt(wx, y + 1, wz, above);
+    const topH = aboveSame ? 1 : Math.max(0.12, lvl / 9);
     const [lb, ls] = lightAt(wx, y, wz);
+    const lavaRGB = (15 | (8 << 4) | (2 << 8)) / 65535;
 
-    if (!same(above)) {
+    if (!aboveSame) {
       const v = [[wx, y + topH, wz + 1], [wx + 1, y + topH, wz + 1], [wx + 1, y + topH, wz], [wx, y + topH, wz]];
-      pushQuad(buf, v, uvr, UVQ, 1.0, lava ? 1 : lb, ls);
+      pushQuad(buf, v, uvr, UVQ, 1.0, lava ? lavaRGB : lb, ls);
     }
     const below = gb(wx, y - 1, wz);
-    const belowDef = Reg[below];
-    if (!same(below) && !(belowDef && belowDef.opaque)) {
+    if (!sameAt(wx, y - 1, wz, below) && !fullCube(below)) {
       const v = [[wx, y, wz], [wx + 1, y, wz], [wx + 1, y, wz + 1], [wx, y, wz + 1]];
-      pushQuad(buf, v, uvr, UVQ, 0.7, lava ? 1 : lb, ls);
+      pushQuad(buf, v, uvr, UVQ, 0.7, lava ? lavaRGB : lb, ls);
     }
     for (let f = 0; f < 6; f++) {
       if (f === 2 || f === 3) continue;
-      const face = this.FACES[f];
-      const nb = gb(wx + face.d[0], y, wz + face.d[2]);
-      const nbDef = Reg[nb];
+      const face = this.FACES[f], nx = wx + face.d[0], nz = wz + face.d[2], nb = gb(nx, y, nz);
       let bottomH = 0;
-      if (same(nb)) {
-        const nbAbove = gb(wx + face.d[0], y + 1, wz + face.d[2]);
-        const nbTop = same(nbAbove) ? 1 : Math.max(0.12, levelOf(nb) / 9);
+      if (sameAt(nx, y, nz, nb)) {
+        const nbAbove = gb(nx, y + 1, nz);
+        const nbTop = sameAt(nx, y + 1, nz, nbAbove) ? 1 : Math.max(0.12, levelAt(nx, y, nz, nb) / 9);
         if (nbTop >= topH - 0.01) continue;
         bottomH = nbTop;
-      } else if (nbDef && nbDef.opaque) continue;
-      const verts = face.c.map(cn => [
-        wx + cn[0],
-        y + (cn[1] === 1 ? topH : bottomH),
-        wz + cn[2],
-      ]);
-      pushQuad(buf, verts, uvr, UVQ, 0.82, lava ? 1 : lb, ls);
+      } else if (fullCube(nb)) continue;
+      const verts = face.c.map(cn => [wx + cn[0], y + (cn[1] === 1 ? topH : bottomH), wz + cn[2]]);
+      pushQuad(buf, verts, uvr, UVQ, 0.82, lava ? lavaRGB : lb, ls);
     }
   },
 
@@ -4025,7 +4166,7 @@ const World = {
     for (let i = 0; i < 384; i++) {
       const wx = absX(x), wy = absY(y), wz = absZ(z);
       const id = this.getBlock(wx, wy, wz);
-      if (opts.fluids && (id === B.WATER || id === B.LAVA)) {
+      if (opts.fluids && (this.isWaterAt(wx, wy, wz, id) || id === B.LAVA)) {
         return { bx: wx, by: wy, bz: wz, nx, ny, nz, dist: t, id, px: absX(ox + dx * t), py: absY(oy + dy * t), pz: absZ(oz + dz * t) };
       }
       if (id !== B.AIR && !isFluid(id)) {
@@ -4120,7 +4261,7 @@ const World = {
 
   // spawn-suppression: light level + mega torches
   spawnAllowedAt(x, y, z) {
-    if (this.getBlockLight(x, y, z) >= 8) return false;
+    if (this.getEffectiveLight(x, y, z) >= 8) return false;
     for (const k of this.megaTorches) {
       const [mx, my, mz] = k.split(',').map(Number);
       if ((mx - x) ** 2 + (my - y) ** 2 + (mz - z) ** 2 < 100 * 100) return false;
@@ -4236,6 +4377,11 @@ const World = {
   },
 
   plantationPlacementMode(cx, y, cz) {
+    // Plantation Pots are dry structures: reject submerged cells and waterlogged foundations.
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const x = cx + dx, z = cz + dz, id = this.getBlock(x, y, z);
+      if (this.isWaterAt(x, y, z, id)) return null;
+    }
     // Special raised placement: a full 3x3 pad of lower horizontal slabs can
     // hold the plantation in the upper half of those same block cells.
     let allLowerSlabs = true;
@@ -4651,7 +4797,7 @@ const World = {
     if (pd < hurtRange) {
       const pp = (typeof Physics !== 'undefined' && Physics.bodyWorldX) ? { x: Physics.bodyWorldX(Player.body), y: Physics.bodyWorldY(Player.body), z: Physics.bodyWorldZ(Player.body) } : Player.body;
       const dmg = Math.round(maxDmg * (1 - pd / hurtRange) * cover(pp.x, pp.y + 0.9, pp.z));
-      if (dmg > 0) Player.hurt(dmg, pdv.x / (pd + 0.01) * 9, pdv.z / (pd + 0.01) * 9);
+      if (dmg > 0) { const at = src && typeof src === 'object' ? src.type : ''; Player.hurt(dmg, pdv.x / (pd + 0.01) * 9, pdv.z / (pd + 0.01) * 9, { source: 'explosion', attackerType: at }); }
     }
     Mobs.applyExplosion(ex, ey, ez, hurtRange, maxDmg, cover, src || null);
     Vehicles.applyExplosion(ex, ey, ez, hurtRange, maxDmg);

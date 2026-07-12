@@ -613,6 +613,12 @@ const Player = {
     // buckets
     if (s.id === I.BUCKET) {
       const fHit = World.raycast(this.body.x, this.eyeY(), this.body.z, d.x, d.y, d.z, 5, { fluids: true });
+      if (fHit && isOceanPlant(fHit.id)) {
+        World.setBlock(fHit.bx, fHit.by, fHit.bz, deadOceanPlantId(fHit.id), { noWaterRestore: true }); this.swapHeldTo(I.WATER_BUCKET); SFX.splash(); return true;
+      }
+      if (fHit && canWaterlogBlock(fHit.id) && World.isWaterloggedAt(fHit.bx, fHit.by, fHit.bz, fHit.id)) {
+        World.setWaterloggedAt(fHit.bx, fHit.by, fHit.bz, false); this.swapHeldTo(I.WATER_BUCKET); SFX.splash(); return true;
+      }
       if (fHit && (fHit.id === B.WATER || fHit.id === B.LAVA)) {
         const got = fHit.id === B.WATER ? I.WATER_BUCKET : I.LAVA_BUCKET;
         World.setBlock(fHit.bx, fHit.by, fHit.bz, B.AIR);
@@ -623,8 +629,14 @@ const Player = {
       return false;
     }
     if ((s.id === I.WATER_BUCKET || s.id === I.LAVA_BUCKET) && hit) {
+      if (s.id === I.WATER_BUCKET && canWaterlogBlock(hit.id) && !World.isWaterloggedAt(hit.bx, hit.by, hit.bz, hit.id)) {
+        World.setWaterloggedAt(hit.bx, hit.by, hit.bz, true); this.swapHeldTo(I.BUCKET); SFX.splash(); return true;
+      }
       const bx = hit.bx + hit.nx, by = hit.by + hit.ny, bz = hit.bz + hit.nz;
       const existing = World.getBlock(bx, by, bz);
+      if (s.id === I.WATER_BUCKET && canWaterlogBlock(existing) && !World.isWaterloggedAt(bx, by, bz, existing)) {
+        World.setWaterloggedAt(bx, by, bz, true); this.swapHeldTo(I.BUCKET); SFX.splash(); return true;
+      }
       if (existing === B.AIR || (Reg[existing] && Reg[existing].replaceable)) {
         World.setBlock(bx, by, bz, s.id === I.WATER_BUCKET ? B.WATER : B.LAVA);
         this.swapHeldTo(I.BUCKET);
@@ -919,7 +931,7 @@ const Player = {
     const comboId = slabComboIdFor(existingId, heldPieceId);
     if (!comboId) return false;
     if (Reg[comboId].solid && this.placementBlockedByBodies(comboId, x, y, z)) return false;
-    World.setBlock(x, y, z, comboId);
+    World.setBlock(x, y, z, comboId, { waterlogged: World.isWaterloggedAt(x, y, z, existingId) });
     this.consumeHeld(1);
     SFX.place();
     return true;
@@ -989,8 +1001,8 @@ const Player = {
       const alongX = Math.abs(this.lookDir().x) >= Math.abs(this.lookDir().z);
       const botId = alongX ? doorBase : doorBase + 2;
       if (this.placementBlockedByBodies(botId, bx, by, bz) || this.placementBlockedByBodies(botId + 1, bx, by + 1, bz)) return false;
-      World.setBlock(bx, by, bz, botId);
-      World.setBlock(bx, by + 1, bz, botId + 1, { noUpdate: true });
+      World.setBlock(bx, by, bz, botId, { waterlogged: World.isWaterAt(bx, by, bz, existing) });
+      World.setBlock(bx, by + 1, bz, botId + 1, { noUpdate: true, waterlogged: World.isWaterAt(bx, by + 1, bz, above) });
       this.consumeHeld(1);
       SFX.place();
       return true;
@@ -1063,6 +1075,15 @@ const Player = {
         placeId = set.base + dIdx;
       }
     }
+    if (isOceanPlant(s.id)) {
+      const supportId = World.getBlock(bx, by - 1, bz), supportDef = Reg[supportId];
+      if (!World.isWaterAt(bx, by, bz, existing)) { UI.chat('Living ocean plants can only be placed underwater.', '#80d8ff'); return false; }
+      if (!(supportDef && supportDef.block && supportDef.solid && supportDef.shape === 'cube')) { UI.chat('Ocean plants need a full solid block beneath them.', '#80d8ff'); return false; }
+    }
+    if (isDeadOceanPlant(s.id)) {
+      const supportId = World.getBlock(bx, by - 1, bz), supportDef = Reg[supportId];
+      if (World.isWaterAt(bx, by, bz, existing) || !(supportDef && supportDef.block && supportDef.solid && supportDef.shape === 'cube')) return false;
+    }
     if (isSapling(s.id)) {
       const ground = World.getBlock(bx, by - 1, bz);
       if (!canPlantSaplingOn(s.id, ground)) {
@@ -1112,6 +1133,7 @@ const Player = {
     }
 
     const placeOpts = {};
+    if (canWaterlogBlock(placeId) && World.isWaterAt(bx, by, bz, existing)) placeOpts.waterlogged = true;
     const storedJellyHouse = (placeId === B.JELLY_HOUSE && typeof Jelly !== 'undefined') ? Jelly.readHouseItemData(s.data) : null;
     if (placeId === B.JELLY_HOUSE && typeof Jelly !== 'undefined') {
       if (storedJellyHouse) {
@@ -2095,6 +2117,66 @@ const Player = {
   },
 
   // ---------------- health / hunger ----------------
+  deathActorName(type) {
+    const names = {
+      creeper: 'a Frog Creeper', skeleton: 'a Skeleton', spider: 'a Spider', humbug: 'a Humbug', tung: 'TUNG TUNG TUNG SAHUR',
+      sprawler: 'The Sprawler', shark: 'a Shark', barracuda: 'a Barracuda', sea_serpent: 'a Sea Serpent', giant_squid: 'a Giant Squid',
+      jellyfish: 'a Jellyfish', stingray: 'a Stingray', pufferfish: 'a Pufferfish', jelly: 'a Jelly Person', big_jelly: 'a Big Jelly Person',
+      floop: 'Mr Floop', firefly: 'a Firefly', dolphin: 'a Dolphin', octopus: 'an Octopus', anglerfish: 'an Anglerfish',
+    };
+    return names[type] || (type ? ('a ' + String(type).replace(/_/g, ' ')) : 'something');
+  },
+
+  deathMessage(cause, opts) {
+    opts = opts || {};
+    const name = (typeof Multiplayer !== 'undefined' && Multiplayer.localName) ? Multiplayer.localName : 'Player';
+    const actor = opts.attackerName || this.deathActorName(opts.attackerType);
+    const pick = a => a[(Math.random() * a.length) | 0];
+    const byMob = opts.attackerType ? actor : null;
+    const messages = {
+      cactus: [`${name} was pricked to death by a cactus.`, `${name} hugged a cactus too hard.`],
+      lava: [`${name} tried to swim in lava.`, `${name} melted in lava.`],
+      fire: [`${name} went up in flames.`, `${name} burned to death.`],
+      fall: [`${name} hit the ground too hard.`, `${name} fell from a high place.`],
+      void: [`${name} fell out of the world.`, `${name} was swallowed by the void.`],
+      drown: [`${name} drowned.`, `${name} forgot to breathe.`],
+      suffocate: [`${name} suffocated inside a block.`, `${name} was crushed inside the walls.`],
+      starve: [`${name} starved to death.`, `${name} ran out of food and luck.`],
+      lightning: [`${name} was struck by lightning.`, `${name} was turned into a lightning rod.`],
+      explosion: [byMob ? `${name} was blown up by ${actor}.` : `${name} was caught in an explosion.`, `${name} blew up.`],
+      rocket: [opts.attackerName ? `${name} was blown apart by ${actor}'s rocket.` : `${name} was blown apart by a rocket.`, `${name} failed to outrun a rocket.`],
+      arrow: [byMob || opts.attackerName ? `${name} was shot by ${actor}.` : `${name} was shot by an arrow.`, `${name} caught an arrow the hard way.`],
+      gun: [opts.attackerName || byMob ? `${name} was gunned down by ${actor}.` : `${name} was shot to death.`, `${name} lost a gunfight.`],
+      pvp: [opts.attackerName ? `${name} was slain by ${opts.attackerName}.` : `${name} was slain by another player.`, opts.attackerName ? `${name} was eliminated by ${opts.attackerName}.` : `${name} lost a fight with another player.`],
+      mob: [opts.attackerType === 'sprawler' ? `${name} was eaten alive by The Sprawler.` : `${name} was killed by ${actor}.`, `${name} could not escape ${actor}.`],
+      vehicle: [`${name} died in a vehicle accident.`, `${name} was crushed by a vehicle.`],
+      crash: [`${name} crashed too hard.`, `${name} discovered that vehicles need brakes.`],
+      falling_block: [`${name} was crushed by a falling block.`, `${name} stood under the wrong block.`],
+      command: [`${name} died.`, `${name} was removed from existence.`],
+      generic: [`${name} died.`, `${name} did not survive.`],
+    };
+    return pick(messages[cause] || messages.generic);
+  },
+
+  rememberDamage(opts) {
+    opts = opts || {};
+    this.lastDamage = {
+      source: opts.source || 'generic', attackerName: opts.attackerName || '', attackerType: opts.attackerType || '',
+      at: performance.now(),
+    };
+  },
+
+  announceDeath(opts) {
+    opts = opts || {};
+    if (this.deathAnnounced) return;
+    this.deathAnnounced = true;
+    const last = this.lastDamage && performance.now() - this.lastDamage.at < 12000 ? this.lastDamage : null;
+    const data = Object.assign({}, last || {}, opts || {});
+    const text = this.deathMessage(data.source || 'generic', data);
+    if (typeof Multiplayer !== 'undefined' && Multiplayer.announceDeath) Multiplayer.announceDeath(text);
+    else if (typeof UI !== 'undefined' && UI.chat) UI.chat(text, '#ff7777');
+  },
+
   hurt(dmg, kx, kz, opts) {
     opts = opts || {};
     if (this.dead || this.invulnT > 0) return;
@@ -2107,17 +2189,22 @@ const Player = {
       dmg = Math.max(1, Math.round(dmg * (1 - Math.min(0.75, pts * 0.035))));
     }
     this.hp -= dmg;
+    this.rememberDamage(opts);
     this.invulnT = 0.5;
-    this.body.vx += kx || 0;
-    this.body.vz += kz || 0;
-    this.body.vy = Math.max(this.body.vy, 4.5);
+    if (!opts.noKnockback) {
+      this.body.vx += kx || 0;
+      this.body.vz += kz || 0;
+      this.body.vy = Math.max(this.body.vy, 4.5);
+    }
     SFX.hurt();
     UI.damageFlash();
     UI.updateStats();
-    if (this.hp <= 0) this.die();
+    if (this.hp <= 0) this.die(opts);
   },
 
-  die() {
+  die(opts) {
+    if (this.dead) return;
+    this.announceDeath(opts);
     this.dead = true;
     this.hp = 0;
     Vehicles.stopBoard(true, true);
@@ -2143,6 +2230,7 @@ const Player = {
 
   respawn() {
     this.dead = false;
+    this.deathAnnounced = false; this.lastDamage = null;
     this.hp = 20; this.hunger = 20; this.exhaustion = 0; this.air = 10;
     this.fallDist = 0;
     this.swimming = false;
@@ -2215,7 +2303,7 @@ const Player = {
     else UI.setBlockOverlay(null);
 
     const headCellId = World.getBlock(Math.floor(this.body.x), Math.floor(this.eyeY()), Math.floor(this.body.z));
-    const headWaterNow = isWater(headCellId) || isWaterlogged(headCellId);
+    const headWaterNow = World.isWaterAt(Math.floor(this.body.x), Math.floor(this.eyeY()), Math.floor(this.body.z), headCellId);
 
     // Creative players still get the opaque head-in-block overlay so they
     // cannot use clipped/culling views as xray, but they do not take damage.
@@ -2250,11 +2338,11 @@ const Player = {
       this.suffocateT += dt;
       while (this.suffocateT >= 0.5 && !this.dead) {
         this.suffocateT -= 0.5;
-        this.hp -= 1; // half a heart every 0.5 seconds
+        this.hp -= 1; this.rememberDamage({ source: 'suffocate' }); // half a heart every 0.5 seconds
         SFX.hurt();
         UI.damageFlash();
         UI.updateStats();
-        if (this.hp <= 0) { this.die(); return; }
+        if (this.hp <= 0) { this.die({ source: 'suffocate' }); return; }
       }
     } else {
       this.suffocateT = 0;
@@ -2283,7 +2371,7 @@ const Player = {
       if (this.airT >= 1.5) {
         this.airT = 0;
         if (this.air > 0) this.air--;
-        else { this.hp -= 2; SFX.hurt(); UI.damageFlash(); UI.updateStats(); if (this.hp <= 0) { this.die(); return; } }
+        else { this.hp -= 2; this.rememberDamage({ source: 'drown' }); SFX.hurt(); UI.damageFlash(); UI.updateStats(); if (this.hp <= 0) { this.die({ source: 'drown' }); return; } }
         UI.updateStats();
       }
     } else if (this.air < 10) {
@@ -2379,12 +2467,10 @@ const Player = {
   // first-person hand and held item match the voxel light where you're standing
   tintViewmodel(force) {
     if (!this.vmMesh) return;
-    const raw = World.getLightRaw(Math.floor(this.body.x), Math.floor(this.eyeY()), Math.floor(this.body.z));
-    const sky = (raw >> 4) * World.dayFUniform.value;
-    const block = raw & 15;
-    const l = Math.max(0.06, Math.max(block, sky) / 15);
-    if (!force && Math.abs(l - (this._vmLight || -1)) < 0.035) return;
-    this._vmLight = l;
+    const c = World.getLightColor(Math.floor(this.body.x), Math.floor(this.eyeY()), Math.floor(this.body.z), undefined, 0.06);
+    const key = c.map(v => v.toFixed(2)).join(',');
+    if (!force && key === this._vmLightRGB) return;
+    this._vmLightRGB = key;
     this.vmMesh.traverse(o => {
       if (!o.isMesh && !o.isSprite) return;
       const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -2395,7 +2481,7 @@ const Player = {
           continue;
         }
         if (!m.userData.vmBaseCol) m.userData.vmBaseCol = m.color.clone();
-        m.color.copy(m.userData.vmBaseCol).multiplyScalar(l);
+        m.color.copy(m.userData.vmBaseCol); m.color.r *= c[0]; m.color.g *= c[1]; m.color.b *= c[2];
       }
     });
   },
@@ -2613,7 +2699,7 @@ const Player = {
             const boots = this.armor && this.armor[3] && Reg[this.armor[3].id];
             const fallFactor = boots && boots.armor && boots.armor.fallFactor ? boots.armor.fallFactor : 1;
             const dmg = Math.floor((this.fallDist - 3) * fallFactor);
-            if (dmg > 0) this.hurt(dmg, 0, 0, { pierce: true });
+            if (dmg > 0) this.hurt(dmg, 0, 0, { pierce: true, source: 'fall' });
           }
           this.fallDist = 0;
         }
@@ -2621,8 +2707,7 @@ const Player = {
     }
 
     if (b.y < -12 && !this.dead) {
-      UI.chat('The void eats you instantly.', '#ff8080');
-      this.die();
+      this.die({ source: 'void' });
       return;
     }
 

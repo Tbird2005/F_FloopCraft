@@ -611,13 +611,10 @@ const Vehicles = {
   },
 
 
-  vehicleLightLevel(v) {
+  vehicleLightColor(v) {
     const pos = v.body || v;
     const h = v.body ? (v.body.h || 1) : 0.4;
-    const raw = World.getLightRaw(Math.floor(pos.x), Math.floor(pos.y + h * 0.55), Math.floor(pos.z));
-    const sky = (raw >> 4) * World.dayFUniform.value;
-    const block = raw & 15;
-    return Math.max(0.06, Math.max(block, sky) / 15);
+    return World.getLightColor(Math.floor(pos.x), Math.floor(pos.y + h * 0.55), Math.floor(pos.z), undefined, 0.06);
   },
 
   tintVehicle(v, dt, force) {
@@ -626,16 +623,16 @@ const Vehicles = {
     v.tintT = (v.tintT || 0) - dt;
     if (!force && v.tintT > 0) return;
     v.tintT = 0.20;
-    const l = this.vehicleLightLevel(v);
-    if (!force && Math.abs(l - (v._light || -1)) < 0.035) return;
-    v._light = l;
+    const c = this.vehicleLightColor(v), key = c.map(v => v.toFixed(2)).join(',');
+    if (!force && key === v._lightRGB) return;
+    v._lightRGB = key;
     obj.traverse(o => {
       if (!o.isMesh && !o.isSprite) return;
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       for (const m of mats) {
         if (!m || !m.color) continue;
         if (!m.userData.vehicleBaseCol) m.userData.vehicleBaseCol = m.color.clone();
-        m.color.copy(m.userData.vehicleBaseCol).multiplyScalar(l);
+        m.color.copy(m.userData.vehicleBaseCol); m.color.r *= c[0]; m.color.g *= c[1]; m.color.b *= c[2];
       }
     });
   },
@@ -857,7 +854,7 @@ const Vehicles = {
                 Particles.blockBurst(bx, by, bz, id);
                 if (!(v.kind === 'supercar' && leaf)) {
                   this.hurt(v, 0.3);
-                  if (!hitPlayer && drivingThis && Math.random() < 0.35) { Player.hurt(1, 0, 0); hitPlayer = true; }
+                  if (!hitPlayer && drivingThis && Math.random() < 0.35) { Player.hurt(1, 0, 0, { source: 'vehicle' }); hitPlayer = true; }
                 }
               }
             }
@@ -888,14 +885,14 @@ const Vehicles = {
           if (hardLanding) {
             const dmg = Math.max(1, Math.floor(Math.max(0, impact - safeImpact) * 1.1));
             this.hurt(v, dmg);
-            if (drivingThis && dmg > 3) Player.hurt(Math.max(1, Math.floor(dmg * 0.2)), 0, 0, { pierce: true });
+            if (drivingThis && dmg > 3) Player.hurt(Math.max(1, Math.floor(dmg * 0.2)), 0, 0, { pierce: true, source: 'crash' });
           }
           if (drivingThis) Player.fallDist = 0;
         } else if (v.fallDist > 7) {
           const dmg = Math.floor((v.fallDist - 6) * 0.6);
           if (dmg > 0) {
             this.hurt(v, dmg);
-            if (drivingThis) Player.hurt(Math.max(1, Math.floor(dmg * 0.6)), 0, 0, { pierce: true });
+            if (drivingThis) Player.hurt(Math.max(1, Math.floor(dmg * 0.6)), 0, 0, { pierce: true, source: 'crash' });
           }
         }
         v.fallDist = 0;
@@ -922,7 +919,7 @@ const Vehicles = {
               smashed = true;
               if (!(v.kind === 'supercar' && leaf)) {
                 this.hurt(v, 0.4);
-                if (drivingThis && Math.random() < 0.35) Player.hurt(1, 0, 0);
+                if (drivingThis && Math.random() < 0.35) Player.hurt(1, 0, 0, { source: 'vehicle' });
               }
             }
           }
@@ -936,7 +933,7 @@ const Vehicles = {
           SFX.hurt({ x: v.x, y: v.y + 0.8, z: v.z });
           UI.chat('*CLUNK*', '#aaa');
           this.hurt(v, 2);
-          if (Math.random() < 0.5) Player.hurt(Math.max(1, Math.round(Math.abs(preSpeed) / 3)), 0, 0);
+          if (Math.random() < 0.5) Player.hurt(Math.max(1, Math.round(Math.abs(preSpeed) / 3)), 0, 0, { source: 'crash' });
         }
         v.speed *= 0.3;
       }

@@ -152,7 +152,7 @@ const Guns = {
       Mobs.hurt(mobHit.mob, Math.max(1, Math.round(d.dmg * 0.7)), dir.x * 3, dir.z * 3, shooter);
     } else if (playerT < Infinity) {
       endT = playerT;
-      Player.hurt(Math.max(1, Math.round(d.dmg * 0.7)), dir.x * 3, dir.z * 3);
+      Player.hurt(Math.max(1, Math.round(d.dmg * 0.7)), dir.x * 3, dir.z * 3, { source: 'gun', attackerType: shooter && shooter.type || '', attackerName: shooter && shooter.peerName || '' });
     }
     const ex = from.x + dir.x * endT, ey = from.y + dir.y * endT, ez = from.z + dir.z * endT;
     this.tracer(from.x, from.y, from.z, ex, ey, ez, 0xff6060, false);

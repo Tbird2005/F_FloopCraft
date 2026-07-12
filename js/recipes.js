@@ -40,6 +40,7 @@ const Recipes = (() => {
   add(B.TORCH, 4, [[I.COAL], [S]]);
   add(B.TORCH, 4, [[I.CHARCOAL], [S]], { hide: true }); // works in the grid, but no duplicate book entry
   for (const t of COLORED_TORCHS) add(t.floor, 1, [[B.TORCH, t.dye]]);
+  for (const t of JELLY_TORCHS) add(t.floor, 1, [[B.TORCH, t.glob]]);
   add(B.FURNACE, 1, [[B.COBBLE, B.COBBLE, B.COBBLE], [B.COBBLE, _, B.COBBLE], [B.COBBLE, B.COBBLE, B.COBBLE]]);
   add(B.STONE_BRICKS, 4, [[B.STONE, B.STONE], [B.STONE, B.STONE]]);
   add(B.LADDER_PX, 3, [[S, _, S], [S, S, S], [S, _, S]]);

@@ -7,21 +7,20 @@ const Particles = {
 
   init(scene) { this.scene = scene; },
 
-  sampleLight(x, y, z, minLight) {
+  sampleLightColor(x, y, z, minLight) {
     minLight = minLight == null ? 0.10 : minLight;
-    if (typeof World === 'undefined' || !World || !World.getLightRaw) return 1;
-    const raw = World.getLightRaw(Math.floor(x), Math.floor(y), Math.floor(z));
-    const sky = (raw >> 4) * ((World.dayFUniform && World.dayFUniform.value != null) ? World.dayFUniform.value : 1);
-    const block = raw & 15;
-    return Math.max(minLight, Math.max(block, sky) / 15);
+    if (typeof World === 'undefined' || !World || !World.getLightColor) return [1, 1, 1];
+    return World.getLightColor(Math.floor(x), Math.floor(y), Math.floor(z), undefined, minLight);
   },
+
+  sampleLight(x, y, z, minLight) { return Math.max(...this.sampleLightColor(x, y, z, minLight)); },
 
   applyLitColor(colorAttr, i, baseRgb, x, y, z, minLight) {
     if (!colorAttr || !baseRgb) return;
-    const l = this.sampleLight(x, y, z, minLight);
-    colorAttr.array[i * 3] = baseRgb[0] * l;
-    colorAttr.array[i * 3 + 1] = baseRgb[1] * l;
-    colorAttr.array[i * 3 + 2] = baseRgb[2] * l;
+    const c = this.sampleLightColor(x, y, z, minLight);
+    colorAttr.array[i * 3] = baseRgb[0] * c[0];
+    colorAttr.array[i * 3 + 1] = baseRgb[1] * c[1];
+    colorAttr.array[i * 3 + 2] = baseRgb[2] * c[2];
   },
 
   burst(x, y, z, rgb, count, speed) {

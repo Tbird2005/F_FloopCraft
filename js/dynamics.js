@@ -5,6 +5,7 @@
 const Dynamics = {
   scene: null,
   falling: [],       // {id, mesh, body}
+  fallingGeometry: new Map(), // one UV-mapped cube geometry per falling block id
   fireAcc: 0,
   snowAcc: 0,
   hazardAcc: 0,
@@ -19,7 +20,7 @@ const Dynamics = {
 
   init(scene) {
     this.scene = scene;
-    for (const f of this.falling) scene.remove(f.mesh);
+    for (const f of this.falling) { scene.remove(f.mesh); if (f.mesh && f.mesh.material) f.mesh.material.dispose(); }
     for (const s of this.stars) scene.remove(s.mesh);
     this.falling = [];
     this.stars = [];
@@ -34,11 +35,17 @@ const Dynamics = {
   queueFallRelight(x, z) {
     if (!World || !World.relightQueue) return;
     const cx = World.chunkCoord ? World.chunkCoord(x) : Math.floor(x / 16), cz = World.chunkCoord ? World.chunkCoord(z) : Math.floor(z / 16);
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dz = -1; dz <= 1; dz++) {
-        World.relightQueue.add(World.key(cx + dx, cz + dz));
-      }
-    }
+    for (const [dx, dz] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]) World.relightQueue.add(World.key(cx + dx, cz + dz));
+  },
+
+  fallingGeometryFor(id) {
+    let geo = this.fallingGeometry.get(id);
+    if (geo) return geo;
+    const tmp = Drops.makeBlockCube(id, 0.98);
+    geo = tmp.geometry;
+    this.fallingGeometry.set(id, geo);
+    if (tmp.material) tmp.material.dispose();
+    return geo;
   },
 
   startFall(x, y, z, id) {
@@ -51,7 +58,7 @@ const Dynamics = {
     // waking neighbors manually (noUpdate skipped it) so stacked sand chains
     World.checkSupports(x, y, z, B.AIR);
     Water.schedule(x, y, z);
-    const mesh = Drops.makeBlockCube(id, 0.98);
+    const mesh = new THREE.Mesh(this.fallingGeometryFor(id), new THREE.MeshBasicMaterial({ map: Atlas.texture }));
     mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
     this.scene.add(mesh);
     const body = { x: x + 0.5, y, z: z + 0.5, vx: 0, vy: 0, vz: 0, w: 0.45, h: 0.98, onGround: false, hitH: false };
@@ -75,20 +82,19 @@ const Dynamics = {
       f.tintT = (f.tintT || 0) - dt;
       if (f.tintT <= 0) {
         f.tintT = 0.2;
-        const raw = World.getLightRaw(Math.floor(b.x), Math.floor(b.y + 0.5), Math.floor(b.z));
-        const l = Math.max(0.12, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
-        if (f.mesh.material && f.mesh.material.color) f.mesh.material.color.setRGB(l, l, l);
+        const c = World.getLightColor(Math.floor(b.x), Math.floor(b.y + 0.5), Math.floor(b.z), undefined, 0.12);
+        if (f.mesh.material && f.mesh.material.color) f.mesh.material.color.setRGB(c[0], c[1], c[2]);
       }
       if (b.onGround || b.y < -5) {
         this.scene.remove(f.mesh);
-        f.mesh.geometry.dispose();
+        if (f.mesh.material) f.mesh.material.dispose();
         this.falling.splice(i, 1);
         if (b.y < -5) continue;
         const bx = Math.floor(b.x), by = Math.round(b.y), bz = Math.floor(b.z);
         const here = World.getBlock(bx, by, bz);
         const hereDef = Reg[here];
         if (here === B.AIR || (hereDef && (hereDef.replaceable || !hereDef.solid))) {
-          if (hereDef && hereDef.needsSupport) Drops.spawn(bx + 0.5, by + 0.4, bz + 0.5, here, 1);
+          if (hereDef && hereDef.needsSupport && !isOceanPlant(here)) Drops.spawn(bx + 0.5, by + 0.4, bz + 0.5, here, 1);
           World.setBlock(bx, by, bz, f.id, { skipLight: true });
           // The landing cell may close a skylight shaft or cross a chunk border.
           // Incremental lighting handles most cases; this verification pass fixes
@@ -208,8 +214,8 @@ const Dynamics = {
         h.lava = this.hazardCheck(upperBody, true).lava;
       }
       if (h.lava) Player.hurt(4, 0, 0, { pierce: true, source: 'lava' });
-      else if (h.fire) Player.hurt(1, 0, 0, { pierce: true });
-      else if (h.cactus) Player.hurt(1, 0, 0);
+      else if (h.fire) Player.hurt(1, 0, 0, { pierce: true, source: 'fire' });
+      else if (h.cactus) Player.hurt(1, 0, 0, { source: 'cactus' });
     }
     // mobs are host-authoritative; a client must not damage them (it runs this only
     // for its own player hazard damage)
@@ -630,7 +636,7 @@ const Dynamics = {
       const d = Math.sqrt((body.x - bx - 0.5) ** 2 + (body.y - by) ** 2 + (body.z - bz - 0.5) ** 2);
       if (d < 4) cb(Math.round(10 * (1 - d / 4)));
     };
-    hurtNear(x, y, z, Player.body, (dmg) => { if (dmg > 0) Player.hurt(dmg, 0, 0); });
+    hurtNear(x, y, z, Player.body, (dmg) => { if (dmg > 0) Player.hurt(dmg, 0, 0, { source: 'lightning', pierce: true }); });
     for (const m of Mobs.list) if (!m.dead) hurtNear(x, y, z, m.body, (dmg) => { if (dmg > 0) Mobs.hurt(m, dmg, 0, 0); });
   },
 

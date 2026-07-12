@@ -18,7 +18,7 @@ const Dimensions = {
   emptyState(dim) {
     return {
       dim,
-      diffs: [], signs: [], signDirs: [], lore: [], chests: [], spawners: [], jellyHouses: [], dungeonConquered: [], bedDirs: [], photoDirs: [], stairSideways: [], crops: [],
+      diffs: [], signs: [], signDirs: [], lore: [], chests: [], spawners: [], jellyHouses: [], dungeonConquered: [], bedDirs: [], photoDirs: [], stairSideways: [], waterlogged: [], crops: [],
       plantationOrigins: [], plantationUnderSlabs: [], furnaces: [], mobs: [], cars: [], boards: [], boats: [],
       dynamics: null, player: null,
     };
@@ -53,6 +53,7 @@ const Dimensions = {
       bedDirs: data.bedDirs || [],
       photoDirs: data.photoDirs || [],
       stairSideways: data.stairSideways || data.stairCorners || [],
+      waterlogged: data.waterlogged || [],
       crops: data.crops || [],
       plantationOrigins: data.plantationOrigins || [],
       plantationUnderSlabs: data.plantationUnderSlabs || [],
@@ -99,6 +100,7 @@ const Dimensions = {
       bedDirs: [...World.bedDirs.entries()],
       photoDirs: [...World.photoDirs.entries()],
       stairSideways: [...World.stairSideways.entries()],
+      waterlogged: [...World.waterlogged],
       crops: [...World.crops.entries()],
       plantationOrigins: [...World.plantationOrigins.entries()],
       plantationUnderSlabs: [...World.plantationUnderSlabs.entries()],
@@ -144,7 +146,7 @@ const Dimensions = {
   applyWorldState(st) {
     const unpack = Save.unpackStack.bind(Save);
     World.diffs.clear(); World.diffIndex.clear(); World.signs.clear(); World.signDirs.clear(); World.loreMap.clear();
-    World.chests.clear(); World.spawners.clear(); if (World.jellyHouses) World.jellyHouses.clear(); if (World.jellyHouseIds) World.jellyHouseIds.clear(); World.bedDirs.clear(); World.photoDirs.clear(); World.stairSideways.clear(); World.crops.clear();
+    World.chests.clear(); World.spawners.clear(); if (World.jellyHouses) World.jellyHouses.clear(); if (World.jellyHouseIds) World.jellyHouseIds.clear(); World.bedDirs.clear(); World.photoDirs.clear(); World.stairSideways.clear(); World.waterlogged.clear(); World.crops.clear();
     World.plantationOrigins.clear(); World.plantationUnderSlabs.clear(); World.furnaces.clear();
     World.megaTorches.clear(); World.fires.clear(); World.saplings.clear(); World.lights.clear(); if (World.markLightBucketsDirty) World.markLightBucketsDirty(); World.lightBuckets = null; World._lightBucketCount = -1;
     if (World.dungeonConquered) {
@@ -176,6 +178,7 @@ const Dimensions = {
     for (const [k, d] of st.bedDirs || []) World.bedDirs.set(k, d);
     for (const [k, d] of st.photoDirs || []) World.photoDirs.set(k, d);
     for (const [k, d] of st.stairSideways || st.stairCorners || []) World.stairSideways.set(k, d);
+    for (const k of st.waterlogged || []) World.waterlogged.add(String(k));
     for (const [k, c] of st.crops || []) World.crops.set(k, c);
     for (const [k, o] of st.plantationOrigins || []) World.plantationOrigins.set(k, o);
     for (const [k, id] of st.plantationUnderSlabs || []) World.plantationUnderSlabs.set(k, id);

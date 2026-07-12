@@ -40,6 +40,7 @@ const HUMBUG_LINES = ['no.', 'bah.', 'christmas is CANCELLED.', 'patapim is prop
 const JELLY_COLORS = (typeof JELLY_COLORS_ALL !== 'undefined') ? JELLY_COLORS_ALL : ['pink', 'cyan', 'lime', 'grape', 'orange', 'yellow'];
 const JELLY_COLOR_HEX = { pink: 0xff7fd4, cyan: 0x6ee8ff, lime: 0x9cff6e, grape: 0xc77dff, orange: 0xff9d4a, yellow: 0xffe86e };
 const JELLY_MOB_TYPES = ['jelly', 'big_jelly'];
+const FIREFLY_DEF = { hp: 1, xp: 0, w: 0.10, h: 0.22, speed: 1.15, color: 0xff7a18 };
 const OCEAN_MOB_DEFS = {
   minnow:    { hp: 2,  xp: 1, w: 0.13, h: 0.24, len: 0.55, speed: 2.8, main: '#9bc8d8', dark: '#47788d', school: true, drop: I.RAW_FISH },
   salmon:    { hp: 6,  xp: 2, w: 0.22, h: 0.38, len: 1.05, speed: 2.7, main: '#db7f75', dark: '#7f3b40', school: true, drop: I.RAW_FISH },
@@ -48,8 +49,8 @@ const OCEAN_MOB_DEFS = {
   pufferfish:{ hp: 5,  xp: 2, w: 0.24, h: 0.42, len: 0.62, speed: 1.8, main: '#d6bd55', dark: '#6b5a24', drop: I.RAW_FISH, puffer: true },
   anglerfish:{ hp: 8,  xp: 4, w: 0.28, h: 0.45, len: 1.00, speed: 2.1, main: '#37405c', dark: '#111522', drop: I.RAW_FISH, deep: true, angler: true },
   shark:     { hp: 30, xp: 9, w: 0.58, h: 0.78, len: 2.55, speed: 4.2, main: '#6d8293', dark: '#344653', drop: I.SHARK_TOOTH, hostile: true },
-  jellyfish: { hp: 5,  xp: 2, w: 0.30, h: 0.70, len: 0.62, speed: 1.25, main: '#a98bf0', dark: '#5e3e9b', shape: 'jelly' },
-  stingray:  { hp: 9,  xp: 3, w: 0.55, h: 0.22, len: 1.25, speed: 2.8, main: '#8b796b', dark: '#4d4038', drop: I.RAW_FISH, shape: 'ray' },
+  jellyfish: { hp: 5,  xp: 2, w: 0.30, h: 0.70, len: 0.62, speed: 1.25, main: '#a98bf0', dark: '#5e3e9b', shape: 'jelly', neutral: true, damage: 3, drop: I.JELLY_GLOB_GRAPE },
+  stingray:  { hp: 9,  xp: 3, w: 0.55, h: 0.22, len: 1.25, speed: 2.8, main: '#8b796b', dark: '#4d4038', drop: I.RAW_FISH, shape: 'ray', neutral: true, damage: 4 },
   octopus:   { hp: 12, xp: 4, w: 0.42, h: 0.72, len: 0.85, speed: 2.0, main: '#a64c70', dark: '#57233b', drop: I.INK_SAC, shape: 'octopus' },
   dolphin:   { hp: 18, xp: 5, w: 0.38, h: 0.58, len: 1.85, speed: 4.6, main: '#7895a8', dark: '#36566a', drop: I.RAW_FISH },
   seahorse:  { hp: 3,  xp: 1, w: 0.15, h: 0.55, len: 0.42, speed: 1.45, main: '#e7ad48', dark: '#8e5d20', shape: 'seahorse' },
@@ -59,10 +60,10 @@ const OCEAN_MOB_DEFS = {
 };
 const OCEAN_MOB_TYPES = Object.keys(OCEAN_MOB_DEFS);
 
-const MOB_XP = { creeper: 5, skeleton: 5, spider: 4, humbug: 8, sheep: 1, floop: 0, chicken: 1, camel: 2, tung: 12, jelly: 1, big_jelly: 3 };
-const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36, sprawler: 40, jelly: 8, big_jelly: 20 };
-const MOB_HEIGHTS = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4, sprawler: 2.0, jelly: 0.95, big_jelly: 1.8 };
-const MOB_WIDTHS = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4, sprawler: 1.45, jelly: 0.24, big_jelly: 0.34 };
+const MOB_XP = { creeper: 5, skeleton: 5, spider: 4, humbug: 8, sheep: 1, floop: 0, chicken: 1, camel: 2, tung: 12, jelly: 1, big_jelly: 3, firefly: FIREFLY_DEF.xp };
+const MOB_MAX_HP = { creeper: 20, skeleton: 20, floop: 40, humbug: 24, sheep: 10, spider: 16, chicken: 6, camel: 20, tung: 36, sprawler: 40, jelly: 8, big_jelly: 20, firefly: FIREFLY_DEF.hp };
+const MOB_HEIGHTS = { creeper: 1.0, skeleton: 1.95, floop: 2.7, humbug: 2.55, sheep: 1.5, spider: 0.9, chicken: 1.0, camel: 2.3, tung: 2.4, sprawler: 2.0, jelly: 0.95, big_jelly: 1.8, firefly: FIREFLY_DEF.h };
+const MOB_WIDTHS = { creeper: 0.42, skeleton: 0.32, floop: 0.32, humbug: 0.32, sheep: 0.45, spider: 0.55, chicken: 0.28, camel: 0.5, tung: 0.4, sprawler: 1.45, jelly: 0.24, big_jelly: 0.34, firefly: FIREFLY_DEF.w };
 for (const [type, d] of Object.entries(OCEAN_MOB_DEFS)) { MOB_XP[type] = d.xp; MOB_MAX_HP[type] = d.hp; MOB_HEIGHTS[type] = d.h; MOB_WIDTHS[type] = d.w; }
 const HOSTILES = ['creeper', 'skeleton', 'humbug', 'tung', 'sprawler'];
 const MOB_TARGET_MEMORY = 30; // seconds: mobs remember a target after LOS breaks, but only acquire targets through LOS
@@ -80,6 +81,8 @@ const Mobs = {
   scene: null,
   spawnTimer: 0,
   pathBudget: 0,
+  _fireflyAssets: null,
+  _fireflyHurtMat: null,
 
   init(scene) { this.scene = scene; this.list = []; this.arrows = []; },
 
@@ -240,18 +243,51 @@ const Mobs = {
     t.minFilter = THREE.NearestFilter;
     return (this._skinCache[key] = t);
   },
-  // textured box: skin on every face, optional face canvas on the front (+z)
+  // textured box.
+  //  - painter as a FUNCTION: same skin on all faces (+ optional front faceCanvas).
+  //  - painter as an OBJECT { side, top, bottom, front, back }: a real per-face
+  //    unwrap so a mob's head/flank/belly/dorsal/tail all read differently.
+  // three.js BoxGeometry material order is [+x, -x, +y, -y, +z, -z]; this model
+  // set puts the face on +z, so front = +z (idx 4), back = -z (idx 5), and both
+  // ±x share the "side" skin (mirror flanks). Textures cache per skinKey+role.
   tbox(w, h, d, skinKey, painter, faceCanvas, opts) {
     const g = new THREE.BoxGeometry(w, h, d);
-    const mk = () => new THREE.MeshLambertMaterial(Object.assign({ map: this.skinTex(skinKey, painter) }, opts || {}));
+    const baseOpts = opts || {};
+    const matFor = (fn, role) => new THREE.MeshLambertMaterial(Object.assign({ map: this.skinTex(skinKey + '#' + role, fn) }, baseOpts));
+    if (painter && typeof painter === 'object') {
+      const P = painter, side = P.side || P.front || P.top;
+      const cache = {};
+      const roleMat = (role, fn) => {
+        const use = fn || side, tag = fn ? role : 'side';
+        return cache[tag] || (cache[tag] = matFor(use, tag));
+      };
+      const mSide = roleMat('side', side);
+      return new THREE.Mesh(g, [
+        mSide, mSide,                       // +x / -x flanks
+        roleMat('top', P.top),              // +y
+        roleMat('bottom', P.bottom),        // -y
+        roleMat('front', P.front),          // +z front / face
+        roleMat('back', P.back),            // -z back / tail
+      ]);
+    }
+    const mk = () => matFor(painter, 'all');
     if (faceCanvas) {
       const tex = new THREE.CanvasTexture(faceCanvas);
       tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
-      const face = new THREE.MeshLambertMaterial(Object.assign({ map: tex }, opts || {}));
+      const face = new THREE.MeshLambertMaterial(Object.assign({ map: tex }, baseOpts));
       const plain = mk();
       return new THREE.Mesh(g, [plain, plain, plain, plain, face, plain]);
     }
     return new THREE.Mesh(g, mk());
+  },
+
+  // mix two #rrggbb hexes (t=0 -> a, t=1 -> b)
+  _mixHex(a, b, t) {
+    const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+    const ar = (pa >> 16) & 255, ag = (pa >> 8) & 255, ab = pa & 255;
+    const br = (pb >> 16) & 255, bg = (pb >> 8) & 255, bb = pb & 255;
+    const r = Math.round(ar + (br - ar) * t), gg = Math.round(ag + (bg - ag) * t), bl = Math.round(ab + (bb - ab) * t);
+    return '#' + ((1 << 24) | (r << 16) | (gg << 8) | bl).toString(16).slice(1);
   },
   // tiny deterministic speckle for skin painters
   _skinSpeck(c, cols, n, seed) {
@@ -406,17 +442,148 @@ const Mobs = {
     });
   },
 
+  fireflyAssets() {
+    if (this._fireflyAssets) return this._fireflyAssets;
+    const bodyGeo = new THREE.BoxGeometry(0.12, 0.10, 0.18);
+    const wingGeo = new THREE.BoxGeometry(0.16, 0.015, 0.11);
+    const bodyMat = new THREE.MeshBasicMaterial({ color: FIREFLY_DEF.color });
+    const wingMat = new THREE.MeshBasicMaterial({ color: 0xffc680, transparent: true, opacity: 0.62, side: THREE.DoubleSide, depthWrite: false });
+    return (this._fireflyAssets = { bodyGeo, wingGeo, bodyMat, wingMat });
+  },
+
+  fireflyLightAt(x, y, z) {
+    let r = 0, g = 0, b = 0;
+    for (const m of this.list) {
+      if (!m || m.dead || m.type !== 'firefly' || !m.body) continue;
+      const d = this.deltaToPoint(m.body, x, y, z);
+      const dist = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+      if (dist >= 2.35) continue;
+      const level = Math.max(0, 1 - dist / 2.35) * (Number.isFinite(+m.fireflyLightPower) ? +m.fireflyLightPower : 1) / 15;
+      r += level; g += level * 0.38; b += level * 0.035;
+    }
+    return [Math.min(1, r), Math.min(1, g), Math.min(1, b)];
+  },
+
   buildModel(type, gunId, color) {
     const g = new THREE.Group();
     const parts = { legs: [], wool: [] };
-    if (OCEAN_MOB_DEFS[type]) {
+    if (type === 'firefly') {
+      const a = this.fireflyAssets();
+      const body = new THREE.Mesh(a.bodyGeo, a.bodyMat); body.position.y = 0.11;
+      const leftWing = new THREE.Mesh(a.wingGeo, a.wingMat); leftWing.position.set(-0.11, 0.14, 0);
+      const rightWing = new THREE.Mesh(a.wingGeo, a.wingMat); rightWing.position.set(0.11, 0.14, 0);
+      g.add(body, leftWing, rightWing); parts.head = body; parts.body = body; parts.wings = [leftWing, rightWing];
+    } else if (OCEAN_MOB_DEFS[type]) {
       const d = OCEAN_MOB_DEFS[type];
-      const paint = (c) => {
-        c.fillStyle = d.main; c.fillRect(0, 0, 16, 16);
-        c.fillStyle = d.dark; c.fillRect(0, 12, 16, 4);
-        if (d.stripe) { c.fillStyle = '#f7f3e8'; c.fillRect(4, 0, 3, 16); c.fillRect(11, 0, 2, 16); }
-        this._skinSpeck(c, [d.main, d.dark, '#d7edf5'], d.puffer ? 34 : 14, type.length * 13);
+      // Per-species skins. Body parts are box faces, so a 16x16 side view maps
+      // cleanly; countershading (dark back / pale belly) + a mid lateral line +
+      // species markings read at a glance. seed keeps speckle stable per type.
+      const seed = type.length * 13 + 7;
+      const eye = (c, ex) => { c.fillStyle = '#0b0e12'; c.fillRect(ex, 5, 2, 2); c.fillStyle = '#f4f8fb'; c.fillRect(ex, 5, 1, 1); };
+      const painters = {
+        minnow: (c) => {
+          c.fillStyle = '#9bc8d8'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#3f6d80'; c.fillRect(0, 0, 16, 4);
+          c.fillStyle = '#eaf7fb'; c.fillRect(0, 12, 16, 4);
+          c.fillStyle = '#35606f'; c.fillRect(0, 8, 16, 1);
+          this._skinSpeck(c, ['#8bbccd', '#b6dce8'], 12, seed); eye(c, 12);
+        },
+        salmon: (c) => {
+          c.fillStyle = '#db7f75'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#8f4048'; c.fillRect(0, 0, 16, 5);
+          c.fillStyle = '#f0d8cc'; c.fillRect(0, 12, 16, 4);
+          c.fillStyle = '#6d2f38'; for (let i = 1; i < 15; i += 4) c.fillRect(i, 2 + (i % 3), 2, 1);
+          c.fillStyle = '#ffe9df'; c.fillRect(0, 11, 16, 1);
+          this._skinSpeck(c, ['#c96c62', '#8f4048'], 14, seed); eye(c, 12);
+        },
+        tuna: (c) => {
+          c.fillStyle = '#4e82a8'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#223f5a'; c.fillRect(0, 0, 16, 5);
+          c.fillStyle = '#dbe8f0'; c.fillRect(0, 11, 16, 5);
+          c.fillStyle = '#8fb0c6'; c.fillRect(0, 8, 16, 1);
+          c.fillStyle = '#f2c744'; for (let i = 1; i < 6; i++) { c.fillRect(i * 2, 5, 1, 1); c.fillRect(i * 2, 10, 1, 1); } // finlets
+          this._skinSpeck(c, ['#3f6d90', '#5c93bb'], 12, seed); eye(c, 12);
+        },
+        clownfish: (c) => {
+          c.fillStyle = '#ff8b2f'; c.fillRect(0, 0, 16, 16);
+          // three white vertical bands with black edging (the classic look)
+          for (const bx of [2, 7, 12]) { c.fillStyle = '#0f0f14'; c.fillRect(bx - 1, 0, 5, 16); c.fillStyle = '#fbf6ec'; c.fillRect(bx, 0, 3, 16); }
+          c.fillStyle = '#1d1d24'; c.fillRect(0, 0, 16, 2); c.fillRect(0, 14, 16, 2); // dark fin edges
+          eye(c, 13);
+        },
+        pufferfish: (c) => {
+          c.fillStyle = '#d6bd55'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#9a832f'; c.fillRect(0, 0, 16, 4);
+          c.fillStyle = '#f2e6a8'; c.fillRect(0, 11, 16, 5);
+          c.fillStyle = '#5f4f1c'; for (const [sx, sy] of [[3, 6], [7, 8], [11, 5], [5, 10], [13, 9], [9, 3]]) c.fillRect(sx, sy, 2, 2); // dark spots
+          c.fillStyle = '#4a3d15'; for (let i = 0; i < 16; i += 3) { c.fillRect(i, 0, 1, 1); c.fillRect(i + 1, 15, 1, 1); } // spikes on edges
+          eye(c, 12);
+        },
+        anglerfish: (c) => {
+          c.fillStyle = '#1c2233'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#0a0d16'; c.fillRect(0, 0, 16, 5);
+          c.fillStyle = '#2b3350'; c.fillRect(0, 12, 16, 4);
+          c.fillStyle = '#e8f4f4'; for (let i = 1; i < 15; i += 2) c.fillRect(i, 8, 1, 2 + (i % 2)); // jagged teeth
+          c.fillStyle = '#3b4568'; c.fillRect(0, 8, 16, 1);
+          c.fillStyle = '#b6ffff'; c.fillRect(12, 2, 2, 2); // faint lure glow
+          this._skinSpeck(c, ['#151a29', '#28304a'], 16, seed); eye(c, 11);
+        },
+        shark: (c) => {
+          c.fillStyle = '#6d8293'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#33454f'; c.fillRect(0, 0, 16, 7);
+          c.fillStyle = '#e3ebef'; c.fillRect(0, 10, 16, 6); // hard countershade belly
+          c.fillStyle = '#2a3941'; c.fillRect(0, 9, 16, 1);
+          c.fillStyle = '#243138'; for (let i = 0; i < 3; i++) c.fillRect(3 + i * 2, 4, 1, 4); // gill slits
+          eye(c, 12);
+        },
+        jellyfish: (c) => {
+          c.fillStyle = '#b79cf5'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#d9c9ff'; c.fillRect(2, 1, 12, 5); // bright dome top
+          c.fillStyle = '#8f6fd6'; c.fillRect(0, 9, 16, 2); // rim
+          c.fillStyle = '#6e4fb0'; for (let i = 1; i < 16; i += 3) c.fillRect(i, 10, 1, 6); // hanging frills
+          c.fillStyle = 'rgba(255,255,255,0.5)'; c.fillRect(4, 2, 3, 2);
+        },
+        stingray: (c) => {
+          c.fillStyle = '#8b796b'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#6a5b4f'; for (const [sx, sy] of [[3, 4], [10, 3], [6, 9], [12, 11], [2, 12]]) c.fillRect(sx, sy, 3, 2); // top blotches
+          c.fillStyle = '#a89684'; for (let i = 0; i < 5; i++) c.fillRect(1 + i * 3, 1, 2, 1);
+          this._skinSpeck(c, ['#7a6a5c', '#9c8b7b'], 16, seed); eye(c, 6);
+        },
+        octopus: (c) => {
+          c.fillStyle = '#a64c70'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#57233b'; c.fillRect(0, 0, 16, 3);
+          c.fillStyle = '#c96b8d'; c.fillRect(2, 3, 12, 4); // mantle sheen
+          c.fillStyle = '#e6a9c0'; for (let r = 10; r < 16; r += 2) for (let sx = 2; sx < 15; sx += 3) c.fillRect(sx, r, 1, 1); // suckers
+          this._skinSpeck(c, ['#8e3d5f', '#b85b80'], 14, seed); eye(c, 5);
+        },
+        dolphin: (c) => {
+          c.fillStyle = '#7895a8'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#35566a'; c.fillRect(0, 0, 16, 6);
+          c.fillStyle = '#e8eff3'; c.fillRect(0, 11, 16, 5); // pale belly
+          c.fillStyle = '#5a7c90'; c.fillRect(0, 9, 16, 1);
+          c.fillStyle = '#2c4356'; c.fillRect(3, 2, 1, 1); // blowhole hint
+          eye(c, 12);
+        },
+        seahorse: (c) => {
+          c.fillStyle = '#e7ad48'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#b3801f'; for (let i = 0; i < 16; i += 3) c.fillRect(0, i, 16, 1); // body rings
+          c.fillStyle = '#f6d488'; c.fillRect(0, 0, 5, 16); // paler snout side
+          c.fillStyle = '#8e5d20'; for (let i = 1; i < 16; i += 3) c.fillRect(14, i, 2, 1); // dorsal ridge
+          eye(c, 3);
+        },
+        giant_squid: (c) => {
+          c.fillStyle = '#7f354d'; c.fillRect(0, 0, 16, 16);
+          c.fillStyle = '#220d19'; c.fillRect(0, 0, 16, 4);
+          c.fillStyle = '#9c4763'; c.fillRect(2, 4, 12, 4);
+          c.fillStyle = '#e0a8bc'; for (let r = 9; r < 16; r += 2) for (let sx = 1; sx < 16; sx += 2) c.fillRect(sx, r, 1, 1); // suckers
+          this._skinSpeck(c, ['#5e243a', '#93425c'], 20, seed); eye(c, 11);
+        },
       };
+      const paint = painters[type] || ((c) => {
+        c.fillStyle = d.main; c.fillRect(0, 0, 16, 16);
+        c.fillStyle = d.dark; c.fillRect(0, 0, 16, 4); c.fillRect(0, 12, 16, 4);
+        this._skinSpeck(c, [d.main, d.dark, '#d7edf5'], 14, seed);
+      });
       if (d.shape === 'jelly') {
         const bell = this.tbox(d.w * 2, d.h * 0.45, d.w * 2, 'ocean_' + type, paint, null, { transparent: true, opacity: 0.82 });
         bell.position.y = d.h * 0.72; g.add(bell); parts.head = bell; parts.tentacles = [];
@@ -1039,9 +1206,11 @@ const Mobs = {
     // Hitting a daytime spider makes it hold a grudge for 10 minutes.
     // If the player leaves it alone, this counts down and it goes peaceful again.
     if (mob.type === 'spider' && src === 'player') mob.angryPlayerT = 600;
-    // mob-on-mob violence starts feuds
-    if (src && typeof src === 'object' && src !== mob && !src.dead) {
-      mob.angryAt = src;
+    // mob-on-mob violence starts feuds; neutral sea life also remembers the player/peer that struck it.
+    if (src && typeof src === 'object' && src !== mob && !src.dead) mob.angryAt = src;
+    const aquaticDef = OCEAN_MOB_DEFS[mob.type];
+    if (aquaticDef && aquaticDef.neutral && (src === 'player' || (typeof src === 'string' && src.indexOf('peer:') === 0))) {
+      mob.aquaticAggroKey = src; mob.aquaticAggroT = 18;
     }
     // knockback has a cooldown: rapid-fire can't juggle mobs into orbit
     mob.kbCd = mob.kbCd || 0;
@@ -1076,6 +1245,8 @@ const Mobs = {
       if (d.drop) Drops.spawn(b.x, b.y + 0.35, b.z, d.drop, mob.type === 'shark' ? 1 + ((Math.random() * 3) | 0) : mob.type === 'tuna' ? 2 : 1);
       if (mob.type === 'anglerfish' && Math.random() < 0.18) Drops.spawn(b.x, b.y + 0.35, b.z, I.PEARL, 1);
       if (mob.type === 'octopus' && Math.random() < 0.35) Drops.spawn(b.x, b.y + 0.35, b.z, I.INK_SAC, 1);
+    } else if (mob.type === 'firefly') {
+      Drops.spawn(b.x, b.y + 0.12, b.z, I.JELLY_GLOB_ORANGE, 1);
     } else if (mob.type === 'creeper') {
       Drops.spawn(b.x, b.y + 0.5, b.z, I.GUNPOWDER, 1 + ((Math.random() * 2) | 0));
     } else if (mob.type === 'skeleton') {
@@ -1170,12 +1341,11 @@ const Mobs = {
       a._tintT = (a._tintT || 0) - dt;
       if (a._tintT <= 0) {
         a._tintT = 0.20;
-        const raw = World.getLightRaw(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z));
-        const l = Math.max(0.06, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
+        const c = World.getLightColor(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z), undefined, 0.06);
         const mt = a.mesh.material;
         if (mt && mt.color) {
           if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone();
-          mt.color.copy(mt.userData.mobBaseCol).multiplyScalar(l);
+          mt.color.copy(mt.userData.mobBaseCol); mt.color.r *= c[0]; mt.color.g *= c[1]; mt.color.b *= c[2];
         }
       }
       if (a.stuck) continue;
@@ -1195,7 +1365,7 @@ const Mobs = {
         const d = this.farDelta(p, a);
         if (d.x > -p.w - 0.1 && d.x < p.w + 0.1 &&
             d.y > 0 && d.y < p.h && d.z > -p.w - 0.1 && d.z < p.w + 0.1) {
-          Player.hurt(3, a.vx * 0.25, a.vz * 0.25);
+          Player.hurt(3, a.vx * 0.25, a.vz * 0.25, { source: 'arrow', attackerType: a.owner && a.owner.type || '' });
           consumed = true;
         }
       }
@@ -1467,28 +1637,27 @@ const Mobs = {
     if (!tgt || !m || !m.body) return;
     m.breakT = (m.breakT || 0) - dt;
     if (m.breakT > 0) return;
-    m.breakT = 0.22;
-    const b = m.body, d = this.deltaToTarget(b, tgt), down = d.y < -0.65;
-    const sx = Math.abs(d.x) > 0.35 ? Math.sign(d.x) : 0, sz = Math.abs(d.z) > 0.35 ? Math.sign(d.z) : 0;
+    m.breakT = 0.18;
+    const b = m.body, d = this.deltaToTarget(b, tgt), down = d.y < -0.65, up = d.y > 0.9;
+    const sx = Math.abs(d.x) > 0.3 ? Math.sign(d.x) : 0, sz = Math.abs(d.z) > 0.3 ? Math.sign(d.z) : 0;
     const pad = 0.04, nx = b.x + sx, nz = b.z + sz;
     const minX = Math.min(Math.floor(b.x - b.w - pad), Math.floor(nx - b.w - pad));
     const maxX = Math.max(Math.floor(b.x + b.w + pad), Math.floor(nx + b.w + pad));
     const minZ = Math.min(Math.floor(b.z - b.w - pad), Math.floor(nz - b.w - pad));
     const maxZ = Math.max(Math.floor(b.z + b.w + pad), Math.floor(nz + b.w + pad));
-    const by = Math.floor(b.y), cells = new Set();
+    const by = Math.floor(b.y), top = by + Math.ceil(b.h) - 1, cells = new Set();
     const addLayer = (y, x0, x1, z0, z1) => { for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) cells.add(x + ',' + y + ',' + z); };
+    const fx0 = Math.floor(b.x - b.w - pad), fx1 = Math.floor(b.x + b.w + pad);
+    const fz0 = Math.floor(b.z - b.w - pad), fz1 = Math.floor(b.z + b.w + pad);
 
-    // Clear the full block footprint below it so a direct descent cannot hang on
-    // one untouched corner. Misalignment may require four blocks on an axis.
-    if (down) {
-      const fx0 = Math.floor(b.x - b.w - pad), fx1 = Math.floor(b.x + b.w + pad);
-      const fz0 = Math.floor(b.z - b.w - pad), fz1 = Math.floor(b.z + b.w + pad);
-      addLayer(by - 1, fx0, fx1, fz0, fz1);
-      addLayer(by - 2, fx0, fx1, fz0, fz1);
-    }
-    // A diagonal move sweeps the current and next 3x3 footprints. Clearing that
-    // union prevents the wide body from catching on the inside corner.
-    if (sx || sz) for (let y = down ? by - 1 : by; y <= by + Math.ceil(b.h) - 1; y++) addLayer(y, minX, maxX, minZ, maxZ);
+    // Clear the full footprint below for a clean descent (no snagging corner).
+    if (down) { addLayer(by - 1, fx0, fx1, fz0, fz1); addLayer(by - 2, fx0, fx1, fz0, fz1); }
+    // ALWAYS carve the forward corridor (current+next footprint union) across the
+    // whole body height plus one headroom row. This is what kills the diagonal
+    // inside-corner snag and lets the wide body actually enter the hole it dug.
+    for (let y = down ? by - 1 : by; y <= top + 1; y++) addLayer(y, minX, maxX, minZ, maxZ);
+    // Climbing toward a target above: open a shaft over the footprint too.
+    if (up) { addLayer(top + 2, fx0, fx1, fz0, fz1); }
 
     let burst = 0, sumX = 0, sumY = 0, sumZ = 0;
     for (const key of cells) {
@@ -1496,10 +1665,11 @@ const Mobs = {
       if (id === B.AIR || isFluid(id) || !def || def.hard === Infinity) continue;
       World.setBlock(x, y, z, B.AIR, { noUpdate: true, skipLight: true });
       sumX += x + 0.5; sumY += y + 0.5; sumZ += z + 0.5;
-      if (burst++ < 8 && typeof Particles !== 'undefined') Particles.blockBurst(x, y, z, id);
+      if (burst++ < 10 && typeof Particles !== 'undefined') Particles.blockBurst(x, y, z, id);
     }
     if (burst) {
       if (down) { b.onGround = false; b.vy = Math.min(b.vy, -3.5); }
+      if (up && b.onGround) this.mobJump(m); // hop into the freshly cut shaft
       if (typeof SFX !== 'undefined' && SFX.breakBlk) SFX.breakBlk({ x: sumX / burst, y: sumY / burst, z: sumZ / burst });
     }
   },
@@ -1653,11 +1823,12 @@ const Mobs = {
 
   dmgTarget(tgt, dmg, kx, kz, src) {
     if (!tgt || tgt.memoryOnly) return;
+    const attackerType = src && typeof src === 'object' ? src.type : '';
     if (tgt.peerId) {
-      if (typeof Multiplayer !== 'undefined' && Multiplayer.damageRemotePlayer) Multiplayer.damageRemotePlayer(tgt.peerId, dmg, kx, kz, src || 'mob');
+      if (typeof Multiplayer !== 'undefined' && Multiplayer.damageRemotePlayer) Multiplayer.damageRemotePlayer(tgt.peerId, dmg, kx, kz, attackerType ? ('mob:' + attackerType) : 'mob');
       return;
     }
-    if (tgt.isPlayer) Player.hurt(dmg, kx, kz);
+    if (tgt.isPlayer) Player.hurt(dmg, kx, kz, { source: 'mob', attackerType });
     else if (tgt.mob && !tgt.mob.dead) this.hurt(tgt.mob, dmg, kx, kz, src);
   },
 
@@ -2533,7 +2704,7 @@ const Mobs = {
     // water cell beneath their body. Stop only after their feet are supported by land.
     for (const yy of [Math.floor(p.y + h * 0.45), Math.floor(p.y + 0.05), Math.floor(p.y - 0.15), Math.floor(p.y - 1.05)]) {
       const id = World.getBlock(x, yy, z);
-      if (isWaterCell(id)) return { x: p.x, y: yy + Math.min(0.72, waterCellLevel(id) / 9 - 0.08), z: p.z };
+      if (World.isWaterAt(x, yy, z, id)) return { x: p.x, y: yy + Math.min(0.72, World.waterLevelAt(x, yy, z, id) / 9 - 0.08), z: p.z };
     }
     return null;
   },
@@ -2541,7 +2712,7 @@ const Mobs = {
   updateAquaticMob(m, dt) {
     const d = OCEAN_MOB_DEFS[m.type], b = m.body;
     const centerY = b.y + b.h * 0.5;
-    const wet = isWaterCell(World.getBlock(Math.floor(b.x), Math.floor(centerY), Math.floor(b.z)));
+    const wet = World.isWaterAt(Math.floor(b.x), Math.floor(centerY), Math.floor(b.z));
     if (!wet) {
       m.air = (Number.isFinite(+m.air) ? +m.air : 5) - dt;
       if (m.air <= 0) { m.flopHurtT = (m.flopHurtT || 0) - dt; if (m.flopHurtT <= 0) { m.flopHurtT = 1; this.hurt(m, 1, 0, 0, 'air'); if (m.dead) return; } }
@@ -2549,10 +2720,15 @@ const Mobs = {
       Physics.move(b, dt, { stepUp: false });
     } else {
       m.air = 5; m.flopHurtT = 0; m.attackT = Math.max(0, (m.attackT || 0) - dt);
-      let dir = null, speed = d.speed;
-      if (d.hostile) {
+      let dir = null, speed = d.speed, candidates = [];
+      m.aquaticAggroT = Math.max(0, (m.aquaticAggroT || 0) - dt);
+      if (m.angryAt && !m.angryAt.dead) candidates = [this.makeTargetForMob(m.angryAt)];
+      else if (d.neutral && m.aquaticAggroT > 0) candidates = [this.makePlayerTarget(), ...this.makePeerTargets()].filter(t => t && this.targetKey(t) === m.aquaticAggroKey);
+      else if (d.hostile) candidates = [this.makePlayerTarget(), ...this.makePeerTargets()];
+      else if (d.neutral && m.aquaticAggroT <= 0) { m.aquaticAggroKey = ''; m.angryAt = null; }
+      if (candidates.length) {
         let prey = null, best = 16;
-        for (const t of [this.makePlayerTarget(), ...this.makePeerTargets()]) {
+        for (const t of candidates) {
           if (!t) continue;
           const tp = this.aquaticTargetPoint(t);
           if (!tp) continue;
@@ -2577,9 +2753,9 @@ const Mobs = {
         if (n) dir = [dir[0] * 0.75 + sx / n / Math.max(1, d.speed) * 0.25, dir[1] * 0.75 + sy / n / Math.max(1, d.speed) * 0.25, dir[2] * 0.75 + sz / n / Math.max(1, d.speed) * 0.25];
       }
       const aheadX = b.x + dir[0] * 1.2, aheadY = centerY + dir[1] * 1.0, aheadZ = b.z + dir[2] * 1.2;
-      if (!isWaterCell(World.getBlock(Math.floor(aheadX), Math.floor(aheadY), Math.floor(aheadZ)))) {
-        const up = isWaterCell(World.getBlock(Math.floor(b.x), Math.floor(centerY + 1), Math.floor(b.z)));
-        const down = isWaterCell(World.getBlock(Math.floor(b.x), Math.floor(centerY - 1), Math.floor(b.z)));
+      if (!World.isWaterAt(Math.floor(aheadX), Math.floor(aheadY), Math.floor(aheadZ))) {
+        const up = World.isWaterAt(Math.floor(b.x), Math.floor(centerY + 1), Math.floor(b.z));
+        const down = World.isWaterAt(Math.floor(b.x), Math.floor(centerY - 1), Math.floor(b.z));
         dir = [-dir[0], up ? 0.65 : down ? -0.65 : -dir[1], -dir[2]]; m.swimDir = dir; m.swimT = 0.65;
       }
       const k = Math.min(1, dt * 4.5);
@@ -2597,12 +2773,48 @@ const Mobs = {
     m.tintT = (m.tintT || 0) - dt;
     if (m.tintT <= 0) {
       m.tintT = 0.25;
-      const raw = World.getLightRaw(Math.floor(b.x), Math.floor(centerY), Math.floor(b.z));
-      const l = Math.max(d.angler ? 0.35 : 0.08, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
-      m.group.traverse(o => { if (!o.isMesh) return; for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) if (mt.color) { if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone(); mt.color.copy(mt.userData.mobBaseCol).multiplyScalar(l); } });
+      const c = World.getLightColor(Math.floor(b.x), Math.floor(centerY), Math.floor(b.z), undefined, d.angler ? 0.35 : 0.08);
+      m.group.traverse(o => { if (!o.isMesh) return; for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) if (mt.color) { if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone(); mt.color.copy(mt.userData.mobBaseCol); mt.color.r *= c[0]; mt.color.g *= c[1]; mt.color.b *= c[2]; } });
     }
     this.setEmissive(m, m.flash > 0 ? 1.35 : 0, 0xff2020);
     if (m.flash > 0) { m.group.traverse(o => { if (!o.isMesh) return; for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) if (mt.color) mt.color.setHex(0xff2020); }); m.flash = Math.max(0, m.flash - dt); if (!m.flash) m.tintT = 0; }
+  },
+
+  updateFirefly(m, dt) {
+    const b = m.body;
+    if (!Game.isNight) { this.despawnSilent(m); return; }
+    if (typeof Physics !== 'undefined' && Physics.ensureFarBody) Physics.ensureFarBody(b);
+    m.flyT = (m.flyT || 0) - dt;
+    const home = m.flyHome || (m.flyHome = { x: b.x, y: b.y, z: b.z });
+    const hd = this.deltaToPoint(b, home.x, home.y, home.z), homeDist = Math.sqrt(hd.x * hd.x + hd.y * hd.y + hd.z * hd.z);
+    if (m.flyT <= 0 || !m.flyDir || homeDist > 6) {
+      const a = Math.random() * Math.PI * 2;
+      m.flyDir = homeDist > 6 ? [hd.x / homeDist, hd.y / homeDist, hd.z / homeDist] : [Math.cos(a), (Math.random() - 0.5) * 0.55, Math.sin(a)];
+      m.flyT = 0.7 + Math.random() * 1.8;
+    }
+    let [dx, dy, dz] = m.flyDir;
+    const nx = b.x + dx * 0.45, ny = b.y + dy * 0.35, nz = b.z + dz * 0.45;
+    if (Physics.boxesIn(nx - 0.08, ny + 0.02, nz - 0.08, nx + 0.08, ny + b.h - 0.02, nz + 0.08).length || World.isWaterAt(Math.floor(nx), Math.floor(ny), Math.floor(nz))) {
+      m.flyDir = [-dx, Math.abs(dy) + 0.2, -dz]; m.flyT = 0.45; [dx, dy, dz] = m.flyDir;
+    }
+    const k = Math.min(1, dt * 4), speed = FIREFLY_DEF.speed;
+    b.vx += (dx * speed - b.vx) * k; b.vy += (dy * speed * 0.65 - b.vy) * k; b.vz += (dz * speed - b.vz) * k;
+    this.nudgeBodyXZ(b, b.vx * dt, b.vz * dt);
+    const fs = (typeof Physics !== 'undefined' && Physics.farState) ? Physics.farState(b) : null;
+    if (fs) { fs.y += b.vy * dt; b.y = fs.oy + fs.y; } else b.y += b.vy * dt;
+    m.walkAnim += dt * 18;
+    if (m.parts.wings) { m.parts.wings[0].rotation.z = Math.sin(m.walkAnim) * 0.75; m.parts.wings[1].rotation.z = -Math.sin(m.walkAnim) * 0.75; }
+    m.fireflyPulseT = (m.fireflyPulseT || Math.random() * Math.PI * 2) + dt * 3.2;
+    const pulse = 0.45 + (Math.sin(m.fireflyPulseT) * 0.5 + 0.5) * 0.55;
+    m.fireflyLightPower = pulse;
+    if (m.parts.body) {
+      const sc = 0.78 + pulse * 0.30;
+      m.parts.body.scale.set(sc, sc, sc);
+      m.parts.body.material = m.flash > 0 ? (this._fireflyHurtMat || (this._fireflyHurtMat = new THREE.MeshBasicMaterial({ color: 0xff2020 }))) : this.fireflyAssets().bodyMat;
+    }
+    m.yaw += wrapAngle(Math.atan2(b.vx, b.vz) - m.yaw) * Math.min(1, dt * 7);
+    m.group.position.set(b.x, b.y, b.z); m.group.rotation.y = m.yaw;
+    if (m.flash > 0) m.flash = Math.max(0, m.flash - dt);
   },
 
   update(dt) {
@@ -2654,6 +2866,7 @@ const Mobs = {
       if (m.floopHurtVoiceCd > 0) m.floopHurtVoiceCd = Math.max(0, m.floopHurtVoiceCd - dt);
       if ((distPlayer > 52 && !nearAnyMultiplayerPlayer) || !World.hasChunk(Math.floor(b.x), Math.floor(b.z))) continue;
       if (OCEAN_MOB_DEFS[m.type]) { this.updateAquaticMob(m, dt); continue; }
+      if (m.type === 'firefly') { this.updateFirefly(m, dt); continue; }
       if (this.updateMobBreathingAndSuffocation(m, dt)) { if (!m.dead && m.hp <= 0) this.kill(m); continue; }
       if (m.type === 'sprawler') this.sprawlerClearBrushAround(m, dt);
 
@@ -2696,7 +2909,12 @@ const Mobs = {
           if (visible) { m.pathWantsJump = false; m.pathJumpRise = 1; }
           const pathMove = visible ? null : this.pathMove(m, tgt, dt, 34, false);
           const canWalk = visible || m.pathRouteValid === true;
-          const canDig = !visible && m.pathRouteValid === false && tgt.y <= this.farBodyPos(b).y + 0.05;
+          // Dig toward a hidden target with no walkable route — at ANY height now,
+          // so it tunnels up/diagonally-up instead of only descending. A brief
+          // force-dig flag (set by the stuck detector) also lets it carve through
+          // geometry the pathfinder thought its wide body could squeeze past.
+          const canDig = !visible && (m.pathRouteValid === false || (m.sprawlerForceDig || 0) > 0);
+          if (m.sprawlerForceDig > 0) m.sprawlerForceDig -= dt;
           // LOS pursuit behaves like ordinary hostile movement at every height;
           // digging is reserved for a hidden target with a confirmed blocked route.
           wantMove = visible ? [td.x / dl, td.z / dl] : (canWalk ? pathMove : (canDig ? [td.x / dl, td.z / dl] : m.wanderDir));
@@ -3011,13 +3229,22 @@ const Mobs = {
       // obstacles instead of politely navigating around cactus, foliage, doors, or glass.
       if (m.type === 'sprawler' && tgt && wantMove) this.sprawlerBreakFragileAhead(m, wantMove, dt);
       m.stuckT += dt;
-      if (m.stuckT >= 0.6) {
+      // The wide sprawler wedges easily, so react sooner than other mobs.
+      if (m.stuckT >= (m.type === 'sprawler' ? 0.35 : 0.6)) {
         const moved = Math.sqrt((b.x - m.lastSX) ** 2 + (b.z - m.lastSZ) ** 2);
         if (wantMove && moved < 0.12) {
           m.stuckPathHits = (m.stuckPathHits || 0) + 1;
           m.pathT = 0;
           m.pathFailT = 0;
           const sprawlerMadeRoom = m.type === 'sprawler' && tgt && this.sprawlerClearFailedStep(m, wantMove);
+          if (m.type === 'sprawler' && tgt) {
+            // Physically stuck while chasing: carve straight toward the target
+            // NOW (even if the pathfinder thinks a route exists) and keep the
+            // proactive digger armed for the next few ticks. This is the fix for
+            // "won't break blocks when it needs to, especially on diagonals".
+            this.sprawlerBreakToward(m, tgt, 1);
+            m.sprawlerForceDig = 0.8;
+          }
           if (sprawlerMadeRoom) {
             m.detourT = 0; m.detourDir = null; m.stuckPathHits = 0;
             if (m.stepClearPhase === 1 && b.onGround) this.mobJump(m);
@@ -3148,16 +3375,15 @@ const Mobs = {
       m.tintT = (m.tintT || 0) - dt;
       if (m.tintT <= 0) {
         m.tintT = 0.20;
-        const raw = World.getLightRaw(Math.floor(b.x), Math.floor(b.y + b.h * 0.55), Math.floor(b.z));
-        const l = Math.max(0.06, Math.max(raw & 15, (raw >> 4) * World.dayFUniform.value) / 15);
-        m._light = l;
+        const c = World.getLightColor(Math.floor(b.x), Math.floor(b.y + b.h * 0.55), Math.floor(b.z), undefined, 0.06);
+        m._lightRGB = c;
         m.group.traverse(o => {
           if (o.isMesh) {
             const mats = Array.isArray(o.material) ? o.material : [o.material];
             for (const mt of mats) {
               if (!mt.color) continue;
               if (!mt.userData.mobBaseCol) mt.userData.mobBaseCol = mt.color.clone();
-              mt.color.copy(mt.userData.mobBaseCol).multiplyScalar(l);
+              mt.color.copy(mt.userData.mobBaseCol); mt.color.r *= c[0]; mt.color.g *= c[1]; mt.color.b *= c[2];
             }
           }
         });
@@ -3212,7 +3438,25 @@ const Mobs = {
     const aquatic = this.list.filter(m => OCEAN_MOB_DEFS[m.type]).length;
     const tungs = this.list.filter(m => m.type === 'tung').length;
     const sprawlers = this.list.filter(m => m.type === 'sprawler').length;
+    const fireflies = this.list.filter(m => m.type === 'firefly').length;
 
+
+    // One lightweight nighttime swarm at a time. Each swarm is 5-10 fireflies.
+    if (Game.isNight && fireflies < 5 && Math.random() < 0.10) {
+      const pos = this.surfaceSpot(p, 12, 34);
+      if (pos) {
+        const biome = World.biomeAt(Math.floor(pos.x), Math.floor(pos.z));
+        const ground = World.getBlock(Math.floor(pos.x), Math.floor(pos.y - 0.5), Math.floor(pos.z));
+        if (biome !== 'desert' && biome !== 'ocean' && biome !== 'deep_ocean' && (ground === B.GRASS || ground === B.SNOWY_GRASS || ground === B.DIRT)) {
+          const count = Math.min(5 + ((Math.random() * 6) | 0), 10 - fireflies);
+          for (let i = 0; i < count; i++) {
+            const x = pos.x + (Math.random() - 0.5) * 4.5, z = pos.z + (Math.random() - 0.5) * 4.5;
+            const y = World.heightAt(Math.floor(x), Math.floor(z)) + 1.25 + Math.random() * 2.2;
+            if (!Physics.boxesIn(x - 0.08, y, z - 0.08, x + 0.08, y + FIREFLY_DEF.h, z + 0.08).length && !World.isWaterAt(Math.floor(x), Math.floor(y), Math.floor(z))) this.spawn('firefly', x, y, z);
+          }
+        }
+      }
+    }
 
     if (Game.isNight && sprawlers < 1 && Math.random() < 0.002) {
       const pos = this.surfaceSpot(p, 28, 46);
@@ -3240,6 +3484,24 @@ const Mobs = {
         else this.spawn(type, pos.x, pos.y, pos.z, type === 'humbug' ? this.humbugGun() : null);
       }
     }
+    // Black torches attract spawn attempts directly into their dark pocket,
+    // including a smaller daytime chance. Reuse the existing light registry.
+    if (hostiles < 10 && Math.random() < (Game.isNight ? 0.24 : 0.08) && World.lights && World.lights.size) {
+      const darks = [];
+      for (const v of World.lights.values()) {
+        if (!v || !isBlackTorch(World.getBlock(v[0], v[1], v[2]))) continue;
+        if ((v[0] - p.x) ** 2 + (v[2] - p.z) ** 2 <= 48 * 48) darks.push(v);
+      }
+      if (darks.length) {
+        const src = darks[(Math.random() * darks.length) | 0], a = Math.random() * Math.PI * 2, r = 3 + Math.random() * 8;
+        const pos = this.surfaceSpotAt(Math.round(src[0] + Math.cos(a) * r), Math.round(src[2] + Math.sin(a) * r), src[1] + 8);
+        if (pos && (pos.x - p.x) ** 2 + (pos.z - p.z) ** 2 > 12 * 12 && World.spawnAllowedAt(pos.x, pos.y, pos.z)) {
+          const roll = Math.random(), type = Game.dayCount >= 5 && roll < 0.25 ? 'humbug' : roll < 0.65 ? 'skeleton' : 'creeper';
+          if (this.spawnFits(type, pos.x, pos.y, pos.z)) this.spawn(type, pos.x, pos.y, pos.z, type === 'humbug' ? this.humbugGun() : null);
+        }
+      }
+    }
+
     // dark caves spawn monsters any time of day.  Do several candidate checks
     // instead of one random Y roll so daytime cave spawning is reliable.
     if (hostiles < 10 && Math.random() < (Game.isNight ? 0.18 : 0.42)) {
@@ -3253,9 +3515,7 @@ const Mobs = {
         const okCell = World.getBlock(sx, sy, sz) === B.AIR && World.getBlock(sx, sy + 1, sz) === B.AIR &&
           Physics.solidAt(sx + 0.5, sy - 0.5, sz + 0.5);
         if (!okCell || !World.spawnAllowedAt(sx, sy, sz)) continue;
-        const raw = World.getLightRaw(sx, sy + 1, sz);
-        const sky = raw >> 4, block = raw & 15;
-        const effectiveLight = Math.max(block, Math.floor(sky * (Game.isNight ? 0.15 : 0.55)));
+        const effectiveLight = World.getEffectiveLight(sx, sy + 1, sz, Game.isNight ? 0.15 : 0.55);
         if (effectiveLight > 7) continue;
         const roll = Math.random();
         const type = Game.dayCount >= 5 && roll < 0.3 ? 'humbug' : roll < 0.68 ? 'skeleton' : 'creeper';
